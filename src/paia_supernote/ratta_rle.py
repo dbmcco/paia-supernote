@@ -88,7 +88,7 @@ def encode(image: Image.Image) -> bytes:
     if image.mode != "L":
         image = image.convert("L")
 
-    pixels = image.getdata()
+    pixels = image.get_flattened_data()
     total = len(pixels)
     if total == 0:
         return b""

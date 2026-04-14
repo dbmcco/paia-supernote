@@ -5,7 +5,6 @@ Tests written following TDD approach.
 
 import pytest
 from PIL import Image
-import supernotelib
 from datetime import datetime
 from pathlib import Path
 
