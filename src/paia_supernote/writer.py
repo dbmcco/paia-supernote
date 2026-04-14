@@ -90,14 +90,19 @@ class SupernoteWriter:
         """Load font for agent, falling back to default if not available."""
         font_name = self.AGENT_FONTS.get(agent, "") if agent else ""
         if font_name:
-            try:
-                return ImageFont.truetype(font_name, size)
-            except OSError:
-                # Try common macOS font paths
+            # Try name variants (e.g. "Bradley Hand" -> "Bradley Hand Bold")
+            for name in (font_name, f"{font_name} Bold"):
+                try:
+                    return ImageFont.truetype(name, size)
+                except OSError:
+                    pass
                 for path in (
-                    f"/Library/Fonts/{font_name}.ttf",
-                    f"/System/Library/Fonts/Supplemental/{font_name}.ttf",
-                    f"/System/Library/Fonts/{font_name}.ttf",
+                    f"/Library/Fonts/{name}.ttf",
+                    f"/Library/Fonts/{name}.ttc",
+                    f"/System/Library/Fonts/{name}.ttf",
+                    f"/System/Library/Fonts/{name}.ttc",
+                    f"/System/Library/Fonts/Supplemental/{name}.ttf",
+                    f"/System/Library/Fonts/Supplemental/{name}.ttc",
                 ):
                     try:
                         return ImageFont.truetype(path, size)
