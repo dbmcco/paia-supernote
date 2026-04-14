@@ -64,12 +64,18 @@ def _append_from_path(note_path: str, ratta_rle_bytes: bytes) -> bytes:
     new_page_id = str(uuid.uuid4()).replace("-", "").upper()[:32]
     template_page.metadata["PAGEID"] = new_page_id
 
-    # Clear recognition data — it belongs to the original page
+    # Clear recognition data — it belongs to the original page.
+    # set_recogn_*/set_totalpath don't zero the metadata dict entries, so we
+    # also zero them directly. Stale byte-offsets in RECOGNTEXT/RECOGNFILE
+    # cause the device to close the file immediately on open.
     template_page.set_recogn_file(None)
     template_page.set_recogn_text(None)
     template_page.set_totalpath(None)
-    if "RECOGNSTATUS" in template_page.metadata:
-        template_page.metadata["RECOGNSTATUS"] = str(template_page.RECOGNSTATUS_NONE)
+    for key in ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE"):
+        if key in template_page.metadata:
+            template_page.metadata[key] = "0"
+    template_page.metadata["RECOGNSTATUS"] = "0"
+    template_page.metadata["RECOGNFILESTATUS"] = "0"
 
     # Replace MAINLAYER (layer 0) with our RATTA_RLE bytes
     if template_page.is_layer_supported():
