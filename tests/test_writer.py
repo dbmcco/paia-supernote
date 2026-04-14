@@ -11,7 +11,7 @@ from pathlib import Path
 from paia_supernote.writer import SupernoteWriter
 
 
-class TestSupernoteMriter:
+class TestSupernoteWriter:
     """Test cases for SupernoteWriter."""
 
     def setup_method(self):
@@ -85,32 +85,31 @@ class TestSupernoteMriter:
         assert SupernoteWriter.DATE_FONT_SIZE > 0
         assert SupernoteWriter.SIGNATURE_FONT_SIZE > 0
 
-    @pytest.mark.xfail(reason="Requires merge functionality to load notebook")
-    def test_date_appears_in_rendered_image(self, tmp_path):
-        """Should include current date in the rendered page."""
-        # Render a page
+    def test_date_appears_in_rendered_image(self):
+        """Should include current date in the rendered page (date top-right region has ink)."""
+        from paia_supernote import ratta_rle
+
         result = self.writer.render_page(
             agent="Sam",
             content=self.test_content,
         )
 
-        # Write result to temporary .note file
-        temp_note_file = tmp_path / "test.note"
+        # Decode the RLE bytes back to a PIL image
+        img = ratta_rle.decode(
+            result,
+            SupernoteWriter.DEVICE_WIDTH,
+            SupernoteWriter.DEVICE_HEIGHT,
+        )
 
-        # Create a minimal notebook structure to test with
-        # We'll need to extract the page content to verify the date
-        # This test will require the merge functionality to work
-        notebook = supernotelib.load_notebook(create_test_notebook(temp_note_file))
-
-        # TODO: Extract the rendered page and verify date appears
-        # This might require implementing the merge functionality first
-        # For now, we'll test that the render succeeds
-        assert len(result) > 0
-
-
-def create_test_notebook(path):
-    """Create a minimal test notebook file for testing."""
-    # Create minimal notebook structure using supernotelib
-    # This is a helper for testing - implementation will vary based on supernotelib API
-    # For now, return the path
-    return str(path)
+        # The date is rendered top-right: x near DEVICE_WIDTH - MARGIN, y near MARGIN
+        # Check the top-right quadrant for ink pixels (value < 128 = dark)
+        margin = SupernoteWriter.MARGIN
+        date_region = img.crop((
+            SupernoteWriter.DEVICE_WIDTH // 2,  # right half
+            0,
+            SupernoteWriter.DEVICE_WIDTH,
+            margin + 60,  # date area height
+        ))
+        pixels = list(date_region.getdata())
+        ink_pixels = sum(1 for p in pixels if p < 128)
+        assert ink_pixels > 0, "Expected ink pixels in date region (top-right)"

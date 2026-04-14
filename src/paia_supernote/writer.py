@@ -27,10 +27,10 @@ class SupernoteWriter:
     DEVICE_HEIGHT = 1872
     DEVICE_DPI = 226
 
-    # Font size constants (configurable)
+    # Font size constants (configurable — requires device calibration)
     BODY_FONT_SIZE = 36
-    DATE_FONT_SIZE = 20
-    SIGNATURE_FONT_SIZE = 20
+    DATE_FONT_SIZE = 28
+    SIGNATURE_FONT_SIZE = 36
 
     MARGIN = 80
     LINE_SPACING = 12
