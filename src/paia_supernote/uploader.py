@@ -17,11 +17,15 @@ import httpx
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 
+class UploadAuthError(Exception):
+    """Raised when an upload API call returns 401/403, indicating session expiry."""
+
+
 class SupernoteUploader:
     """Handles uploads to Supernote Cloud via Playwright browser automation."""
 
     CLOUD_URL = "https://cloud.supernote.com"
-    SESSION_FILE = Path("~/.cache/paia-supernote/session.json").expanduser()
+    SESSION_FILE = Path("~/.paia/supernote/session.json").expanduser()
 
     def __init__(self) -> None:
         self.browser: Optional[Browser] = None
@@ -55,13 +59,21 @@ class SupernoteUploader:
             await self._playwright.stop()
 
     async def upload_notebook(self, notebook_path: str, target_path: str) -> bool:
-        """Upload .note file to Supernote Cloud (three-step flow)."""
+        """Upload .note file to Supernote Cloud (three-step flow).
+
+        On 401/403 from the apply step, triggers interactive re-auth and retries once.
+        """
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
 
         await self._ensure_authenticated()
 
-        upload_info = await self._initiate_upload(target_path, notebook_path)
+        try:
+            upload_info = await self._initiate_upload(target_path, notebook_path)
+        except UploadAuthError:
+            await self._interactive_reauth()
+            upload_info = await self._initiate_upload(target_path, notebook_path)
+
         await self._upload_to_s3(notebook_path, upload_info)
         await self._finish_upload(upload_info)
         return True
@@ -74,14 +86,35 @@ class SupernoteUploader:
             raise RuntimeError("Browser not started")
 
         # Navigate to cloud to check auth state
-        await self.page.goto(self.CLOUD_URL)
+        response = await self.page.goto(self.CLOUD_URL)
 
-        # If we're redirected to login page, authentication is needed
-        current_url = self.page.url
-        if "/login" in current_url:
-            # For now, just navigate to the main page to check
-            # TODO: Implement interactive re-authentication
-            await self.page.goto(f"{self.CLOUD_URL}/files")
+        # If we get 401/403 or are redirected to login, trigger interactive re-auth
+        needs_reauth = False
+        if response and response.status in (401, 403):
+            needs_reauth = True
+        elif "/login" in self.page.url:
+            needs_reauth = True
+
+        if needs_reauth:
+            await self._interactive_reauth()
+
+    async def _interactive_reauth(self) -> None:
+        """Re-launch browser headed for interactive re-authentication.
+
+        Opens the login page and waits for the user to complete login manually.
+        Once authenticated, persists the new session to disk.
+        """
+        if not self.page:
+            raise RuntimeError("Browser not started")
+
+        await self.page.goto(f"{self.CLOUD_URL}/login")
+        # Wait for navigation away from login page (user completes auth)
+        await self.page.wait_for_url(f"{self.CLOUD_URL}/**", timeout=300_000)
+
+        # Persist the fresh session
+        if self.context:
+            self.SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+            await self.context.storage_state(path=str(self.SESSION_FILE))
 
     async def _initiate_upload(self, target_path: str, file_path: str) -> Dict[str, Any]:
         """POST upload/apply to get presigned S3 URL."""
@@ -101,25 +134,33 @@ class SupernoteUploader:
             'size': file_size
         }
 
-        # Use Playwright to make the API call with session cookies and CSRF token
-        upload_info = await self.page.evaluate("""
+        # Use Playwright to make the API call with session cookies and XSRF token
+        result = await self.page.evaluate("""
             async (data) => {
+                // Read XSRF token from cookie (Supernote sets XSRF-TOKEN cookie)
+                const xsrfCookie = document.cookie.split(';')
+                    .map(c => c.trim())
+                    .find(c => c.startsWith('XSRF-TOKEN='));
+                const xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=')[1]) : '';
+
                 const response = await fetch('/api/file/upload/apply', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-XSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                        'X-XSRF-TOKEN': xsrfToken
                     },
                     body: JSON.stringify(data)
                 });
-                if (!response.ok) {
-                    throw new Error(`Upload apply failed: ${response.status}`);
-                }
-                return await response.json();
+                return { status: response.status, body: response.ok ? await response.json() : null };
             }
         """, apply_data)
 
-        return upload_info
+        if result['status'] in (401, 403):
+            raise UploadAuthError(f"Upload apply returned {result['status']}")
+        if result['body'] is None:
+            raise RuntimeError(f"Upload apply failed with status {result['status']}")
+
+        return result['body']
 
     async def _upload_to_s3(self, file_path: str, upload_info: Dict[str, Any]) -> None:
         """PUT file to S3 using presigned URL (no auth header needed)."""

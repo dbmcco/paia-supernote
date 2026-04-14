@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
-from paia_supernote.uploader import SupernoteUploader
+from paia_supernote.uploader import SupernoteUploader, UploadAuthError
 
 
 @pytest.fixture
@@ -169,43 +169,68 @@ class TestSupernoteUploader:
 
     @pytest.mark.asyncio
     async def test_ensure_authenticated_checks_login_state(self, uploader):
-        """Test that _ensure_authenticated checks if user is logged in."""
-        # This will fail because authentication is not implemented
+        """Test that _ensure_authenticated detects login redirect and triggers reauth."""
         mock_page = Mock()
-        mock_page.goto = AsyncMock()
+        mock_response = Mock()
+        mock_response.status = 200
+        mock_page.goto = AsyncMock(return_value=mock_response)
         mock_page.url = "https://cloud.supernote.com/login"
         uploader.page = mock_page
 
-        # Should check login state and not raise NotImplementedError
-        await uploader._ensure_authenticated()
+        with patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth:
+            await uploader._ensure_authenticated()
 
-        # Should have navigated to check auth state
-        mock_page.goto.assert_called()
+            # Should have navigated to check auth state
+            mock_page.goto.assert_called_once()
+            # Should have triggered reauth because URL contains /login
+            mock_reauth.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_authenticated_skips_reauth_when_logged_in(self, uploader):
+        """Test that _ensure_authenticated does not reauth when already logged in."""
+        mock_page = Mock()
+        mock_response = Mock()
+        mock_response.status = 200
+        mock_page.goto = AsyncMock(return_value=mock_response)
+        mock_page.url = "https://cloud.supernote.com/files"
+        uploader.page = mock_page
+
+        with patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth:
+            await uploader._ensure_authenticated()
+            mock_reauth.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ensure_authenticated_reauths_on_401_response(self, uploader):
+        """Test that _ensure_authenticated triggers reauth on 401 from navigation."""
+        mock_page = Mock()
+        mock_response = Mock()
+        mock_response.status = 401
+        mock_page.goto = AsyncMock(return_value=mock_response)
+        mock_page.url = "https://cloud.supernote.com"
+        uploader.page = mock_page
+
+        with patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth:
+            await uploader._ensure_authenticated()
+            mock_reauth.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_initiate_upload_posts_to_apply_endpoint(self, uploader, mock_note_file):
         """Test that _initiate_upload makes POST request to upload/apply endpoint."""
-        # This will fail because the method is not implemented
         mock_page = Mock()
 
-        # Mock the response from the apply endpoint
-        mock_response = {
+        # Mock the response from the apply endpoint (new {status, body} format)
+        api_body = {
             'uploadUrl': 'https://s3.amazonaws.com/bucket/key?params',
             'uploadId': 'abc123',
             'headers': {'Authorization': 'AWS4-HMAC-SHA256 ...'}
         }
-
-        async def mock_evaluate_response(*args, **kwargs):
-            return mock_response
-
-        mock_page.evaluate = AsyncMock(return_value=mock_response)
+        mock_page.evaluate = AsyncMock(return_value={'status': 200, 'body': api_body})
         uploader.page = mock_page
 
-        # Should make API call and return upload info
         result = await uploader._initiate_upload("Quick.note", mock_note_file)
 
-        assert result['uploadUrl'] == mock_response['uploadUrl']
-        assert result['uploadId'] == mock_response['uploadId']
+        assert result['uploadUrl'] == api_body['uploadUrl']
+        assert result['uploadId'] == api_body['uploadId']
         mock_page.evaluate.assert_called_once()
 
     @pytest.mark.asyncio
@@ -242,7 +267,6 @@ class TestSupernoteUploader:
     @pytest.mark.asyncio
     async def test_finish_upload_posts_to_finish_endpoint(self, uploader):
         """Test that _finish_upload makes POST request to upload/finish endpoint."""
-        # This will fail because the method is not implemented
         mock_page = Mock()
         upload_info = {'uploadId': 'abc123'}
 
@@ -257,3 +281,55 @@ class TestSupernoteUploader:
         call_args = mock_page.evaluate.call_args
         # The JavaScript should make a POST to /api/file/upload/finish
         assert '/api/file/upload/finish' in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_reauth_triggered_on_401_from_apply(self, uploader, mock_note_file):
+        """Test that 401 from upload/apply triggers interactive re-auth and retries."""
+        uploader.page = Mock()
+
+        # First call to _initiate_upload raises UploadAuthError (401)
+        # Second call succeeds after re-auth
+        upload_info = {'uploadUrl': 'https://s3.example.com/key', 'headers': {}}
+
+        call_count = 0
+
+        async def mock_initiate(target_path, file_path):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise UploadAuthError("Upload apply returned 401")
+            return upload_info
+
+        with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock), \
+             patch.object(uploader, '_initiate_upload', side_effect=mock_initiate) as mock_apply, \
+             patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth, \
+             patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock), \
+             patch.object(uploader, '_finish_upload', new_callable=AsyncMock):
+
+            result = await uploader.upload_notebook(mock_note_file, "Quick.note")
+
+            assert result is True
+            # Re-auth was triggered after the 401
+            mock_reauth.assert_called_once()
+            # _initiate_upload was called twice (first 401, then retry)
+            assert mock_apply.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_initiate_upload_raises_upload_auth_error_on_401(self, uploader, mock_note_file):
+        """Test that _initiate_upload raises UploadAuthError on 401 response."""
+        mock_page = Mock()
+        mock_page.evaluate = AsyncMock(return_value={'status': 401, 'body': None})
+        uploader.page = mock_page
+
+        with pytest.raises(UploadAuthError, match="401"):
+            await uploader._initiate_upload("Quick.note", mock_note_file)
+
+    @pytest.mark.asyncio
+    async def test_initiate_upload_raises_upload_auth_error_on_403(self, uploader, mock_note_file):
+        """Test that _initiate_upload raises UploadAuthError on 403 response."""
+        mock_page = Mock()
+        mock_page.evaluate = AsyncMock(return_value={'status': 403, 'body': None})
+        uploader.page = mock_page
+
+        with pytest.raises(UploadAuthError, match="403"):
+            await uploader._initiate_upload("Quick.note", mock_note_file)
