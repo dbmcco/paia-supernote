@@ -7,13 +7,16 @@ Purpose: Processes changed .note files, extracts content via vision, and classif
 import base64
 import hashlib
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
+import httpx
 import supernotelib
 from supernotelib.converter import ImageConverter
 import anthropic
@@ -42,10 +45,26 @@ class ReadResult:
 class SupernoteReader:
     """Processes .note files to extract and classify content."""
 
-    def __init__(self, anthropic_client: Optional[anthropic.AsyncAnthropic] = None):
-        """Initialize the reader."""
+    def __init__(
+        self,
+        anthropic_client: Optional[anthropic.AsyncAnthropic] = None,
+        vision_backend: str = "anthropic",
+        ollama_model: str = "gemma4:31b",
+        ollama_url: str = "http://localhost:11434",
+    ):
+        """Initialize the reader.
+
+        Args:
+            anthropic_client: Optional pre-built Anthropic client (for testing).
+            vision_backend: "anthropic" or "ollama".
+            ollama_model: Model name to use when vision_backend="ollama".
+            ollama_url: Base URL for the Ollama API.
+        """
         self.page_checksums: Dict[str, str] = {}
         self._client = anthropic_client
+        self.vision_backend = vision_backend
+        self.ollama_model = ollama_model
+        self.ollama_url = ollama_url.rstrip("/")
 
     @property
     def client(self) -> anthropic.AsyncAnthropic:
@@ -54,17 +73,43 @@ class SupernoteReader:
             self._client = anthropic.AsyncAnthropic()
         return self._client
 
-    async def process_file(self, file_path: str) -> List[ReadResult]:
-        """Process a changed .note file and extract content."""
+    async def process_file(
+        self, note_source: Union[str, Path, bytes], notebook_name: Optional[str] = None
+    ) -> List[ReadResult]:
+        """Process a .note file and extract content.
+
+        Args:
+            note_source: Path to a local .note file (str or Path), or raw .note bytes
+                         downloaded from cloud.
+            notebook_name: Override for the notebook name. Required when note_source
+                           is bytes. When note_source is a path, defaults to the stem.
+        """
+        if isinstance(note_source, bytes):
+            if notebook_name is None:
+                raise ValueError("notebook_name is required when note_source is bytes")
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
+            try:
+                os.write(tmp_fd, note_source)
+                os.close(tmp_fd)
+                return await self._process_path(tmp_path, notebook_name)
+            finally:
+                os.unlink(tmp_path)
+        else:
+            path = Path(note_source)
+            name = notebook_name or path.stem
+            return await self._process_path(str(path), name)
+
+    async def _process_path(self, file_path: str, notebook_name: str) -> List[ReadResult]:
+        """Internal: load notebook from path and process all pages."""
         notebook = supernotelib.load_notebook(file_path)
         converter = ImageConverter(notebook)
-        notebook_name = Path(file_path).stem
 
         results = []
         for page_num in range(notebook.get_total_pages()):
             page_image = converter.convert(page_num)
 
-            if not self.page_changed(file_path, page_num, page_image):
+            # Use notebook_name as the stable key (file_path may be a temp path)
+            if not self.page_changed(notebook_name, page_num, page_image):
                 continue
 
             transcription = await self._transcribe_page(page_image)
@@ -73,7 +118,7 @@ class SupernoteReader:
 
             content_type = await self.classify_content(transcription)
             newly_checked = self.detect_checkbox_changes(
-                file_path, page_num, transcription
+                notebook_name, page_num, transcription
             )
 
             result = ReadResult(
@@ -89,11 +134,24 @@ class SupernoteReader:
         return results
 
     async def _transcribe_page(self, page_image) -> Optional[str]:
-        """Transcribe page content using Claude vision API."""
+        """Transcribe page content using the configured vision backend."""
         img_buffer = BytesIO()
         page_image.save(img_buffer, format="PNG")
         img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
 
+        if self.vision_backend == "ollama":
+            return await self._transcribe_page_ollama(img_b64)
+        return await self._transcribe_page_anthropic(img_b64)
+
+    _TRANSCRIBE_PROMPT = (
+        "Transcribe this handwritten note page exactly. "
+        "Preserve checkbox markers (□ for unchecked, ☑ for checked) "
+        "and circle markers (○ for unchecked, ● for checked). "
+        "Return only the transcribed text, no commentary."
+    )
+
+    async def _transcribe_page_anthropic(self, img_b64: str) -> Optional[str]:
+        """Transcribe via Anthropic Claude vision API."""
         response = await self.client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -109,26 +167,40 @@ class SupernoteReader:
                                 "data": img_b64,
                             },
                         },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Transcribe this handwritten note page exactly. "
-                                "Preserve checkbox markers (□ for unchecked, ☑ for checked) "
-                                "and circle markers (○ for unchecked, ● for checked). "
-                                "Return only the transcribed text, no commentary."
-                            ),
-                        },
+                        {"type": "text", "text": self._TRANSCRIBE_PROMPT},
                     ],
                 }
             ],
         )
         return response.content[0].text
 
+    async def _transcribe_page_ollama(self, img_b64: str) -> Optional[str]:
+        """Transcribe via local Ollama vision model."""
+        payload = {
+            "model": self.ollama_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": self._TRANSCRIBE_PROMPT,
+                    "images": [img_b64],
+                }
+            ],
+            "stream": False,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.ollama_url}/api/chat",
+                json=payload,
+                timeout=600.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["message"]["content"]
+
     def detect_checkbox_changes(
-        self, file_path: str, page_num: int, text: str
+        self, notebook_name: str, page_num: int, text: str
     ) -> List[CheckboxItem]:
         """Detect checkbox changes between current and prior snapshot."""
-        notebook_name = Path(file_path).stem
         snapshot_path = SNAPSHOT_DIR / f"{notebook_name}_page_{page_num}.json"
 
         # Extract currently checked items with their tags
@@ -195,13 +267,13 @@ class SupernoteReader:
 
         return "general"
 
-    def page_changed(self, file_path: str, page_num: int, page_image) -> bool:
+    def page_changed(self, notebook_name: str, page_num: int, page_image) -> bool:
         """Check if a page has changed by comparing MD5 checksums."""
         img_buffer = BytesIO()
         page_image.save(img_buffer, format="PNG")
         current_checksum = hashlib.md5(img_buffer.getvalue()).hexdigest()
 
-        key = f"{file_path}:{page_num}"
+        key = f"{notebook_name}:{page_num}"
         previous_checksum = self.page_checksums.get(key)
 
         self.page_checksums[key] = current_checksum

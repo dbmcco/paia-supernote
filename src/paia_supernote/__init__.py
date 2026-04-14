@@ -13,6 +13,7 @@ __all__ = [
     "ratta_rle",
     "reader",
     "uploader",
+    "user_board",
     "watcher",
     "writer",
 ]

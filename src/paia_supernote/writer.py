@@ -33,13 +33,13 @@ class SupernoteWriter:
     DEVICE_HEIGHT = 1872
     DEVICE_DPI = 226
 
-    # Font size constants (configurable — requires device calibration)
-    BODY_FONT_SIZE = 36
-    DATE_FONT_SIZE = 28
-    SIGNATURE_FONT_SIZE = 36
+    # Font size constants (calibrated from device feedback 2026-04-14: 36 was too small)
+    BODY_FONT_SIZE = 52
+    DATE_FONT_SIZE = 36
+    SIGNATURE_FONT_SIZE = 48
 
     MARGIN = 80
-    LINE_SPACING = 12
+    LINE_SPACING = 16
 
     def render_page(self, agent: str, content: str, content_type: str = "text") -> bytes:
         """

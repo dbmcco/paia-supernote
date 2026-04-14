@@ -1,1 +1,15 @@
 .workgraph
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.venv/
+dist/
+build/
+.env
+.playwright-mcp/
+.superpowers/
+calibration_output/
+ecosystem-hub.png
+freshell-start.png
+USER_BOARD.md

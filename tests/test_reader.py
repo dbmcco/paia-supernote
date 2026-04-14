@@ -51,7 +51,7 @@ class TestSupernoteReader:
         monkeypatch.setattr('paia_supernote.reader.SNAPSHOT_DIR', tmp_path / "snapshots")
         reader = SupernoteReader()
 
-        changes = reader.detect_checkbox_changes("test_file.note", 0, "□ Some task text")
+        changes = reader.detect_checkbox_changes("test_file", 0, "□ Some task text")
 
         assert changes == []
 
@@ -62,11 +62,11 @@ class TestSupernoteReader:
         reader = SupernoteReader()
 
         # First call with unchecked item
-        changes1 = reader.detect_checkbox_changes("test_file.note", 0, "□ Some task text")
+        changes1 = reader.detect_checkbox_changes("test_file", 0, "□ Some task text")
         assert changes1 == []
 
         # Second call with checked item — should detect newly checked
-        changes2 = reader.detect_checkbox_changes("test_file.note", 0, "☑ Some task text")
+        changes2 = reader.detect_checkbox_changes("test_file", 0, "☑ Some task text")
         assert len(changes2) == 1
         assert isinstance(changes2[0], CheckboxItem)
         assert changes2[0].task_text == "Some task text"
@@ -86,10 +86,10 @@ class TestSupernoteReader:
         reader = SupernoteReader()
 
         # First call — no prior state
-        reader.detect_checkbox_changes("test_file.note", 0, "○ Orbit task")
+        reader.detect_checkbox_changes("test_file", 0, "○ Orbit task")
 
         # Second call — circle checked
-        changes = reader.detect_checkbox_changes("test_file.note", 0, "● Orbit task")
+        changes = reader.detect_checkbox_changes("test_file", 0, "● Orbit task")
         assert len(changes) == 1
         assert changes[0].tag == "orbit"
         assert changes[0].task_text == "Orbit task"
@@ -140,13 +140,13 @@ class TestSupernoteReader:
         test_image = Image.open("tests/fixtures/test_page.png")
 
         # First call: page is new
-        assert reader.page_changed("test_file.note", 0, test_image) is True
+        assert reader.page_changed("test_file", 0, test_image) is True
 
         # Second call: same image, should skip
-        assert reader.page_changed("test_file.note", 0, test_image) is False
+        assert reader.page_changed("test_file", 0, test_image) is False
 
         # Different page number: should process
-        assert reader.page_changed("test_file.note", 1, test_image) is True
+        assert reader.page_changed("test_file", 1, test_image) is True
 
     @pytest.mark.asyncio
     @patch('paia_supernote.reader.supernotelib')

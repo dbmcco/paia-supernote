@@ -4,208 +4,289 @@ Author: Braydon McCormick <braydon@braydondm.com>
 Purpose: Main daemon that orchestrates file watching, content processing, and agent integration
 """
 
+from __future__ import annotations
+
+import argparse
 import asyncio
+import os
 import signal
 import sys
-from typing import Dict, Any
+import tomllib
 from pathlib import Path
+from typing import Any, Dict
 
-from .events import EventsManager
-from .watcher import SupernoteWatcher
+import structlog
+
+from .events import EventsClient
+from .cloud_poller import CloudPoller
 from .reader import SupernoteReader
 from .writer import SupernoteWriter
 from .uploader import SupernoteUploader
+from .notebook_writer import append_page_to_notebook
+
+log = structlog.get_logger(__name__)
+
+DEFAULT_CONFIG_PATH = Path("~/.paia/supernote/config.toml").expanduser()
+
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "poll_interval": 60,
+    "vision_backend": "anthropic",
+    "ollama_model": "gemma4:31b",
+    "ollama_url": "http://localhost:11434",
+    "events_url": "http://localhost:3511",
+    "folio_url": "http://localhost:3512",
+    "work_url": "http://localhost:3513",
+    "agent_mappings": {
+        "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
+        "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
+        "Ingrid": {"font": "Chalkduster", "notebook": "Synth"},
+    },
+}
+
+
+def load_config(config_path: Path | None = None) -> Dict[str, Any]:
+    """Load config from TOML file, falling back to env vars and defaults.
+
+    Precedence: env vars > TOML file > defaults.
+    """
+    config = dict(DEFAULT_CONFIG)
+
+    path = config_path or DEFAULT_CONFIG_PATH
+    if path.exists():
+        with open(path, "rb") as f:
+            file_config = tomllib.load(f)
+        # Flatten nested TOML sections into our config dict
+        if "supernote" in file_config:
+            sn = file_config["supernote"]
+            if "poll_interval" in sn:
+                config["poll_interval"] = int(sn["poll_interval"])
+            for key in ("vision_backend", "ollama_model", "ollama_url"):
+                if key in sn:
+                    config[key] = sn[key]
+        if "services" in file_config:
+            svc = file_config["services"]
+            for key in ("events_url", "folio_url", "work_url"):
+                if key in svc:
+                    config[key] = svc[key]
+        if "agents" in file_config:
+            config["agent_mappings"] = file_config["agents"]
+
+    # Env var overrides
+    if env_poll := os.environ.get("SUPERNOTE_POLL_INTERVAL"):
+        config["poll_interval"] = int(env_poll)
+    if env_events := os.environ.get("PAIA_EVENTS_URL"):
+        config["events_url"] = env_events
+    if env_folio := os.environ.get("PAIA_FOLIO_URL"):
+        config["folio_url"] = env_folio
+    if env_work := os.environ.get("PAIA_WORK_URL"):
+        config["work_url"] = env_work
+
+    return config
 
 
 class SupernoteService:
     """Main paia-supernote service that coordinates all components."""
 
-    def __init__(self):
-        """Initialize the Supernote service."""
-        self.events = EventsManager()
-        self.watcher = SupernoteWatcher(on_note_changed=self._on_note_changed)
-        self.reader = SupernoteReader()
+    def __init__(self, config: Dict[str, Any] | None = None) -> None:
+        self.config = config or load_config()
+        self.events = EventsClient(base_url=self.config["events_url"])
+        self.reader = SupernoteReader(
+            vision_backend=self.config["vision_backend"],
+            ollama_model=self.config["ollama_model"],
+            ollama_url=self.config["ollama_url"],
+        )
         self.writer = SupernoteWriter()
         self.uploader = SupernoteUploader()
-        self.running = False
+        self.cloud_poller = CloudPoller(
+            uploader=self.uploader,
+            on_note_changed=self._on_note_changed,
+            poll_interval=self.config["poll_interval"],
+        )
+        self._shutdown_event = asyncio.Event()
 
     async def start(self) -> None:
         """Start the Supernote service."""
-        print("Starting paia-supernote service...")
+        log.info("service_starting", config_keys=list(self.config.keys()))
 
-        try:
-            # Start events connection
-            await self.events.start()
-            self.events.register_write_handler(self._handle_write_request)
+        # Start events connection
+        await self.events.start()
+        self.events.register_write_handler(self._handle_write_request)
 
-            # Start uploader browser session
-            await self.uploader.start()
+        # Start uploader browser session (also used by cloud poller for API calls)
+        await self.uploader.start()
 
-            # Start file watcher
-            self.watcher.start()
+        # Start cloud poller (no Partner app needed)
+        self.cloud_poller.start()
 
-            self.running = True
-            print("paia-supernote service started successfully")
+        log.info("service_started")
 
-            # Keep service running
-            while self.running:
-                await asyncio.sleep(1)
-
-        except Exception as e:
-            print(f"Failed to start service: {e}")
-            await self.stop()
+        # Wait for shutdown signal
+        await self._shutdown_event.wait()
 
     async def stop(self) -> None:
-        """Stop the Supernote service."""
-        print("Stopping paia-supernote service...")
-        self.running = False
+        """Stop the Supernote service, flushing pending ops."""
+        log.info("service_stopping")
 
-        # Stop components
+        await self.cloud_poller.stop()
+        await self.uploader.stop()
+        await self.events.stop()
+
+        self._shutdown_event.set()
+        log.info("service_stopped")
+
+    async def _on_note_changed(self, notebook_name: str, note_bytes: bytes) -> None:
+        """Handle change events from the cloud poller."""
+        log.info("note_changed", notebook=notebook_name, size=len(note_bytes))
+        await self._process_file_change(notebook_name, note_bytes)
+
+    async def _process_file_change(self, notebook_name: str, note_bytes: bytes) -> None:
+        """Process a changed .note file through the read pipeline."""
         try:
-            self.watcher.stop()
-            await self.uploader.stop()
-            await self.events.stop()
-        except Exception as e:
-            print(f"Error during shutdown: {e}")
+            read_results = await self.reader.process_file(note_bytes, notebook_name)
 
-        print("paia-supernote service stopped")
+            for result in read_results:
+                # All transcriptions go to folio
+                await self.events.publish_note_transcribed(
+                    result.notebook, result.page_num, result.text
+                )
 
-    def _on_note_changed(self, file_path: Path, notebook_name: str) -> None:
-        """
-        Handle file change events from watcher.
+                if result.content_type == "task":
+                    await self._handle_task_content(result)
+                elif result.content_type == "snippet":
+                    await self._handle_strategy_snippet(result)
 
-        Args:
-            file_path: Path to changed .note file
-            notebook_name: Extracted notebook name (stem of the file)
-        """
-        print(f"Processing file change: {file_path} ({notebook_name})")
-
-        # Process file asynchronously
-        asyncio.create_task(self._process_file_change(str(file_path), notebook_name))
-
-    async def _process_file_change(self, file_path: str, notebook_name: str) -> None:
-        """
-        Process a changed .note file.
-
-        Args:
-            file_path: Path to changed .note file
-            notebook_name: Extracted notebook name
-        """
-        try:
-            # Extract and transcribe content
-            content_items = await self.reader.process_file(file_path)
-
-            for item in content_items:
-                notebook = notebook_name
-                page = item["page_number"]
-                text = item["transcription"]
-                content_type = item["content_type"]
-
-                # Publish transcription to folio
-                await self.events.publish_note_transcribed(notebook, page, text)
-
-                # Handle content type specific processing
-                if content_type == "task":
-                    await self._handle_task_content(item, notebook)
-                elif content_type == "strategy_snippet":
-                    await self._handle_strategy_snippet(item, notebook)
-
-                # Handle checkbox completions
-                for checkbox in item["checkbox_changes"]:
+                for checkbox in result.checkboxes:
                     await self.events.publish_checkbox_completed(
-                        checkbox["task_text"], notebook, page
+                        task_id="",
+                        notebook=result.notebook,
+                        page=result.page_num,
+                        task_text=checkbox.task_text,
+                        tag=checkbox.tag,
                     )
 
-        except Exception as e:
-            print(f"Error processing file change {file_path}: {e}")
+        except Exception as exc:
+            log.error("file_processing_error", notebook=notebook_name, error=str(exc))
 
-    async def _handle_task_content(self, item: Dict[str, Any], notebook: str) -> None:
-        """
-        Handle task content (□/○ markers).
+    async def _handle_task_content(self, result) -> None:
+        """Handle task content (box/circle markers)."""
+        log.info("task_content_detected", notebook=result.notebook,
+                 preview=result.text[:100])
 
-        Args:
-            item: Content item with task information
-            notebook: Notebook name
-        """
-        # TODO: Extract new □/○ tasks and add to paia-work
-        print(f"Task content detected in {notebook}: {item['transcription'][:100]}...")
-
-    async def _handle_strategy_snippet(self, item: Dict[str, Any], notebook: str) -> None:
-        """
-        Handle strategy snippet detection.
-
-        Args:
-            item: Content item with snippet information
-            notebook: Notebook name
-        """
-        # Route to appropriate agent based on notebook
-        agent = "Caroline" if notebook == "LFW" else "Ingrid"
-
+    async def _handle_strategy_snippet(self, result) -> None:
+        """Handle strategy snippet detection — route to appropriate agent."""
+        agent = "Caroline" if result.notebook == "LFW" else "Ingrid"
         await self.events.publish_snippet_detected(
-            notebook=notebook,
-            page=item["page_number"],
-            text=item["transcription"],
-            agent=agent
+            notebook=result.notebook,
+            page=result.page_num,
+            text=result.text,
+            agent=agent,
         )
 
     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
-        """
-        Handle write request events from agents.
+        """Handle write request events from agents.
 
-        Args:
-            event_data: Write request event data
+        Pipeline: download from cloud → render_page → append → upload/replace.
+        Does not require Partner app sync — reads directly from Supernote Cloud.
         """
+        import tempfile
+        import os
+
         try:
             agent = event_data["agent"]
             notebook = event_data["notebook"]
-            content_type = event_data["content_type"]
-            content = event_data["content"]
+            content = event_data.get("content", "")
+            target_name = f"{notebook}.note"
 
-            print(f"Processing write request from {agent} to {notebook}")
+            log.info("write_request_received", agent=agent, notebook=notebook)
 
-            # Render content to .note page (RATTA_RLE encoded bitmap)
-            page_data = self.writer.render_page(agent, content, content_type)
+            # Step 1: Download the current notebook from cloud
+            notebook_bytes = await self.uploader.download_notebook(target_name)
+            log.info("notebook_downloaded", target_name=target_name,
+                     size=len(notebook_bytes))
 
-            # Determine notebook path
-            # TODO: merge page_data into existing notebook via supernotelib.merge()
-            notebook_path = str(
-                Path(f"~/Supernote/{notebook}.note").expanduser()
-            )
+            # Step 2: Render page content to RATTA_RLE bytes
+            ratta_rle_bytes = self.writer.render_page(agent, content)
 
-            # Upload to cloud
-            success = await self.uploader.upload_notebook(
-                notebook_path, f"{notebook}.note"
-            )
+            # Step 3: Append page to the downloaded notebook bytes
+            updated_bytes = append_page_to_notebook(notebook_bytes, ratta_rle_bytes)
+
+            # Step 4: Write updated notebook to a temp file and upload
+            with tempfile.NamedTemporaryFile(
+                suffix=".note", delete=False, dir="/tmp"
+            ) as tmp:
+                tmp.write(updated_bytes)
+                tmp_path = tmp.name
+
+            try:
+                success = await self.uploader.upload_notebook(tmp_path, target_name)
+            finally:
+                os.unlink(tmp_path)
 
             if success:
-                print(f"Successfully wrote {agent}'s content to {notebook}")
+                log.info("write_complete", agent=agent, notebook=notebook)
             else:
-                print(f"Failed to upload {agent}'s content to {notebook}")
+                log.warning("write_upload_failed", agent=agent, notebook=notebook)
 
-        except Exception as e:
-            print(f"Error handling write request: {e}")
+        except Exception as exc:
+            log.error("write_request_error", error=str(exc))
 
 
-def main() -> None:
+def _configure_logging() -> None:
+    """Configure structlog for JSON output to stdout."""
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer()
+            if sys.stderr.isatty()
+            else structlog.processors.JSONRenderer(),
+        ],
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="paia-supernote",
+        description="PAIA service for bidirectional Supernote device integration",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=f"Path to config TOML file (default: {DEFAULT_CONFIG_PATH})",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
     """Main entry point for paia-supernote service."""
-    service = SupernoteService()
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
-    # Setup signal handlers for graceful shutdown
-    def signal_handler(signum, frame):
-        print(f"Received signal {signum}, shutting down...")
-        asyncio.create_task(service.stop())
+    _configure_logging()
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    config = load_config(args.config)
+    service = SupernoteService(config=config)
+
+    loop = asyncio.new_event_loop()
+
+    def _signal_handler() -> None:
+        log.info("shutdown_signal_received")
+        loop.create_task(service.stop())
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
 
     try:
-        # Run the service
-        asyncio.run(service.start())
+        loop.run_until_complete(service.start())
     except KeyboardInterrupt:
-        print("Service interrupted")
-    except Exception as e:
-        print(f"Service error: {e}")
-        sys.exit(1)
+        log.info("service_interrupted")
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
 
 
 if __name__ == "__main__":

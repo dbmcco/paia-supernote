@@ -64,7 +64,7 @@ class TestSupernoteUploader:
         """Test that _initiate_upload raises RuntimeError when browser not started."""
         uploader.page = None
         with pytest.raises(RuntimeError, match="Browser not started"):
-            await uploader._initiate_upload("Quick.note", "/path/to/file.note")
+            await uploader._initiate_upload("/path/to/file.note", "Quick.note")
 
     @pytest.mark.asyncio
     async def test_upload_to_s3_raises_on_missing_file(self, uploader):
@@ -76,9 +76,9 @@ class TestSupernoteUploader:
     @pytest.mark.asyncio
     async def test_finish_upload_requires_browser(self, uploader):
         """Test that _finish_upload raises RuntimeError when browser not started."""
-        upload_info = {'uploadId': '123'}
+        upload_info = {"url": "https://s3.example.com/key.note", "fileServer": "2"}
         with pytest.raises(RuntimeError, match="Browser not started"):
-            await uploader._finish_upload(upload_info)
+            await uploader._finish_upload("/tmp/fake.note", "fake.note", upload_info)
 
     @pytest.mark.asyncio
     async def test_upload_notebook_calls_three_step_flow(self, uploader):
@@ -86,6 +86,7 @@ class TestSupernoteUploader:
         uploader.page = Mock()
 
         with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock) as mock_auth, \
+             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]) as mock_find, \
              patch.object(uploader, '_initiate_upload', new_callable=AsyncMock) as mock_apply, \
              patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock) as mock_s3, \
              patch.object(uploader, '_finish_upload', new_callable=AsyncMock) as mock_finish:
@@ -110,6 +111,7 @@ class TestSupernoteUploader:
 
         mock_browser.new_context = AsyncMock(return_value=mock_context)
         mock_context.new_page = AsyncMock(return_value=mock_page)
+        mock_page.goto = AsyncMock()
 
         # Patch the session file path to use our mock
         uploader.SESSION_FILE = mock_session_file
@@ -136,6 +138,7 @@ class TestSupernoteUploader:
 
         # Mock the network calls to return expected data
         with patch.object(uploader, '_ensure_authenticated') as mock_auth, \
+             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]) as mock_find, \
              patch.object(uploader, '_initiate_upload') as mock_apply, \
              patch.object(uploader, '_upload_to_s3') as mock_s3, \
              patch.object(uploader, '_finish_upload') as mock_finish:
@@ -153,7 +156,7 @@ class TestSupernoteUploader:
 
             assert result is True
             mock_auth.assert_called_once()
-            mock_apply.assert_called_once_with("Quick.note", mock_note_file)
+            mock_apply.assert_called_once_with(mock_note_file, "Quick.note")
             mock_s3.assert_called_once()
             mock_finish.assert_called_once()
 
@@ -218,31 +221,34 @@ class TestSupernoteUploader:
         """Test that _initiate_upload makes POST request to upload/apply endpoint."""
         mock_page = Mock()
 
-        # Mock the response from the apply endpoint (new {status, body} format)
+        # Real API returns: url, s3Authorization, xamzDate, fileServer
         api_body = {
-            'uploadUrl': 'https://s3.amazonaws.com/bucket/key?params',
-            'uploadId': 'abc123',
-            'headers': {'Authorization': 'AWS4-HMAC-SHA256 ...'}
+            'success': True,
+            'url': 'https://s3.amazonaws.com/bucket/key.note',
+            's3Authorization': 'AWS4-HMAC-SHA256 Credential=...',
+            'xamzDate': '20260414T200355Z',
+            'fileServer': '2',
+            'innerName': None,
         }
         mock_page.evaluate = AsyncMock(return_value={'status': 200, 'body': api_body})
         uploader.page = mock_page
 
-        result = await uploader._initiate_upload("Quick.note", mock_note_file)
+        result = await uploader._initiate_upload(mock_note_file, "Quick.note")
 
-        assert result['uploadUrl'] == api_body['uploadUrl']
-        assert result['uploadId'] == api_body['uploadId']
+        assert result['url'] == api_body['url']
+        assert result['s3Authorization'] == api_body['s3Authorization']
         mock_page.evaluate.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_upload_to_s3_puts_file_to_presigned_url(self, uploader, mock_note_file):
         """Test that _upload_to_s3 uploads file to S3 presigned URL."""
-        # This will fail because the method is not implemented
+        # Real API: url = presigned S3 URL, s3Authorization + xamzDate are headers
         upload_info = {
-            'uploadUrl': 'https://s3.amazonaws.com/bucket/key?params',
-            'headers': {'Authorization': 'AWS4-HMAC-SHA256 ...'}
+            'url': 'https://s3.amazonaws.com/bucket/key.note',
+            's3Authorization': 'AWS4-HMAC-SHA256 Credential=...',
+            'xamzDate': '20260414T200355Z',
         }
 
-        # Should use httpx to PUT file to S3 (no session cookies needed)
         with patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
             mock_response = Mock()
             mock_response.status_code = 200
@@ -257,30 +263,36 @@ class TestSupernoteUploader:
 
             await uploader._upload_to_s3(mock_note_file, upload_info)
 
-            # Verify PUT request was made with correct parameters
             mock_client.put.assert_called_once()
             call_args = mock_client.put.call_args
-            assert call_args[0][0] == upload_info['uploadUrl']  # URL
-            assert 'content' in call_args[1]  # File content
+            assert call_args[0][0] == upload_info['url']
+            assert 'content' in call_args[1]
             assert 'x-amz-content-sha256' in call_args[1]['headers']
+            assert call_args[1]['headers']['Authorization'] == upload_info['s3Authorization']
 
     @pytest.mark.asyncio
-    async def test_finish_upload_posts_to_finish_endpoint(self, uploader):
+    async def test_finish_upload_posts_to_finish_endpoint(self, uploader, mock_note_file):
         """Test that _finish_upload makes POST request to upload/finish endpoint."""
         mock_page = Mock()
-        upload_info = {'uploadId': 'abc123'}
+        upload_info = {
+            'url': 'https://s3.amazonaws.com/key.note',
+            'fileServer': '2',
+            'innerName': None,
+        }
 
-        mock_page.evaluate = AsyncMock(return_value={'status': 'success'})
+        # evaluate is called by _api_call inside _finish_upload
+        mock_page.evaluate = AsyncMock(
+            return_value={'status': 200, 'body': {'success': True}}
+        )
         uploader.page = mock_page
 
-        # Should make API call to finish the upload
-        await uploader._finish_upload(upload_info)
+        await uploader._finish_upload(mock_note_file, "Quick.note", upload_info)
 
-        # Verify the API call was made
         mock_page.evaluate.assert_called_once()
+        # The JS string passed to evaluate should reference /api/file/upload/finish
         call_args = mock_page.evaluate.call_args
-        # The JavaScript should make a POST to /api/file/upload/finish
-        assert '/api/file/upload/finish' in call_args[0][0]
+        js_or_args = str(call_args)
+        assert '/api/file/upload/finish' in js_or_args
 
     @pytest.mark.asyncio
     async def test_reauth_triggered_on_401_from_apply(self, uploader, mock_note_file):
@@ -301,6 +313,7 @@ class TestSupernoteUploader:
             return upload_info
 
         with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock), \
+             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]) as mock_find, \
              patch.object(uploader, '_initiate_upload', side_effect=mock_initiate) as mock_apply, \
              patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth, \
              patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock), \
@@ -322,7 +335,7 @@ class TestSupernoteUploader:
         uploader.page = mock_page
 
         with pytest.raises(UploadAuthError, match="401"):
-            await uploader._initiate_upload("Quick.note", mock_note_file)
+            await uploader._initiate_upload(mock_note_file, "Quick.note")
 
     @pytest.mark.asyncio
     async def test_initiate_upload_raises_upload_auth_error_on_403(self, uploader, mock_note_file):
@@ -332,4 +345,65 @@ class TestSupernoteUploader:
         uploader.page = mock_page
 
         with pytest.raises(UploadAuthError, match="403"):
-            await uploader._initiate_upload("Quick.note", mock_note_file)
+            await uploader._initiate_upload(mock_note_file, "Quick.note")
+
+    @pytest.mark.asyncio
+    async def test_download_notebook_raises_without_browser(self, uploader):
+        """Test that download_notebook raises RuntimeError when browser not started."""
+        uploader.page = None
+        with pytest.raises(RuntimeError, match="Browser not started"):
+            await uploader.download_notebook("Quick.note")
+
+    @pytest.mark.asyncio
+    async def test_download_notebook_raises_if_file_not_found(self, uploader):
+        """Test that download_notebook raises RuntimeError when file is not in Note folder."""
+        uploader.page = Mock()
+        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]):
+            with pytest.raises(RuntimeError, match="not found"):
+                await uploader.download_notebook("NoSuchFile.note")
+
+    @pytest.mark.asyncio
+    async def test_download_notebook_fetches_presigned_url_and_downloads(self, uploader):
+        """Test that download_notebook calls download/url API then GETs from S3."""
+        mock_page = Mock()
+        file_id = "123456789"
+        presigned_url = "https://s3.amazonaws.com/bucket/Quick.note?sig=abc"
+        expected_bytes = b"fake note content"
+
+        mock_page.evaluate = AsyncMock(
+            return_value={'status': 200, 'body': {'url': presigned_url}}
+        )
+        uploader.page = mock_page
+
+        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
+                          return_value=[file_id]), \
+             patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
+
+            mock_response = Mock()
+            mock_response.content = expected_bytes
+            mock_response.raise_for_status = Mock()
+
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            result = await uploader.download_notebook("Quick.note")
+
+            assert result == expected_bytes
+            mock_client.get.assert_called_once_with(presigned_url, timeout=120.0)
+
+    @pytest.mark.asyncio
+    async def test_download_notebook_raises_on_missing_url_in_response(self, uploader):
+        """Test that download_notebook raises RuntimeError when API returns no URL."""
+        mock_page = Mock()
+        mock_page.evaluate = AsyncMock(
+            return_value={'status': 200, 'body': {'success': True}}  # no 'url' key
+        )
+        uploader.page = mock_page
+
+        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
+                          return_value=["some-id"]):
+            with pytest.raises(RuntimeError, match="No URL"):
+                await uploader.download_notebook("Quick.note")
