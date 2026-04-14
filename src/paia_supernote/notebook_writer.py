@@ -56,6 +56,20 @@ def _append_from_path(note_path: str, ratta_rle_bytes: bytes) -> bytes:
     # load_notebook returns a Notebook with layer content loaded into memory
     notebook = sn_parser.load_notebook(note_path)
 
+    # reconstruct() recalculates layer bitmap offsets but leaves RECOGNTEXT,
+    # RECOGNFILE, TOTALPATH etc. as-is. After reconstruction the file layout
+    # changes, so ALL existing pages' recognition offsets become dangling
+    # pointers — causing the device to close the file immediately on open.
+    # Zero them on every page before appending.
+    _OFFSET_FIELDS = ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE")
+    for i in range(notebook.get_total_pages()):
+        page = notebook.get_page(i)
+        for key in _OFFSET_FIELDS:
+            if key in page.metadata:
+                page.metadata[key] = "0"
+        page.metadata["RECOGNSTATUS"] = "0"
+        page.metadata["RECOGNFILESTATUS"] = "0"
+
     # Template: deepcopy the last page to inherit all metadata fields and structure
     last_idx = notebook.get_total_pages() - 1
     template_page = copy.deepcopy(notebook.get_page(last_idx))
