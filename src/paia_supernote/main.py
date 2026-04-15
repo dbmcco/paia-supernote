@@ -36,7 +36,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ollama_url": "http://localhost:11434",
     "events_url": "http://localhost:3511",
     "folio_url": "http://localhost:3512",
-    "work_url": "http://localhost:3513",
+    "work_url": "http://localhost:3560",
     "agent_mappings": {
         "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
         "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
@@ -217,9 +217,8 @@ class SupernoteService:
         task_id = match.group(1)
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.patch(
-                    f"{self.config['work_url']}/v1/tasks/{task_id}",
-                    json={"status": "done"},
+                resp = await client.post(
+                    f"{self.config['work_url']}/api/tasks/{task_id}/done",
                     timeout=5.0,
                 )
                 resp.raise_for_status()

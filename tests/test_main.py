@@ -29,7 +29,7 @@ class TestLoadConfig:
         config = load_config(config_path=tmp_path / "nonexistent.toml")
         assert config["events_url"] == "http://localhost:3511"
         assert config["folio_url"] == "http://localhost:3512"
-        assert config["work_url"] == "http://localhost:3513"
+        assert config["work_url"] == "http://localhost:3560"
         assert "agent_mappings" in config
 
     def test_loads_toml_file(self, tmp_path: Path) -> None:
@@ -48,7 +48,7 @@ class TestLoadConfig:
         assert config["events_url"] == "http://events:9000"
         assert config["folio_url"] == "http://folio:9001"
         # Unset keys keep defaults
-        assert config["work_url"] == "http://localhost:3513"
+        assert config["work_url"] == "http://localhost:3560"
 
     def test_env_vars_override_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg_file = tmp_path / "config.toml"

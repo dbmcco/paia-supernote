@@ -298,8 +298,21 @@ class SupernoteWriter:
         rand = "".join(secrets.choice(chars) for _ in range(12))
         return f"P{ts}{rand}"
 
+    # System fonts tried (in order) when no agent font is requested.
+    # These have good Unicode coverage including □/☑ glyphs.
+    _FALLBACK_FONTS = (
+        "Arial",
+        "Helvetica",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/SFNSDisplay.ttf",
+        "/System/Library/Fonts/SF-Pro-Display-Regular.otf",
+    )
+
     def _load_font(self, agent: Optional[str], size: int) -> ImageFont.FreeTypeFont:
-        """Load font for agent, falling back to default if not available."""
+        """Load font for agent, falling back to system font then PIL default."""
         font_name = self.AGENT_FONTS.get(agent, "") if agent else ""
         if font_name:
             # Try name variants (e.g. "Bradley Hand" -> "Bradley Hand Bold")
@@ -320,6 +333,12 @@ class SupernoteWriter:
                         return ImageFont.truetype(path, size)
                     except OSError:
                         continue
+        # No agent font (or agent font failed) — try system fonts with Unicode coverage
+        for path in self._FALLBACK_FONTS:
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
         return ImageFont.load_default(size=size)
 
     @staticmethod

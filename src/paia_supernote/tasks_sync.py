@@ -81,22 +81,35 @@ class TasksSync:
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:
-        """Fetch all lanes, detect changes, rebuild tasks.note if needed."""
-        lanes_data: Dict[str, List[Dict[str, Any]]] = {}
+        """Fetch all tasks from paia-work, bucket by board tag, detect changes."""
+        lanes_data: Dict[str, List[Dict[str, Any]]] = {lane: [] for lane in LANES}
 
         async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(
+                    f"{self._work_url}/api/tasks",
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                # paia-work returns a list or {"tasks": [...]}
+                all_tasks: List[Dict[str, Any]] = (
+                    payload if isinstance(payload, list) else payload.get("tasks", [])
+                )
+            except httpx.HTTPError as exc:
+                log.warning("tasks_fetch_failed", error=str(exc))
+                return  # Don't rebuild on partial data
+
+        # Bucket by board tag, open tasks only (done/failed/cancelled are noise).
+        CLOSED_STATUSES = {"done", "failed", "cancelled", "completed", "closed"}
+        for task in all_tasks:
+            if task.get("status") in CLOSED_STATUSES:
+                continue
+            tags: List[str] = task.get("tags") or []
             for lane in LANES:
-                try:
-                    resp = await client.get(
-                        f"{self._work_url}/v1/tasks",
-                        params={"lane": lane},
-                        timeout=10.0,
-                    )
-                    resp.raise_for_status()
-                    lanes_data[lane] = resp.json().get("tasks", [])
-                except httpx.HTTPError as exc:
-                    log.warning("tasks_lane_fetch_failed", lane=lane, error=str(exc))
-                    return  # Don't rebuild on partial data
+                if f"board:{lane}" in tags:
+                    lanes_data[lane].append(task)
+                    break  # A task belongs to at most one board lane
 
         # Detect any lane change by MD5 hash
         changed = False
