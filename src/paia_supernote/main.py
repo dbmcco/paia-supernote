@@ -23,6 +23,7 @@ from .reader import SupernoteReader
 from .writer import SupernoteWriter
 from .uploader import SupernoteUploader
 from .notebook_writer import append_page_to_notebook
+from .tasks_sync import TasksSync
 
 log = structlog.get_logger(__name__)
 
@@ -102,6 +103,12 @@ class SupernoteService:
             on_note_changed=self._on_note_changed,
             poll_interval=self.config["poll_interval"],
         )
+        self.tasks_sync = TasksSync(
+            uploader=self.uploader,
+            writer=self.writer,
+            work_url=self.config["work_url"],
+            poll_interval=self.config["poll_interval"],
+        )
         self._shutdown_event = asyncio.Event()
 
     async def start(self) -> None:
@@ -118,6 +125,9 @@ class SupernoteService:
         # Start cloud poller (no Partner app needed)
         self.cloud_poller.start()
 
+        # Start tasks sync (paia-work → tasks.note)
+        self.tasks_sync.start()
+
         log.info("service_started")
 
         # Wait for shutdown signal
@@ -127,6 +137,7 @@ class SupernoteService:
         """Stop the Supernote service, flushing pending ops."""
         log.info("service_stopping")
 
+        await self.tasks_sync.stop()
         await self.cloud_poller.stop()
         await self.uploader.stop()
         await self.events.stop()
@@ -163,6 +174,11 @@ class SupernoteService:
                         task_text=checkbox.task_text,
                         tag=checkbox.tag,
                     )
+                    # tasks.note checkboxes → mark done in paia-work
+                    await self._handle_task_checkbox(
+                        result.notebook, result.page_num,
+                        checkbox.task_text, checkbox.tag,
+                    )
 
         except Exception as exc:
             log.error("file_processing_error", notebook=notebook_name, error=str(exc))
@@ -182,6 +198,35 @@ class SupernoteService:
             agent=agent,
         )
 
+    async def _handle_task_checkbox(self, notebook: str, page: int, task_text: str, tag: str) -> None:
+        """Mark a task done in paia-work when checked off on tasks.note.
+
+        Parses the task ID from text like '☑ Task title  [abc123]'.
+        """
+        import re
+        import httpx
+
+        if notebook != "tasks":
+            return
+
+        match = re.search(r'\[([^\]]+)\]', task_text)
+        if not match:
+            log.warning("tasks_checkbox_no_id", text=task_text[:80])
+            return
+
+        task_id = match.group(1)
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.patch(
+                    f"{self.config['work_url']}/v1/tasks/{task_id}",
+                    json={"status": "done"},
+                    timeout=5.0,
+                )
+                resp.raise_for_status()
+            log.info("task_marked_done", task_id=task_id)
+        except httpx.HTTPError as exc:
+            log.warning("task_mark_done_failed", task_id=task_id, error=str(exc))
+
     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
         """Handle write request events from agents.
 
@@ -193,8 +238,19 @@ class SupernoteService:
 
         try:
             agent = event_data["agent"]
-            notebook = event_data["notebook"]
+            notebook = event_data.get("notebook") or self.config["agent_mappings"].get(agent, {}).get("notebook", "")
             content = event_data.get("content", "")
+
+            # Validate agent is known
+            if agent not in self.config["agent_mappings"]:
+                log.warning("write_request_unknown_agent", agent=agent)
+                return
+
+            # tasks.note is owned by TasksSync — agents cannot write to it
+            if notebook == "tasks":
+                log.warning("write_request_rejected_tasks_notebook", agent=agent)
+                return
+
             target_name = f"{notebook}.note"
 
             log.info("write_request_received", agent=agent, notebook=notebook)

@@ -198,6 +198,98 @@ class SupernoteWriter:
 
         return supernotelib.reconstruct(notebook)
 
+    # Tasks page layout constants
+    TASKS_HEADER_SIZE = 64
+    TASKS_BODY_SIZE = 40
+    TASKS_ID_SIZE = 26
+    TASKS_LINE_SPACING = 14
+
+    LANE_LABELS = {
+        "focus": "FOCUS",
+        "inbox": "INBOX",
+        "orbit": "ORBIT",
+        "parking": "PARKING",
+    }
+
+    def render_tasks_page(self, lane: str, tasks: list) -> bytes:
+        """Render a task lane page to RATTA_RLE bytes.
+
+        Layout:
+        - Lane name as bold header at top
+        - Tasks as checkbox list: □ Title  [id]  or  ☑ Title  [id]
+        - Overflow indicated by "+ N more tasks" at bottom
+        """
+        img = Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
+        draw = ImageDraw.Draw(img)
+
+        header_font = self._load_font(None, size=self.TASKS_HEADER_SIZE)
+        body_font = self._load_font(None, size=self.TASKS_BODY_SIZE)
+        id_font = self._load_font(None, size=self.TASKS_ID_SIZE)
+
+        # Lane header
+        label = self.LANE_LABELS.get(lane, lane.upper())
+        draw.text((self.MARGIN, self.MARGIN), label, fill=0, font=header_font)
+
+        # Divider line below header
+        header_bbox = draw.textbbox((0, 0), label, font=header_font)
+        header_h = header_bbox[3] - header_bbox[1]
+        line_y = self.MARGIN + header_h + 16
+        draw.line(
+            [(self.MARGIN, line_y), (self.DEVICE_WIDTH - self.MARGIN, line_y)],
+            fill=0,
+            width=2,
+        )
+
+        y = line_y + 24
+        max_text_width = self.DEVICE_WIDTH - 2 * self.MARGIN - 160
+        bottom_limit = self.DEVICE_HEIGHT - self.MARGIN - 60
+        rendered = 0
+
+        for task in tasks:
+            if y >= bottom_limit:
+                remaining = len(tasks) - rendered
+                draw.text(
+                    (self.MARGIN, y),
+                    f"+ {remaining} more task{'s' if remaining != 1 else ''}",
+                    fill=80,
+                    font=id_font,
+                )
+                break
+
+            done = task.get("status") in ("done", "completed", "closed")
+            checkbox = "\u2611" if done else "\u25a1"  # ☑ or □
+            title = task.get("title", task.get("name", "Untitled"))
+            task_id = str(task.get("id", ""))
+
+            # Truncate title if it's very long
+            line = f"{checkbox} {title}"
+            wrapped = self._wrap_text(draw, line, body_font, max_text_width)
+            first_line = wrapped[0] if wrapped else line
+
+            draw.text((self.MARGIN, y), first_line, fill=0, font=body_font)
+
+            # Task ID in small grey text to the right
+            if task_id:
+                id_text = f"[{task_id[:12]}]"
+                id_bbox = draw.textbbox((0, 0), id_text, font=id_font)
+                id_x = self.DEVICE_WIDTH - self.MARGIN - (id_bbox[2] - id_bbox[0])
+                id_y = y + (self.TASKS_BODY_SIZE - self.TASKS_ID_SIZE) // 2
+                draw.text((id_x, id_y), id_text, fill=120, font=id_font)
+
+            body_bbox = draw.textbbox((0, 0), first_line or "A", font=body_font)
+            y += (body_bbox[3] - body_bbox[1]) + self.TASKS_LINE_SPACING
+            rendered += 1
+
+        if not tasks:
+            draw.text(
+                (self.MARGIN, y),
+                "— empty —",
+                fill=160,
+                font=body_font,
+            )
+
+        return ratta_rle.encode(img)
+
     @staticmethod
     def _generate_page_id() -> str:
         """Generate a unique page ID in the Supernote format: P<timestamp><random>."""

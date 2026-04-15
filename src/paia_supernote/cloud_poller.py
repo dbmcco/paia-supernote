@@ -27,7 +27,7 @@ class CloudPoller:
     DEFAULT_POLL_INTERVAL = 60  # seconds
 
     # Only watch these notebooks (stem name without .note)
-    WATCHED_NOTEBOOKS = {"Quick", "LFW", "Synth", "test"}
+    WATCHED_NOTEBOOKS = {"Quick", "LFW", "Synth", "test", "tasks"}
 
     def __init__(
         self,

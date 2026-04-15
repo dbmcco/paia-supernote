@@ -121,6 +121,9 @@ class TestServiceStart:
         service.cloud_poller = MagicMock()
         service.cloud_poller.start = MagicMock()
         service.cloud_poller.stop = AsyncMock()
+        service.tasks_sync = MagicMock()
+        service.tasks_sync.start = MagicMock()
+        service.tasks_sync.stop = AsyncMock()
 
         # Schedule stop after start runs
         async def stop_after_start() -> None:
@@ -143,9 +146,12 @@ class TestServiceStart:
         service.uploader.stop = AsyncMock()
         service.cloud_poller = MagicMock()
         service.cloud_poller.stop = AsyncMock()
+        service.tasks_sync = MagicMock()
+        service.tasks_sync.stop = AsyncMock()
 
         await service.stop()
 
+        service.tasks_sync.stop.assert_awaited_once()
         service.cloud_poller.stop.assert_awaited_once()
         service.uploader.stop.assert_awaited_once()
         service.events.stop.assert_awaited_once()
@@ -170,6 +176,9 @@ class TestSignalHandling:
         service.cloud_poller = MagicMock()
         service.cloud_poller.start = MagicMock()
         service.cloud_poller.stop = AsyncMock()
+        service.tasks_sync = MagicMock()
+        service.tasks_sync.start = MagicMock()
+        service.tasks_sync.stop = AsyncMock()
 
         async def send_sigterm() -> None:
             await asyncio.sleep(0.05)
