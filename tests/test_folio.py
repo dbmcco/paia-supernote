@@ -1,4 +1,4 @@
-"""Tests for folio integration — send_to_folio() posts correct payloads."""
+"""Tests for folio integration — send_to_folio() and upsert_supernote_page() post correct payloads."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from paia_supernote.folio import send_to_folio
+from paia_supernote.folio import send_to_folio, upsert_supernote_page
 
 
 class TestSendToFolio:
@@ -140,3 +140,37 @@ class TestSendToFolio:
 
             url = mock_http.post.call_args[0][0]
             assert url == "http://folio.internal:9000/api/folio/objects"
+
+
+class TestUpsertSupernotePage:
+    """upsert_supernote_page() posts stable-path supernote-page object to folio."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_supernote_page_posts_stable_path_payload(self) -> None:
+        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
+            mock_http = AsyncMock()
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"id": "obj-1", "path": "supernote/Quick/page-19"}
+            mock_http.post.return_value = mock_resp
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await upsert_supernote_page(
+                notebook="Quick",
+                page=19,
+                source_revision="rev-2",
+                raw_text="raw",
+                markdown="# Plan",
+                diagram={"kind": "scene", "scene": {"nodes": [], "edges": []}, "render_version": "1"},
+                folio_url="http://localhost:8000",
+            )
+
+            body = mock_http.post.call_args.kwargs["json"]
+            assert body["path"] == "supernote/Quick/page-19"
+            assert body["object_type"] == "supernote-page"
+            assert body["content"] == "# Plan"
+            assert body["properties"]["raw_text"] == "raw"
+            assert body["properties"]["diagram"]["kind"] == "scene"
+            assert body["properties"]["source"]["source_revision"] == "rev-2"
+            assert result["id"] == "obj-1"

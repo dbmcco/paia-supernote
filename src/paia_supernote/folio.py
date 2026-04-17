@@ -79,3 +79,49 @@ async def send_to_folio(
             error=str(exc),
         )
         return None
+
+
+async def upsert_supernote_page(
+    *,
+    notebook: str,
+    page: int,
+    source_revision: str,
+    raw_text: str,
+    markdown: str,
+    diagram: dict[str, Any],
+    folio_url: str = _DEFAULT_FOLIO_URL,
+) -> dict[str, Any]:
+    """Upsert a Supernote page object in Folio by stable path.
+
+    Creates the object if it does not exist; patches it in place if it does.
+    """
+    payload = {
+        "title": f"{notebook} \u2014 page {page}",
+        "path": f"supernote/{notebook}/page-{page}",
+        "content": markdown,
+        "object_type": "supernote-page",
+        "properties": {
+            "raw_text": raw_text,
+            "diagram": diagram,
+            "source": {
+                "notebook": notebook,
+                "page": page,
+                "source_revision": source_revision,
+            },
+        },
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{folio_url}/api/folio/objects",
+            json=payload,
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        log.info(
+            "folio_upsert_succeeded",
+            notebook=notebook,
+            page=page,
+            source_revision=source_revision,
+        )
+        return result
