@@ -11,8 +11,8 @@ from typing import Callable, Awaitable, Dict, Optional
 
 log = logging.getLogger(__name__)
 
-# Type alias: async callback receives (notebook_name, note_bytes)
-NoteChangedCallback = Callable[[str, bytes], Awaitable[None]]
+# Type alias: async callback receives (notebook_name, note_bytes, update_time)
+NoteChangedCallback = Callable[[str, bytes, "int | None"], Awaitable[None]]
 
 
 class CloudPoller:
@@ -113,7 +113,7 @@ class CloudPoller:
                     size=len(note_bytes),
                     update_time=update_time,
                 )
-                await self._callback(notebook_name, note_bytes)
+                await self._callback(notebook_name, note_bytes, update_time)
             except Exception as exc:
                 log.error("cloud_download_error", name=name, error=str(exc))
 

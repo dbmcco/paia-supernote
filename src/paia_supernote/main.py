@@ -19,11 +19,14 @@ import structlog
 
 from .events import EventsClient
 from .cloud_poller import CloudPoller
+from .enrich_service import EnrichService
+from .ingest_service import IngestService
 from .reader import SupernoteReader
 from .writer import SupernoteWriter
 from .uploader import SupernoteUploader
 from .notebook_writer import append_page_to_notebook
 from .tasks_sync import TasksSync
+from .task_curator import TaskCurator
 
 log = structlog.get_logger(__name__)
 
@@ -31,12 +34,17 @@ DEFAULT_CONFIG_PATH = Path("~/.paia/supernote/config.toml").expanduser()
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "poll_interval": 60,
-    "vision_backend": "anthropic",
-    "ollama_model": "gemma4:31b",
+    "vision_backend": "zai",
+    "rewrite_backend": "zai",
+    "ollama_model": "qwen2.5vl:7b",
     "ollama_url": "http://localhost:11434",
+    "zai_base_url": "https://api.z.ai/api/coding/paas/v4",
+    "zai_vision_model": "glm-4.5v",
+    "zai_text_model": "glm-5.1",
     "events_url": "http://localhost:3511",
     "folio_url": "http://localhost:3512",
     "work_url": "http://localhost:3560",
+    "state_db_path": str(Path("~/.paia/supernote/supernote-state.db").expanduser()),
     "agent_mappings": {
         "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
         "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
@@ -61,7 +69,16 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
             sn = file_config["supernote"]
             if "poll_interval" in sn:
                 config["poll_interval"] = int(sn["poll_interval"])
-            for key in ("vision_backend", "ollama_model", "ollama_url"):
+            for key in (
+                "vision_backend",
+                "rewrite_backend",
+                "ollama_model",
+                "ollama_url",
+                "zai_base_url",
+                "zai_vision_model",
+                "zai_text_model",
+                "state_db_path",
+            ):
                 if key in sn:
                     config[key] = sn[key]
         if "services" in file_config:
@@ -75,12 +92,26 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
     # Env var overrides
     if env_poll := os.environ.get("SUPERNOTE_POLL_INTERVAL"):
         config["poll_interval"] = int(env_poll)
+    if env_vision_backend := os.environ.get("SUPERNOTE_VISION_BACKEND"):
+        config["vision_backend"] = env_vision_backend
+    if env_rewrite_backend := os.environ.get("SUPERNOTE_REWRITE_BACKEND"):
+        config["rewrite_backend"] = env_rewrite_backend
+    if env_zai_base := os.environ.get("ZAI_BASE_URL"):
+        config["zai_base_url"] = env_zai_base
+    if env_zai_vision := os.environ.get("SUPERNOTE_ZAI_VISION_MODEL"):
+        config["zai_vision_model"] = env_zai_vision
+    if env_zai_text := os.environ.get("SUPERNOTE_ZAI_TEXT_MODEL"):
+        config["zai_text_model"] = env_zai_text
+    if env_state_db_path := os.environ.get("SUPERNOTE_STATE_DB_PATH"):
+        config["state_db_path"] = env_state_db_path
     if env_events := os.environ.get("PAIA_EVENTS_URL"):
         config["events_url"] = env_events
     if env_folio := os.environ.get("PAIA_FOLIO_URL"):
         config["folio_url"] = env_folio
     if env_work := os.environ.get("PAIA_WORK_URL"):
         config["work_url"] = env_work
+    if env_state_db := os.environ.get("SUPERNOTE_STATE_DB_PATH"):
+        config["state_db_path"] = env_state_db
 
     return config
 
@@ -95,6 +126,9 @@ class SupernoteService:
             vision_backend=self.config["vision_backend"],
             ollama_model=self.config["ollama_model"],
             ollama_url=self.config["ollama_url"],
+            zai_base_url=self.config["zai_base_url"],
+            zai_vision_model=self.config["zai_vision_model"],
+            zai_text_model=self.config["zai_text_model"],
         )
         self.writer = SupernoteWriter()
         self.uploader = SupernoteUploader()
@@ -108,6 +142,15 @@ class SupernoteService:
             writer=self.writer,
             work_url=self.config["work_url"],
             poll_interval=self.config["poll_interval"],
+        )
+        self.task_curator = TaskCurator(
+            reader=self.reader,
+            writer=self.writer,
+            uploader=self.uploader,
+            events_client=self.events,
+            rewrite_backend=self.config["rewrite_backend"],
+            zai_base_url=self.config["zai_base_url"],
+            zai_text_model=self.config["zai_text_model"],
         )
         self._shutdown_event = asyncio.Event()
 
@@ -145,7 +188,9 @@ class SupernoteService:
         self._shutdown_event.set()
         log.info("service_stopped")
 
-    async def _on_note_changed(self, notebook_name: str, note_bytes: bytes) -> None:
+    async def _on_note_changed(
+        self, notebook_name: str, note_bytes: bytes, update_time: int | None = None
+    ) -> None:
         """Handle change events from the cloud poller."""
         log.info("note_changed", notebook=notebook_name, size=len(note_bytes))
         await self._process_file_change(notebook_name, note_bytes)
@@ -239,6 +284,7 @@ class SupernoteService:
             agent = event_data["agent"]
             notebook = event_data.get("notebook") or self.config["agent_mappings"].get(agent, {}).get("notebook", "")
             content = event_data.get("content", "")
+            content_type = event_data.get("content_type")
 
             # Validate agent is known
             if agent not in self.config["agent_mappings"]:
@@ -248,6 +294,13 @@ class SupernoteService:
             # tasks.note is owned by TasksSync — agents cannot write to it
             if notebook == "tasks":
                 log.warning("write_request_rejected_tasks_notebook", agent=agent)
+                return
+
+            # Delegate task_page_curate to TaskCurator
+            if content_type == "task_page_curate":
+                log.info("delegating_task_page_curation", agent=agent, notebook=notebook)
+                event_data["notebook_bytes"] = await self.uploader.download_notebook(f"{notebook}.note")
+                await self.task_curator.handle_write_requested(event_data)
                 return
 
             target_name = f"{notebook}.note"
@@ -301,6 +354,20 @@ def _configure_logging() -> None:
     )
 
 
+def render_status(db_path: Path) -> str:
+    from .page_state import PageStateStore
+    if not db_path.exists():
+        return "No state database found."
+    store = PageStateStore(db_path)
+    store.init_schema()
+    dirty = store.dirty_count()
+    ocr_errors = store.error_count("ocr")
+    enrich_errors = store.error_count("enrich")
+    return (
+        f"dirty_pages={dirty}  ocr_errors={ocr_errors}  enrich_errors={enrich_errors}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
@@ -313,6 +380,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Path to config TOML file (default: {DEFAULT_CONFIG_PATH})",
     )
+    subparsers = parser.add_subparsers(dest="mode", required=False)
+    subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
+    subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
+    subparsers.add_parser("status", help="Show pipeline queue counts")
     return parser
 
 
@@ -324,7 +395,16 @@ def main(argv: list[str] | None = None) -> None:
     _configure_logging()
 
     config = load_config(args.config)
-    service = SupernoteService(config=config)
+    mode = args.mode or "ingest"
+
+    if mode == "status":
+        print(render_status(Path(config["state_db_path"])))
+        return
+
+    if mode == "enrich":
+        service: Any = EnrichService(config)
+    else:
+        service = IngestService(config)
 
     loop = asyncio.new_event_loop()
 
