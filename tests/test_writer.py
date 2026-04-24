@@ -206,3 +206,41 @@ class TestAppendToNotebook:
         assert mainlayer.get_name() == "MAINLAYER"
         assert mainlayer.get_content() is not None
         assert len(mainlayer.get_content()) > 0
+
+
+class TestAppendRlePage:
+    """Tests for append_rle_page — append raw RLE bytes to a notebook."""
+
+    def setup_method(self):
+        self.writer = SupernoteWriter()
+
+    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
+    def test_append_rle_page_returns_valid_bytes(self):
+        notebook_bytes = _NOTE_FIXTURE.read_bytes()
+        rle = self.writer.render_page("Sam", "RLE append test")
+        result = self.writer.append_rle_page(notebook_bytes, rle)
+        assert isinstance(result, bytes)
+        nb = supernotelib.load(io.BytesIO(result))
+        assert nb.get_total_pages() > 0
+
+    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
+    def test_append_rle_page_increases_page_count(self):
+        notebook_bytes = _NOTE_FIXTURE.read_bytes()
+        original = supernotelib.load(io.BytesIO(notebook_bytes))
+        original_pages = original.get_total_pages()
+
+        rle = self.writer.render_page("Caroline", "Extra page")
+        result = self.writer.append_rle_page(notebook_bytes, rle)
+        modified = supernotelib.load(io.BytesIO(result))
+        assert modified.get_total_pages() == original_pages + 1
+
+    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
+    def test_append_rle_page_last_page_has_content(self):
+        notebook_bytes = _NOTE_FIXTURE.read_bytes()
+        rle = self.writer.render_page("Ingrid", "Layer check")
+        result = self.writer.append_rle_page(notebook_bytes, rle)
+
+        nb = supernotelib.load(io.BytesIO(result))
+        last_page = nb.get_page(nb.get_total_pages() - 1)
+        mainlayer = last_page.get_layer(0)
+        assert mainlayer.get_content() == rle
