@@ -6,10 +6,11 @@ ABOUTME: Polls /api/file/list/query, downloads changed files, fires callback wit
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Callable, Awaitable, Dict, Optional
 
-log = logging.getLogger(__name__)
+import structlog
+
+log = structlog.get_logger(__name__)
 
 # Type alias: async callback receives (notebook_name, note_bytes, update_time)
 NoteChangedCallback = Callable[[str, bytes, "int | None"], Awaitable[None]]
@@ -27,7 +28,7 @@ class CloudPoller:
     DEFAULT_POLL_INTERVAL = 60  # seconds
 
     # Only watch these notebooks (stem name without .note)
-    WATCHED_NOTEBOOKS = {"Quick", "LFW", "Synth", "test", "tasks"}
+    WATCHED_NOTEBOOKS = {"Quick", "Walk", "LFW", "Synth", "test", "tasks"}
 
     def __init__(
         self,
@@ -49,16 +50,30 @@ class CloudPoller:
         self._last_seen: Dict[str, int] = {}
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._stopping = False
 
     def start(self) -> None:
         """Start the polling loop as a background asyncio task."""
         self._running = True
+        self._stopping = False
         self._task = asyncio.create_task(self._loop())
         log.info("cloud_poller_started", poll_interval=self._poll_interval)
+
+    async def wait(self) -> None:
+        """Wait for the background poller task to exit."""
+        if self._task is None:
+            return
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            if self._stopping:
+                return
+            raise
 
     async def stop(self) -> None:
         """Stop polling and await the background task."""
         self._running = False
+        self._stopping = True
         if self._task:
             self._task.cancel()
             try:
@@ -74,7 +89,7 @@ class CloudPoller:
             try:
                 await self._poll_once()
             except Exception as exc:
-                log.error("cloud_poller_error", error=str(exc))
+                log.exception("cloud_poller_error", error=str(exc))
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:
@@ -102,9 +117,6 @@ class CloudPoller:
             if update_time <= last_update:
                 continue
 
-            # File is new or updated — download and fire
-            self._last_seen[name] = update_time
-
             try:
                 note_bytes = await self._uploader.download_notebook(name)
                 log.info(
@@ -114,8 +126,10 @@ class CloudPoller:
                     update_time=update_time,
                 )
                 await self._callback(notebook_name, note_bytes, update_time)
+                # Advance the revision marker only after download + callback succeed.
+                self._last_seen[name] = update_time
             except Exception as exc:
-                log.error("cloud_download_error", name=name, error=str(exc))
+                log.warning("cloud_download_error", name=name, error=str(exc))
 
     async def _list_notes(self) -> list:
         """Fetch the Note folder listing from Supernote Cloud."""
