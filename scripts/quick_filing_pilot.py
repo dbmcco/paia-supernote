@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 from paia_supernote.main import load_config
+from paia_supernote.quick_filing import notebook_name_to_tag
 from paia_supernote.quick_filing_service import QuickFilingService
 from paia_supernote.reader import SupernoteReader
 from paia_supernote.uploader import SupernoteUploader
@@ -15,7 +16,7 @@ async def _main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default="Test Note 1")
     parser.add_argument("--target", default="Test Note 2")
-    parser.add_argument("--tag", default="test")
+    parser.add_argument("--tag", default=None)
     parser.add_argument(
         "--ledger",
         default=str(Path.home() / ".paia" / "supernote" / "filing-ledger.db"),
@@ -40,7 +41,7 @@ async def _main() -> None:
             uploader=uploader,
             ledger_db_path=Path(args.ledger),
             source_notebook=args.source,
-            destination_map={args.tag: args.target},
+            destination_map={args.tag or notebook_name_to_tag(args.target): args.target},
             dry_run=not args.live,
             reader=reader,
         )

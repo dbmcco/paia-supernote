@@ -35,6 +35,14 @@ _TAG_RE = re.compile(r"#([A-Za-z][A-Za-z0-9_-]*)")
 _BUNDLE_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\b")
 
 
+def notebook_name_to_tag(notebook_name: str) -> str:
+    base = str(notebook_name or "").strip()
+    if base.lower().endswith(".note"):
+        base = base[:-5]
+    tag = re.sub(r"[^A-Za-z0-9]+", "-", base.lower()).strip("-")
+    return tag
+
+
 def parse_filing_header(text: str) -> FilingHeader:
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     header = lines[0] if lines else ""

@@ -1,4 +1,9 @@
-from paia_supernote.quick_filing import StarDetector, parse_filing_header, route_page
+from paia_supernote.quick_filing import (
+    StarDetector,
+    notebook_name_to_tag,
+    parse_filing_header,
+    route_page,
+)
 
 
 def test_parse_filing_header_with_bundle_marker() -> None:
@@ -43,6 +48,21 @@ def test_route_page_uses_test_destination_when_starred() -> None:
     assert routed.source_pages == [3]
 
 
+def test_route_page_supports_target_note_name_tag() -> None:
+    routed = route_page(
+        notebook="Test Note 1",
+        page=0,
+        source_revision="rev-1",
+        text="2026-04-29 #test-note-2\nPilot page",
+        starred=True,
+        destination_map={"test-note-2": "Test Note 2"},
+    )
+
+    assert routed.status == "ready"
+    assert routed.target_notebook == "Test Note 2"
+    assert routed.reason == "matched #test-note-2"
+
+
 def test_route_page_does_not_move_unstarred_page() -> None:
     routed = route_page(
         notebook="Test Note 1",
@@ -62,6 +82,12 @@ def test_star_detector_defaults_to_no_star_when_metadata_unknown() -> None:
     detector = StarDetector()
 
     assert detector.starred_pages_from_metadata({}) == set()
+
+
+def test_notebook_name_to_tag_normalizes_target_note_name() -> None:
+    assert notebook_name_to_tag("Test Note 2") == "test-note-2"
+    assert notebook_name_to_tag("Navicyte.note") == "navicyte"
+    assert notebook_name_to_tag("LFW / HEC") == "lfw-hec"
 
 
 def test_star_detector_reads_fivestar_page_metadata() -> None:
