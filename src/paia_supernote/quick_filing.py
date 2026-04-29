@@ -122,4 +122,14 @@ class StarDetector:
     """Conservative native-star detector for downloaded .note metadata."""
 
     def starred_pages_from_metadata(self, metadata: dict[str, Any]) -> set[int]:
-        return set()
+        pages = metadata.get("page_metadata")
+        if not isinstance(pages, list):
+            return set()
+        starred: set[int] = set()
+        for index, page_metadata in enumerate(pages):
+            if not isinstance(page_metadata, dict):
+                continue
+            value = page_metadata.get("FIVESTAR")
+            if value and str(value).strip() not in {"0", "[]", "None", "none"}:
+                starred.add(index)
+        return starred

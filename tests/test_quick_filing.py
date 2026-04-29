@@ -62,3 +62,17 @@ def test_star_detector_defaults_to_no_star_when_metadata_unknown() -> None:
     detector = StarDetector()
 
     assert detector.starred_pages_from_metadata({}) == set()
+
+
+def test_star_detector_reads_fivestar_page_metadata() -> None:
+    detector = StarDetector()
+
+    assert detector.starred_pages_from_metadata(
+        {
+            "page_metadata": [
+                {"FIVESTAR": "14031,1694,14395,1581,14164,1885,14164,1502,14395,1809,1"},
+                {"FIVESTAR": "0"},
+                {},
+            ]
+        }
+    ) == {0}

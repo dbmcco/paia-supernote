@@ -5,7 +5,9 @@ import argparse
 import asyncio
 from pathlib import Path
 
+from paia_supernote.main import load_config
 from paia_supernote.quick_filing_service import QuickFilingService
+from paia_supernote.reader import SupernoteReader
 from paia_supernote.uploader import SupernoteUploader
 
 
@@ -21,15 +23,26 @@ async def _main() -> None:
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
 
+    config = load_config()
     uploader = SupernoteUploader()
     await uploader.start()
     try:
+        reader = SupernoteReader(
+            vision_backend=config["vision_backend"],
+            ollama_model=config["ollama_model"],
+            ollama_url=config["ollama_url"],
+            zai_api_key=config["zai_api_key"],
+            zai_base_url=config["zai_base_url"],
+            zai_vision_model=config["zai_vision_model"],
+            zai_text_model=config["zai_text_model"],
+        )
         service = QuickFilingService(
             uploader=uploader,
             ledger_db_path=Path(args.ledger),
             source_notebook=args.source,
             destination_map={args.tag: args.target},
             dry_run=not args.live,
+            reader=reader,
         )
         result = await service.run_once()
         print(result)

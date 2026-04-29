@@ -54,9 +54,15 @@ def test_remove_pages_decreases_source_count(monkeypatch: pytest.MonkeyPatch) ->
     assert [page.metadata["PAGEID"] for page in updated.pages] == ["source-0", "source-2"]
 
 
-def test_remove_pages_refuses_to_remove_all_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remove_pages_leaves_blank_placeholder_when_all_pages_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = _FakeNotebook(["source-0"])
     monkeypatch.setattr(note_page_ops, "_load_from_bytes", lambda _bytes: source)
+    monkeypatch.setattr(note_page_ops.sn_manip, "reconstruct", lambda notebook: notebook)
 
-    with pytest.raises(ValueError, match="cannot remove all pages"):
-        remove_pages(b"source", pages=[0])
+    updated = remove_pages(b"source", pages=[0])
+
+    assert updated.get_total_pages() == 1
+    assert updated.get_page(0).metadata["PAGEID"] == "source-0"
+    assert updated.get_page(0).metadata["RECOGNTEXT"] == "0"
