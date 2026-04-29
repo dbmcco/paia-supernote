@@ -95,7 +95,17 @@ class QuickFilingService:
         )
 
         updated_source = remove_pages(source_bytes, pages=candidate.source_pages)
-        await _upload_bytes(self.uploader, updated_source, f"{candidate.source_notebook}.note")
+        try:
+            await _upload_bytes(
+                self.uploader, updated_source, f"{candidate.source_notebook}.note"
+            )
+        except Exception as exc:
+            self.ledger.mark_target_written_source_pending(
+                operation.operation_id,
+                target_revision_after="uploaded",
+                error=str(exc),
+            )
+            raise
         self.ledger.mark_source_removed(
             operation.operation_id,
             quick_revision_after="uploaded",

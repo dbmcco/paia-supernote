@@ -144,6 +144,16 @@ class FilingLedger:
             error=None,
         )
 
+    def mark_target_written_source_pending(
+        self, operation_id: str, *, target_revision_after: str, error: str
+    ) -> None:
+        self._update(
+            operation_id,
+            status="target_written_source_pending",
+            target_revision_after=target_revision_after,
+            error=error,
+        )
+
     def mark_source_removed(
         self, operation_id: str, *, quick_revision_after: str
     ) -> None:

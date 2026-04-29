@@ -56,6 +56,33 @@ def test_ledger_records_partial_success(tmp_path: Path) -> None:
     assert updated.target_revision_after == "target-rev-2"
 
 
+def test_ledger_records_source_cleanup_pending(tmp_path: Path) -> None:
+    ledger = FilingLedger(tmp_path / "filing.db")
+    ledger.init_schema()
+    op = ledger.upsert_detected(
+        source_notebook="Test Note 1",
+        source_pages=[0],
+        source_revision="rev-1",
+        detected_header="2026-04-29 #test",
+        detected_tags=["test"],
+        bundle_key=None,
+        target_notebook="Test Note 2",
+        routing_reason="matched #test",
+        confidence=1.0,
+    )
+
+    ledger.mark_target_written_source_pending(
+        op.operation_id,
+        target_revision_after="target-rev-2",
+        error="source upload failed",
+    )
+    updated = ledger.get(op.operation_id)
+
+    assert updated.status == "target_written_source_pending"
+    assert updated.target_revision_after == "target-rev-2"
+    assert updated.error == "source upload failed"
+
+
 def test_ledger_records_completion_after_source_removed(tmp_path: Path) -> None:
     ledger = FilingLedger(tmp_path / "filing.db")
     ledger.init_schema()
