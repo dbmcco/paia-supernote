@@ -30,28 +30,20 @@ from paia_supernote.page_state import PageStateStore
 class TestLoadConfig:
     """Config loaded from TOML correctly, with env var overrides."""
 
-    def test_defaults_when_no_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("LINEAR_API_KEY", raising=False)
-        monkeypatch.delenv("LINEAR_TEAM_KEY", raising=False)
-        monkeypatch.delenv("LINEAR_TEAM_ID", raising=False)
-        monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    def test_defaults_when_no_file(self, tmp_path: Path) -> None:
         config = load_config(config_path=tmp_path / "nonexistent.toml")
         assert config["events_url"] == "http://localhost:3511"
         assert config["folio_url"] == "http://localhost:3512"
-        assert config["linear_api_key"] is None
-        assert config["linear_team_key"] == "LFW"
+        assert config["work_url"] == "http://localhost:3560"
         assert config["state_db_path"].endswith("supernote-state.db")
         assert config["vision_backend"] == "zai"
         assert config["rewrite_backend"] == "zai"
         assert config["zai_api_key"] is None
-        assert config["zai_base_url"] == "https://api.z.ai/api/paas/v4"
         assert config["zai_vision_model"] == "glm-4.5v"
         assert config["zai_text_model"] == "glm-5.1"
         assert "agent_mappings" in config
 
-    def test_loads_toml_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("LINEAR_API_KEY", raising=False)
-        monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    def test_loads_toml_file(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text(textwrap.dedent("""\
             [supernote]
@@ -67,8 +59,7 @@ class TestLoadConfig:
         assert config["events_url"] == "http://events:9000"
         assert config["folio_url"] == "http://folio:9001"
         # Unset keys keep defaults
-        assert config["linear_api_key"] is None
-        assert config["linear_team_key"] == "LFW"
+        assert config["work_url"] == "http://localhost:3560"
 
     def test_env_vars_override_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg_file = tmp_path / "config.toml"
@@ -120,7 +111,6 @@ class TestLoadConfig:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.delenv("ZAI_API_KEY", raising=False)
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text(textwrap.dedent("""\
             [supernote]
@@ -137,31 +127,6 @@ class TestLoadConfig:
     def test_default_config_includes_state_db_path(self, tmp_path: Path) -> None:
         config = load_config(config_path=tmp_path / "missing.toml")
         assert config["state_db_path"].endswith("supernote-state.db")
-
-    def test_default_folio_sync_notebooks_excludes_quick(self, tmp_path: Path) -> None:
-        config = load_config(config_path=tmp_path / "missing.toml")
-
-        assert "Quick" not in config["folio_sync_notebooks"]
-        assert {"LFW", "Synthera", "Navicyte"} <= set(config["folio_sync_notebooks"])
-        assert "Navasite" not in config["folio_sync_notebooks"]
-
-    def test_folio_sync_notebooks_can_be_loaded_from_file_and_env(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(textwrap.dedent("""\
-            [supernote]
-            folio_sync_notebooks = ["LFW", "Synthera"]
-        """))
-
-        config = load_config(config_path=cfg_file)
-        assert config["folio_sync_notebooks"] == ["LFW", "Synthera"]
-
-        monkeypatch.setenv("SUPERNOTE_FOLIO_SYNC_NOTEBOOKS", "LFW,Navicyte")
-        config = load_config(config_path=cfg_file)
-        assert config["folio_sync_notebooks"] == ["LFW", "Navicyte"]
 
 
 # -- CLI parser ---------------------------------------------------------------
@@ -195,15 +160,6 @@ def _make_service(tmp_path: Path) -> SupernoteService:
     """Create a service with test config."""
     config = dict(DEFAULT_CONFIG)
     return SupernoteService(config=config)
-
-
-def test_service_cloud_poller_watches_only_interactive_notebooks(
-    tmp_path: Path,
-) -> None:
-    service = _make_service(tmp_path)
-
-    assert service.cloud_poller.watched_notebooks == {"Quick", "Walk", "tasks"}
-    assert service.cloud_poller.process_existing_on_start is False
 
 
 class TestServiceStart:
@@ -340,36 +296,11 @@ class TestSignalHandling:
 class TestMainEntrypoint:
     """main() function wires everything together."""
 
-    def test_parser_supports_service_ingest_enrich_and_status(self) -> None:
+    def test_parser_supports_ingest_enrich_and_status(self) -> None:
         parser = build_parser()
-        assert parser.parse_args(["service"]).mode == "service"
         assert parser.parse_args(["ingest"]).mode == "ingest"
         assert parser.parse_args(["enrich"]).mode == "enrich"
         assert parser.parse_args(["status"]).mode == "status"
-
-    @patch("paia_supernote.main.load_config")
-    @patch("paia_supernote.main._configure_logging")
-    def test_main_service_mode_starts_supernote_service(
-        self,
-        mock_logging: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        mock_load_config.return_value = dict(DEFAULT_CONFIG)
-
-        async def fake_start() -> None:
-            pass
-
-        with patch("paia_supernote.main.SupernoteService") as mock_cls:
-            mock_service = MagicMock()
-            mock_service.start = MagicMock(side_effect=fake_start)
-            mock_service.stop = AsyncMock()
-            mock_cls.return_value = mock_service
-
-            main(argv=["service"])
-
-        mock_logging.assert_called_once()
-        mock_load_config.assert_called_once()
-        mock_cls.assert_called_once()
 
     @patch("paia_supernote.main.load_config")
     @patch("paia_supernote.main._configure_logging")
@@ -540,9 +471,6 @@ class TestMainEntrypoint2:
     ) -> None:
         """content_type=replace_pages uses replace_notebook_pages for stable publishing."""
         service = SupernoteService(config=DEFAULT_CONFIG)
-        service.events = MagicMock()
-        service.events.publish_write_completed = AsyncMock()
-        service.events.publish_write_failed = AsyncMock()
         mock_uploader = AsyncMock()
         mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
         mock_uploader.upload_notebook = AsyncMock(return_value=True)
@@ -552,8 +480,6 @@ class TestMainEntrypoint2:
             "agent": "Sam",
             "notebook": "Quick",
             "content_type": "replace_pages",
-            "request_event_id": 44,
-            "run_id": "run-44",
             "pages": [
                 {"agent": "Sam", "content": "Page 1"},
                 {"agent": "Caroline", "content": "Page 2"},
@@ -569,87 +495,6 @@ class TestMainEntrypoint2:
         mock_uploader.download_notebook.assert_awaited_once_with("Quick.note")
         mock_replace.assert_called_once()
         mock_uploader.upload_notebook.assert_awaited_once()
-        service.events.publish_write_completed.assert_awaited_once_with(
-            request_event_id=44,
-            request_source_event_id=None,
-            run_id="run-44",
-            agent="Sam",
-            notebook="Quick",
-            content_type="replace_pages",
-            page_count=2,
-            artifact_refs={"notebook": "Quick.note"},
-        )
-        service.events.publish_write_failed.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_write_request_replace_pages_upload_failure_publishes_failed(self) -> None:
-        service = SupernoteService(config=DEFAULT_CONFIG)
-        service.events = MagicMock()
-        service.events.publish_write_completed = AsyncMock()
-        service.events.publish_write_failed = AsyncMock()
-        mock_uploader = AsyncMock()
-        mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
-        mock_uploader.upload_notebook = AsyncMock(return_value=False)
-        service.uploader = mock_uploader
-
-        event_data = {
-            "agent": "Sam",
-            "notebook": "Quick",
-            "content_type": "replace_pages",
-            "request_event_id": 45,
-            "pages": [{"agent": "Sam", "content": "Page 1"}],
-        }
-
-        with patch("paia_supernote.main.replace_notebook_pages", return_value=b"rebuilt_notebook"):
-            await service._handle_write_request(event_data)
-
-        service.events.publish_write_completed.assert_not_awaited()
-        service.events.publish_write_failed.assert_awaited_once_with(
-            request_event_id=45,
-            request_source_event_id=None,
-            run_id=None,
-            agent="Sam",
-            notebook="Quick",
-            content_type="replace_pages",
-            page_count=1,
-            error="upload_failed",
-        )
-
-    @pytest.mark.asyncio
-    async def test_write_request_append_success_publishes_completed(self) -> None:
-        service = SupernoteService(config=DEFAULT_CONFIG)
-        service.events = MagicMock()
-        service.events.publish_write_completed = AsyncMock()
-        service.events.publish_write_failed = AsyncMock()
-        service.writer = MagicMock()
-        service.writer.render_page.return_value = b"rle"
-        mock_uploader = AsyncMock()
-        mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
-        mock_uploader.upload_notebook = AsyncMock(return_value=True)
-        service.uploader = mock_uploader
-
-        event_data = {
-            "agent": "Sam",
-            "notebook": "Quick",
-            "content": "Walk update",
-            "content_type": "daily_walk",
-            "request_event_id": 46,
-        }
-
-        with patch("paia_supernote.main.append_page_to_notebook", return_value=b"updated_notebook"):
-            await service._handle_write_request(event_data)
-
-        service.events.publish_write_completed.assert_awaited_once_with(
-            request_event_id=46,
-            request_source_event_id=None,
-            run_id=None,
-            agent="Sam",
-            notebook="Quick",
-            content_type="daily_walk",
-            page_count=1,
-            artifact_refs={"notebook": "Quick.note"},
-        )
-        service.events.publish_write_failed.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_write_request_replace_pages_empty_is_rejected(
@@ -658,9 +503,6 @@ class TestMainEntrypoint2:
     ) -> None:
         """replace_pages with empty pages list should not attempt replacement."""
         service = SupernoteService(config=DEFAULT_CONFIG)
-        service.events = MagicMock()
-        service.events.publish_write_completed = AsyncMock()
-        service.events.publish_write_failed = AsyncMock()
         mock_uploader = AsyncMock()
         service.uploader = mock_uploader
 
@@ -673,79 +515,3 @@ class TestMainEntrypoint2:
 
         await service._handle_write_request(event_data)
         mock_uploader.download_notebook.assert_not_awaited()
-        service.events.publish_write_failed.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_write_request_normalizes_runtime_agent_aliases(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        service = SupernoteService(config=DEFAULT_CONFIG)
-        service.events = MagicMock()
-        service.events.publish_write_completed = AsyncMock()
-        service.events.publish_write_failed = AsyncMock()
-        mock_uploader = AsyncMock()
-        mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
-        mock_uploader.upload_notebook = AsyncMock(return_value=True)
-        service.uploader = mock_uploader
-
-        event_data = {
-            "agent": "samantha",
-            "notebook": "Walk",
-            "content_type": "replace_pages",
-            "pages": [
-                {"content": "2026-04-24 Daily Walk"},
-            ],
-        }
-
-        with patch(
-            "paia_supernote.main.replace_notebook_pages",
-            return_value=b"rebuilt_notebook",
-        ) as mock_replace:
-            await service._handle_write_request(event_data)
-
-        page_specs = mock_replace.call_args.kwargs["pages"]
-        assert page_specs[0].agent == "Sam"
-
-    @pytest.mark.asyncio
-    async def test_write_request_replace_pages_retries_with_fresh_uploader_when_shared_uploader_is_stale(
-        self,
-    ) -> None:
-        service = SupernoteService(config=DEFAULT_CONFIG)
-        service.events = MagicMock()
-        service.events.publish_write_completed = AsyncMock()
-        service.events.publish_write_failed = AsyncMock()
-        stale_uploader = AsyncMock()
-        stale_uploader.download_notebook = AsyncMock(side_effect=RuntimeError("stale uploader"))
-        service.uploader = stale_uploader
-
-        fresh_uploader = AsyncMock()
-        fresh_uploader.start = AsyncMock()
-        fresh_uploader.stop = AsyncMock()
-        fresh_uploader.download_notebook = AsyncMock(return_value=b"fresh_notebook")
-        fresh_uploader.upload_notebook = AsyncMock(return_value=True)
-
-        event_data = {
-            "agent": "Sam",
-            "notebook": "Walk",
-            "content_type": "replace_pages",
-            "pages": [
-                {"agent": "Sam", "content": "Fresh page"},
-            ],
-        }
-
-        with patch(
-            "paia_supernote.main.replace_notebook_pages",
-            return_value=b"rebuilt_notebook",
-        ) as mock_replace, patch(
-            "paia_supernote.main.SupernoteUploader",
-            return_value=fresh_uploader,
-        ):
-            await service._handle_write_request(event_data)
-
-        stale_uploader.download_notebook.assert_awaited_once_with("Walk.note")
-        fresh_uploader.start.assert_awaited_once()
-        fresh_uploader.download_notebook.assert_awaited_once_with("Walk.note")
-        fresh_uploader.upload_notebook.assert_awaited_once()
-        fresh_uploader.stop.assert_awaited_once()
-        mock_replace.assert_called_once()
