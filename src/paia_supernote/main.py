@@ -149,7 +149,6 @@ class SupernoteService:
             uploader=self.uploader,
             events_client=self.events,
             rewrite_backend=self.config["rewrite_backend"],
-            zai_api_key=self.config["zai_api_key"],
             zai_base_url=self.config["zai_base_url"],
             zai_text_model=self.config["zai_text_model"],
         )
