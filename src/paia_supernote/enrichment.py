@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from .model_config import default_zai_base_url, default_zai_text_model
+
 
 @dataclass(slots=True)
 class EnrichedPage:
@@ -22,17 +24,21 @@ class SupernoteEnricher:
         self,
         *,
         zai_api_key: str | None = None,
-        zai_base_url: str = "https://api.z.ai/api/coding/paas/v4",
-        zai_text_model: str = "glm-5.1",
+        zai_base_url: str | None = None,
+        zai_text_model: str | None = None,
     ) -> None:
         self.zai_api_key = zai_api_key or os.environ["ZAI_API_KEY"]
-        self.zai_base_url = zai_base_url.rstrip("/")
-        self.zai_text_model = zai_text_model
+        self.zai_base_url = (zai_base_url or default_zai_base_url()).rstrip("/")
+        self.zai_text_model = zai_text_model or default_zai_text_model()
 
     async def enrich_page(self, *, notebook: str, page: int, raw_text: str) -> EnrichedPage:
         prompt = (
             "Normalize this Supernote page into readable markdown and a renderable diagram. "
-            "Return strict JSON with keys markdown and diagram."
+            "Return strict JSON with keys markdown and diagram. "
+            "diagram must be either "
+            "{\"kind\":\"scene\",\"render_version\":\"1\",\"scene\":{\"nodes\":[],\"edges\":[]},\"summary\":null,\"confidence\":null}, "
+            "{\"kind\":\"mermaid\",\"render_version\":\"1\",\"mermaid\":\"graph TD\\nA-->B\",\"summary\":null,\"confidence\":null}, "
+            "or {\"kind\":\"none\",\"render_version\":\"1\",\"summary\":null,\"confidence\":null}."
         )
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -52,7 +58,17 @@ class SupernoteEnricher:
             )
             resp.raise_for_status()
             payload = json.loads(resp.json()["choices"][0]["message"]["content"])
-        diagram = payload.get("diagram") or {"kind": "none", "render_version": "1"}
+        raw_diagram = payload.get("diagram")
+        if isinstance(raw_diagram, dict):
+            diagram = raw_diagram
+        elif isinstance(raw_diagram, str) and raw_diagram.strip():
+            diagram = {
+                "kind": "mermaid",
+                "render_version": "1",
+                "mermaid": raw_diagram,
+            }
+        else:
+            diagram = {"kind": "none", "render_version": "1"}
         return EnrichedPage(
             markdown=payload.get("markdown", raw_text),
             diagram=diagram,

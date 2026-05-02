@@ -27,6 +27,7 @@ from .uploader import SupernoteUploader
 from .notebook_writer import append_page_to_notebook
 from .tasks_sync import TasksSync
 from .task_curator import TaskCurator
+from .model_config import default_zai_base_url, default_zai_text_model, default_zai_vision_model
 
 log = structlog.get_logger(__name__)
 
@@ -38,9 +39,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rewrite_backend": "zai",
     "ollama_model": "qwen2.5vl:7b",
     "ollama_url": "http://localhost:11434",
-    "zai_base_url": "https://api.z.ai/api/coding/paas/v4",
-    "zai_vision_model": "glm-4.5v",
-    "zai_text_model": "glm-5.1",
+    "zai_api_key": None,
+    "zai_base_url": default_zai_base_url(),
+    "zai_vision_model": default_zai_vision_model(),
+    "zai_text_model": default_zai_text_model(),
     "events_url": "http://localhost:3511",
     "folio_url": "http://localhost:3512",
     "work_url": "http://localhost:3560",
@@ -74,6 +76,7 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
                 "rewrite_backend",
                 "ollama_model",
                 "ollama_url",
+                "zai_api_key",
                 "zai_base_url",
                 "zai_vision_model",
                 "zai_text_model",
@@ -96,12 +99,8 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         config["vision_backend"] = env_vision_backend
     if env_rewrite_backend := os.environ.get("SUPERNOTE_REWRITE_BACKEND"):
         config["rewrite_backend"] = env_rewrite_backend
-    if env_zai_base := os.environ.get("ZAI_BASE_URL"):
-        config["zai_base_url"] = env_zai_base
-    if env_zai_vision := os.environ.get("SUPERNOTE_ZAI_VISION_MODEL"):
-        config["zai_vision_model"] = env_zai_vision
-    if env_zai_text := os.environ.get("SUPERNOTE_ZAI_TEXT_MODEL"):
-        config["zai_text_model"] = env_zai_text
+    if env_zai_api_key := os.environ.get("ZAI_API_KEY"):
+        config["zai_api_key"] = env_zai_api_key
     if env_state_db_path := os.environ.get("SUPERNOTE_STATE_DB_PATH"):
         config["state_db_path"] = env_state_db_path
     if env_events := os.environ.get("PAIA_EVENTS_URL"):
@@ -126,6 +125,7 @@ class SupernoteService:
             vision_backend=self.config["vision_backend"],
             ollama_model=self.config["ollama_model"],
             ollama_url=self.config["ollama_url"],
+            zai_api_key=self.config["zai_api_key"],
             zai_base_url=self.config["zai_base_url"],
             zai_vision_model=self.config["zai_vision_model"],
             zai_text_model=self.config["zai_text_model"],
@@ -149,6 +149,7 @@ class SupernoteService:
             uploader=self.uploader,
             events_client=self.events,
             rewrite_backend=self.config["rewrite_backend"],
+            zai_api_key=self.config["zai_api_key"],
             zai_base_url=self.config["zai_base_url"],
             zai_text_model=self.config["zai_text_model"],
         )

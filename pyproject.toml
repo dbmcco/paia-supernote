@@ -10,7 +10,7 @@ authors = [
     {name = "Braydon McCormick", email = "braydon@braydondm.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "supernotelib>=0.3.0",
     "Pillow>=10.0.0",
@@ -20,6 +20,7 @@ dependencies = [
     "watchdog>=3.0.0",
     "pydantic>=2.0.0",
     "structlog>=23.0.0",
+    "paia-agent-runtime>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +42,7 @@ where = ["src"]
 
 [project.scripts]
 paia-supernote = "paia_supernote.main:main"
-paia-supernote-board = "paia_supernote.user_board:main"
+paia-supernote-board = "paia_supernote.user_board:cli"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -56,6 +57,9 @@ addopts = [
 markers = [
     "integration: marks tests as integration tests (can be slow, require external dependencies)",
 ]
+
+[tool.uv.sources]
+paia-agent-runtime = { path = "../paia-agent-runtime", editable = true }
 
 [tool.black]
 line-length = 88

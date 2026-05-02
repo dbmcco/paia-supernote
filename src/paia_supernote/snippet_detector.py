@@ -11,6 +11,7 @@ import anthropic
 import structlog
 
 from .events import EventsClient
+from .model_config import default_anthropic_model
 
 log = structlog.get_logger(__name__)
 
@@ -39,6 +40,7 @@ class SnippetDetector:
     ) -> None:
         self._events = events_client
         self._client = anthropic_client
+        self._model = default_anthropic_model()
 
     @property
     def client(self) -> anthropic.AsyncAnthropic:
@@ -85,7 +87,7 @@ class SnippetDetector:
         """Use Claude to classify text as snippet or general."""
         try:
             response = await self.client.messages.create(
-                model="claude-sonnet-4-6",
+                model=self._model,
                 max_tokens=16,
                 messages=[
                     {

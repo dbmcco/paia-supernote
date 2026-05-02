@@ -5,6 +5,7 @@ Purpose: Processes changed .note files, extracts content via vision, and classif
 """
 
 import base64
+import asyncio
 import hashlib
 import json
 import os
@@ -21,6 +22,12 @@ import supernotelib
 from supernotelib.converter import ImageConverter
 import anthropic
 
+from .model_config import (
+    default_anthropic_model,
+    default_zai_base_url,
+    default_zai_text_model,
+    default_zai_vision_model,
+)
 
 SNAPSHOT_DIR = Path.home() / ".paia" / "supernote" / "snapshots"
 
@@ -49,14 +56,20 @@ class SupernoteReader:
         self,
         anthropic_client: Optional[anthropic.AsyncAnthropic] = None,
         vision_backend: str = "anthropic",
-        ollama_model: str = "gemma4:31b",
+        ollama_model: str = "qwen2.5vl:7b",
         ollama_url: str = "http://localhost:11434",
+        zai_api_key: Optional[str] = None,
+        zai_base_url: str | None = None,
+        zai_vision_model: str | None = None,
+        zai_text_model: str | None = None,
+        zai_retry_attempts: int = 4,
+        zai_retry_base_delay: float = 60.0,
     ):
         """Initialize the reader.
 
         Args:
             anthropic_client: Optional pre-built Anthropic client (for testing).
-            vision_backend: "anthropic" or "ollama".
+            vision_backend: "anthropic", "ollama", or "zai".
             ollama_model: Model name to use when vision_backend="ollama".
             ollama_url: Base URL for the Ollama API.
         """
@@ -65,6 +78,13 @@ class SupernoteReader:
         self.vision_backend = vision_backend
         self.ollama_model = ollama_model
         self.ollama_url = ollama_url.rstrip("/")
+        self.zai_api_key = zai_api_key or os.environ.get("ZAI_API_KEY")
+        self.zai_base_url = (zai_base_url or default_zai_base_url()).rstrip("/")
+        self.zai_vision_model = zai_vision_model or default_zai_vision_model()
+        self.zai_text_model = zai_text_model or default_zai_text_model()
+        self.zai_retry_attempts = max(1, zai_retry_attempts)
+        self.zai_retry_base_delay = max(0.0, zai_retry_base_delay)
+        self.anthropic_model = default_anthropic_model()
 
     @property
     def client(self) -> anthropic.AsyncAnthropic:
@@ -139,6 +159,8 @@ class SupernoteReader:
         page_image.save(img_buffer, format="PNG")
         img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
 
+        if self.vision_backend == "zai":
+            return await self._transcribe_page_zai(img_b64)
         if self.vision_backend == "ollama":
             return await self._transcribe_page_ollama(img_b64)
         return await self._transcribe_page_anthropic(img_b64)
@@ -153,7 +175,7 @@ class SupernoteReader:
     async def _transcribe_page_anthropic(self, img_b64: str) -> Optional[str]:
         """Transcribe via Anthropic Claude vision API."""
         response = await self.client.messages.create(
-            model="claude-sonnet-4-6",
+            model=self.anthropic_model,
             max_tokens=2048,
             messages=[
                 {
@@ -196,6 +218,70 @@ class SupernoteReader:
             response.raise_for_status()
             data = response.json()
             return data["message"]["content"]
+
+    async def _zai_chat_completion(
+        self, model: str, messages: List[Dict[str, Any]], max_tokens: int
+    ) -> str:
+        """Call Z.AI's coding-plan chat completion endpoint."""
+        if not self.zai_api_key:
+            raise RuntimeError("ZAI_API_KEY is required when using the zai backend")
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "thinking": {"type": "disabled"},
+            "temperature": 0,
+            "stream": False,
+            "max_tokens": max_tokens,
+        }
+        async with httpx.AsyncClient() as client:
+            for attempt in range(self.zai_retry_attempts):
+                response = await client.post(
+                    f"{self.zai_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.zai_api_key}"},
+                    json=payload,
+                    timeout=600.0,
+                )
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    is_last_attempt = attempt >= self.zai_retry_attempts - 1
+                    if exc.response.status_code != 429 or is_last_attempt:
+                        raise
+                    await asyncio.sleep(self._zai_retry_delay(exc.response, attempt))
+                    continue
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+
+        raise RuntimeError("Z.AI request did not return a response")
+
+    def _zai_retry_delay(self, response: httpx.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(0.0, float(retry_after))
+            except ValueError:
+                pass
+        return self.zai_retry_base_delay * (attempt + 1)
+
+    async def _transcribe_page_zai(self, img_b64: str) -> Optional[str]:
+        """Transcribe via Z.AI multimodal chat."""
+        return await self._zai_chat_completion(
+            model=self.zai_vision_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                        },
+                        {"type": "text", "text": self._TRANSCRIBE_PROMPT},
+                    ],
+                }
+            ],
+            max_tokens=2048,
+        )
 
     def detect_checkbox_changes(
         self, notebook_name: str, page_num: int, text: str
@@ -243,23 +329,33 @@ class SupernoteReader:
 
         # Use LLM to detect strategy snippets
         try:
-            response = await self.client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=16,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            "Classify this handwritten note. Reply with exactly one word:\n"
-                            "- 'snippet' if it contains a strategy fragment, client mention, "
-                            "open question, or incomplete strategic thought\n"
-                            "- 'general' otherwise\n\n"
-                            f"Note:\n{text}"
-                        ),
-                    }
-                ],
+            prompt = (
+                "Classify this handwritten note. Reply with exactly one word:\n"
+                "- 'snippet' if it contains a strategy fragment, client mention, "
+                "open question, or incomplete strategic thought\n"
+                "- 'general' otherwise\n\n"
+                f"Note:\n{text}"
             )
-            classification = response.content[0].text.strip().lower()
+            if self.vision_backend == "zai":
+                classification = (
+                    await self._zai_chat_completion(
+                        model=self.zai_text_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=16,
+                    )
+                ).strip().lower()
+            else:
+                response = await self.client.messages.create(
+                    model=self.anthropic_model,
+                    max_tokens=16,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                )
+                classification = response.content[0].text.strip().lower()
             if classification == "snippet":
                 return "snippet"
         except Exception:
