@@ -84,6 +84,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+class NotebookConflictError(RuntimeError):
+    """Raised when Supernote Cloud already has a conflict copy for a notebook."""
+
+
 def load_config(config_path: Path | None = None) -> Dict[str, Any]:
     """Load config from TOML file, falling back to env vars and defaults.
 
@@ -615,6 +619,22 @@ class SupernoteService:
                         target_name=target_name,
                         page_specs=page_specs,
                     )
+                except NotebookConflictError as exc:
+                    log.warning(
+                        "replace_pages_conflict_blocked",
+                        agent=agent,
+                        notebook=notebook,
+                        error=str(exc),
+                    )
+                    await self._publish_write_failed(
+                        event_data,
+                        agent=agent,
+                        notebook=notebook,
+                        content_type=content_type,
+                        page_count=len(page_specs),
+                        error=str(exc),
+                    )
+                    return
                 except RuntimeError as exc:
                     log.warning(
                         "replace_pages_retrying_with_fresh_uploader",
@@ -731,6 +751,7 @@ class SupernoteService:
         import os
         import tempfile
 
+        await self._raise_if_cloud_conflict_exists(uploader, target_name)
         try:
             notebook_bytes = await uploader.download_notebook(target_name)
         except RuntimeError as exc:
@@ -754,6 +775,48 @@ class SupernoteService:
             return await uploader.upload_notebook(tmp_path, target_name)
         finally:
             os.unlink(tmp_path)
+
+    async def _raise_if_cloud_conflict_exists(
+        self,
+        uploader: SupernoteUploader,
+        target_name: str,
+    ) -> None:
+        if not isinstance(uploader, SupernoteUploader):
+            return
+        stem = target_name.removesuffix(".note")
+        result = await uploader._api_call(
+            "/api/file/list/query",
+            {
+                "directoryId": uploader.NOTE_FOLDER_ID,
+                "pageNo": 1,
+                "pageSize": 200,
+                "order": "time",
+                "sequence": "desc",
+                "filterType": 0,
+            },
+        )
+        if result.get("status") != 200:
+            return
+        conflicts = [
+            str(entry.get("fileName") or "")
+            for entry in (result.get("body") or {}).get("userFileVOList", [])
+            if _is_conflict_name(str(entry.get("fileName") or ""), stem)
+        ]
+        if conflicts:
+            joined_conflicts = ", ".join(conflicts)
+            raise NotebookConflictError(
+                f"{target_name} has unresolved cloud conflict(s): {joined_conflicts}"
+            )
+
+
+def _is_conflict_name(file_name: str, target_stem: str) -> bool:
+    lower_name = file_name.casefold()
+    lower_stem = target_stem.casefold()
+    return (
+        lower_name.endswith(".note")
+        and lower_name.startswith(f"{lower_stem}_")
+        and "conflict" in lower_name
+    )
 
 
 def _configure_logging() -> None:

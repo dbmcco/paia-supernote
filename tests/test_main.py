@@ -14,8 +14,10 @@ from paia_supernote.enrich_service import EnrichService
 from paia_supernote.ingest_service import IngestService
 from paia_supernote.main import (
     DEFAULT_CONFIG,
+    NotebookConflictError,
     SupernoteService,
     _filing_destination_map,
+    _is_conflict_name,
     _watched_notebooks,
     build_parser,
     load_config,
@@ -643,3 +645,33 @@ class TestMainEntrypoint2:
 
         await service._handle_write_request(event_data)
         mock_uploader.download_notebook.assert_not_awaited()
+
+    def test_conflict_name_matches_target_notebook_only(self) -> None:
+        assert _is_conflict_name("Walk_CONFLICT_20260505115959184.note", "Walk")
+        assert not _is_conflict_name("Meetings_CONFLICT_20260505115959184.note", "Walk")
+        assert not _is_conflict_name("Walk.note", "Walk")
+
+    @pytest.mark.asyncio
+    async def test_replace_pages_conflict_is_failed_without_retry(self) -> None:
+        service = SupernoteService(config=DEFAULT_CONFIG)
+        service.uploader = AsyncMock()
+        service.events = AsyncMock()
+        service._replace_pages_with_uploader = AsyncMock(
+            side_effect=NotebookConflictError("Walk.note has unresolved cloud conflict")
+        )
+
+        await service._handle_write_request(
+            {
+                "agent": "Sam",
+                "notebook": "Walk",
+                "content_type": "replace_pages",
+                "pages": [{"agent": "Sam", "content": "Page 1"}],
+            }
+        )
+
+        service._replace_pages_with_uploader.assert_awaited_once()
+        service.events.publish_write_failed.assert_awaited_once()
+        assert (
+            "unresolved cloud conflict"
+            in service.events.publish_write_failed.await_args.kwargs["error"]
+        )
