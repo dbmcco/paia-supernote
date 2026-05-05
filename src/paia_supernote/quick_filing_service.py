@@ -22,6 +22,7 @@ class QuickFilingService:
         source_notebook: str,
         destination_map: dict[str, str],
         dry_run: bool = True,
+        allowed_source_notebooks: set[str] | None = None,
         reader: Any | None = None,
         star_detector: StarDetector | None = None,
     ) -> None:
@@ -30,14 +31,17 @@ class QuickFilingService:
         self.source_notebook = source_notebook
         self.destination_map = destination_map
         self.dry_run = dry_run
+        self.allowed_source_notebooks = allowed_source_notebooks
         self.reader = reader or SupernoteReader()
         self.star_detector = star_detector or StarDetector()
 
-    def _validate_pilot_scope(self) -> None:
-        allowed = {"Test Note 1", "Test Note 2"}
-        names = {self.source_notebook, *self.destination_map.values()}
-        if any(name not in allowed for name in names):
-            raise ValueError("pilot only supports test notebooks")
+    def _validate_scope(self) -> None:
+        if self.allowed_source_notebooks is None:
+            return
+        if self.source_notebook not in self.allowed_source_notebooks:
+            raise ValueError(
+                f"source notebook is not configured for filing: {self.source_notebook}"
+            )
 
     async def _detect_candidates(self, source_bytes: bytes) -> list[FilingCandidate]:
         starred_pages = self._starred_pages_from_note(source_bytes)
@@ -82,10 +86,13 @@ class QuickFilingService:
                 os.unlink(path)
         return self.star_detector.starred_pages_from_metadata(metadata)
 
-    async def run_once(self) -> dict[str, Any]:
-        self._validate_pilot_scope()
+    async def run_once(self, *, source_bytes: bytes | None = None) -> dict[str, Any]:
+        self._validate_scope()
         self.ledger.init_schema()
-        source_bytes = await self.uploader.download_notebook(f"{self.source_notebook}.note")
+        if source_bytes is None:
+            source_bytes = await self.uploader.download_notebook(
+                f"{self.source_notebook}.note"
+            )
         candidates = await self._detect_candidates(source_bytes)
         operations = [self._record_candidate(candidate) for candidate in candidates]
         if self.dry_run:

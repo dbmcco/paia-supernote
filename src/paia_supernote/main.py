@@ -1,33 +1,43 @@
 """
 ABOUTME: paia-supernote main service entry point
 Author: Braydon McCormick <braydon@braydondm.com>
-Purpose: Main daemon that orchestrates file watching, content processing, and agent integration
+Purpose: Main daemon for file watching, content processing, and agent integration
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import os
 import signal
 import sys
-import tomllib
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict
 
 import structlog
+import tomllib
 
-from .events import EventsClient
 from .cloud_poller import CloudPoller
 from .enrich_service import EnrichService
+from .events import EventsClient
 from .ingest_service import IngestService
-from .reader import SupernoteReader
-from .writer import SupernoteWriter
-from .uploader import SupernoteUploader
+from .model_config import (
+    default_zai_base_url,
+    default_zai_text_model,
+    default_zai_vision_model,
+    resolve_supernote_zai_api_key,
+)
+from .notebook_artifacts import NotebookPageSpec, replace_notebook_pages
 from .notebook_writer import append_page_to_notebook
-from .tasks_sync import TasksSync
+from .quick_filing import notebook_name_to_tag
+from .quick_filing_service import QuickFilingService
+from .reader import SupernoteReader
 from .task_curator import TaskCurator
-from .model_config import default_zai_base_url, default_zai_text_model, default_zai_vision_model
+from .tasks_sync import TasksSync
+from .uploader import SupernoteUploader
+from .writer import SupernoteWriter
 
 log = structlog.get_logger(__name__)
 
@@ -46,7 +56,26 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "events_url": "http://localhost:3511",
     "folio_url": "http://localhost:3512",
     "work_url": "http://localhost:3560",
+    "linear_api_key": None,
+    "linear_team_key": "LFW",
+    "linear_team_id": None,
     "state_db_path": str(Path("~/.paia/supernote/supernote-state.db").expanduser()),
+    "folio_sync_notebooks": ["LFW", "Synthera", "Navicyte", "Synth"],
+    "filing_enabled": False,
+    "filing_dry_run": True,
+    "filing_ledger_db_path": str(
+        Path("~/.paia/supernote/filing-ledger.db").expanduser()
+    ),
+    "filing_source_notebooks": ["Test Note 1"],
+    "filing_destination_notebooks": [
+        "Test Note 2",
+        "LFW",
+        "MGMT",
+        "Navicyte",
+        "Synth",
+        "Synthera",
+    ],
+    "filing_destination_map": {},
     "agent_mappings": {
         "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
         "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
@@ -81,6 +110,7 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
                 "zai_vision_model",
                 "zai_text_model",
                 "state_db_path",
+                "folio_sync_notebooks",
             ):
                 if key in sn:
                     config[key] = sn[key]
@@ -89,6 +119,25 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
             for key in ("events_url", "folio_url", "work_url"):
                 if key in svc:
                     config[key] = svc[key]
+        if "linear" in file_config:
+            lin = file_config["linear"]
+            for key in ("linear_api_key", "linear_team_key", "linear_team_id"):
+                if key in lin:
+                    config[key] = lin[key]
+        if "filing" in file_config:
+            filing = file_config["filing"]
+            for key in (
+                "enabled",
+                "dry_run",
+                "ledger_db_path",
+                "source_notebooks",
+                "destination_notebooks",
+                "destination_map",
+            ):
+                if key not in filing:
+                    continue
+                config_key = f"filing_{key}"
+                config[config_key] = filing[key]
         if "agents" in file_config:
             config["agent_mappings"] = file_config["agents"]
 
@@ -99,7 +148,7 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         config["vision_backend"] = env_vision_backend
     if env_rewrite_backend := os.environ.get("SUPERNOTE_REWRITE_BACKEND"):
         config["rewrite_backend"] = env_rewrite_backend
-    if env_zai_api_key := os.environ.get("ZAI_API_KEY"):
+    if env_zai_api_key := resolve_supernote_zai_api_key():
         config["zai_api_key"] = env_zai_api_key
     if env_state_db_path := os.environ.get("SUPERNOTE_STATE_DB_PATH"):
         config["state_db_path"] = env_state_db_path
@@ -109,10 +158,69 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         config["folio_url"] = env_folio
     if env_work := os.environ.get("PAIA_WORK_URL"):
         config["work_url"] = env_work
+    if env_linear_key := os.environ.get("LINEAR_API_KEY"):
+        config["linear_api_key"] = env_linear_key
+    if env_linear_team_key := os.environ.get("LINEAR_TEAM_KEY"):
+        config["linear_team_key"] = env_linear_team_key
+    if env_linear_team_id := os.environ.get("LINEAR_TEAM_ID"):
+        config["linear_team_id"] = env_linear_team_id
     if env_state_db := os.environ.get("SUPERNOTE_STATE_DB_PATH"):
         config["state_db_path"] = env_state_db
+    if env_folio_sync := os.environ.get("SUPERNOTE_FOLIO_SYNC_NOTEBOOKS"):
+        config["folio_sync_notebooks"] = [
+            notebook.strip()
+            for notebook in env_folio_sync.split(",")
+            if notebook.strip()
+        ]
+    if env_filing_enabled := os.environ.get("SUPERNOTE_FILING_ENABLED"):
+        config["filing_enabled"] = env_filing_enabled.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    if env_filing_dry_run := os.environ.get("SUPERNOTE_FILING_DRY_RUN"):
+        config["filing_dry_run"] = env_filing_dry_run.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    if env_filing_sources := os.environ.get("SUPERNOTE_FILING_SOURCE_NOTEBOOKS"):
+        config["filing_source_notebooks"] = [
+            notebook.strip()
+            for notebook in env_filing_sources.split(",")
+            if notebook.strip()
+        ]
 
     return config
+
+
+def _filing_destination_map(config: Dict[str, Any]) -> dict[str, str]:
+    destinations = {
+        notebook_name_to_tag(str(name)): str(name)
+        for name in list(config.get("filing_destination_notebooks") or [])
+        if str(name).strip()
+    }
+    for key, value in dict(config.get("filing_destination_map") or {}).items():
+        destinations[notebook_name_to_tag(str(key))] = str(value)
+    return destinations
+
+
+def _watched_notebooks(config: Dict[str, Any]) -> set[str]:
+    notebooks = {"Walk", "tasks"}
+    notebooks.update(
+        str(name).strip()
+        for name in config.get("folio_sync_notebooks") or []
+        if str(name).strip()
+    )
+    if config.get("filing_enabled"):
+        notebooks.update(
+            str(name).strip()
+            for name in config.get("filing_source_notebooks") or []
+            if str(name).strip()
+        )
+    return notebooks
 
 
 class SupernoteService:
@@ -136,11 +244,15 @@ class SupernoteService:
             uploader=self.uploader,
             on_note_changed=self._on_note_changed,
             poll_interval=self.config["poll_interval"],
+            watched_notebooks=_watched_notebooks(self.config),
+            process_existing_on_start=False,
         )
         self.tasks_sync = TasksSync(
             uploader=self.uploader,
             writer=self.writer,
-            work_url=self.config["work_url"],
+            linear_api_key=self.config["linear_api_key"],
+            linear_team_key=self.config["linear_team_key"],
+            linear_team_id=self.config.get("linear_team_id"),
             poll_interval=self.config["poll_interval"],
         )
         self.task_curator = TaskCurator(
@@ -151,30 +263,66 @@ class SupernoteService:
             rewrite_backend=self.config["rewrite_backend"],
             zai_base_url=self.config["zai_base_url"],
             zai_text_model=self.config["zai_text_model"],
+            linear_api_key=self.config["linear_api_key"],
+            linear_team_key=self.config["linear_team_key"],
+            linear_team_id=self.config.get("linear_team_id"),
         )
         self._shutdown_event = asyncio.Event()
+
+    def _resolve_agent_name(self, raw_agent: str) -> str | None:
+        candidate = str(raw_agent or "").strip()
+        if not candidate:
+            return None
+        if candidate in self.config["agent_mappings"]:
+            return candidate
+
+        lowered = candidate.lower()
+        alias_map = {
+            "sam": "Sam",
+            "samantha": "Sam",
+            "caroline": "Caroline",
+            "ingrid": "Ingrid",
+        }
+        if lowered in alias_map and alias_map[lowered] in self.config["agent_mappings"]:
+            return alias_map[lowered]
+
+        for configured in self.config["agent_mappings"]:
+            if configured.lower() == lowered:
+                return configured
+        return None
 
     async def start(self) -> None:
         """Start the Supernote service."""
         log.info("service_starting", config_keys=list(self.config.keys()))
 
-        # Start events connection
-        await self.events.start()
-        self.events.register_write_handler(self._handle_write_request)
+        try:
+            # Start events connection
+            await self.events.start()
+            self.events.register_write_handler(self._handle_write_request)
 
-        # Start uploader browser session (also used by cloud poller for API calls)
-        await self.uploader.start()
+            # Start uploader browser session (also used by cloud poller for API calls)
+            await self.uploader.start()
 
-        # Start cloud poller (no Partner app needed)
-        self.cloud_poller.start()
+            # Start cloud poller (no Partner app needed)
+            self.cloud_poller.start()
 
-        # Start tasks sync (paia-work → tasks.note)
-        self.tasks_sync.start()
+            # Start tasks sync (Linear → tasks.note)
+            self.tasks_sync.start()
 
-        log.info("service_started")
+            log.info("service_started")
 
-        # Wait for shutdown signal
-        await self._shutdown_event.wait()
+            await self._wait_until_shutdown_or_poller_exit()
+        except Exception as exc:
+            log.error("service_exiting_after_poller_failure", error=str(exc))
+            with suppress(Exception):
+                await self.tasks_sync.stop()
+            with suppress(Exception):
+                await self.cloud_poller.stop()
+            with suppress(Exception):
+                await self.uploader.stop()
+            with suppress(Exception):
+                await self.events.stop()
+            raise
 
     async def stop(self) -> None:
         """Stop the Supernote service, flushing pending ops."""
@@ -187,6 +335,29 @@ class SupernoteService:
 
         self._shutdown_event.set()
         log.info("service_stopped")
+
+    async def _wait_until_shutdown_or_poller_exit(self) -> None:
+        poller_wait = getattr(self.cloud_poller, "wait", None)
+        if poller_wait is None or not inspect.iscoroutinefunction(poller_wait):
+            await self._shutdown_event.wait()
+            return
+
+        shutdown_task = asyncio.create_task(self._shutdown_event.wait())
+        poller_task = asyncio.create_task(poller_wait())
+
+        done, pending = await asyncio.wait(
+            {shutdown_task, poller_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            with suppress(asyncio.CancelledError):
+                await task
+
+        if poller_task in done:
+            poller_task.result()
 
     async def _on_note_changed(
         self, notebook_name: str, note_bytes: bytes, update_time: int | None = None
@@ -201,10 +372,15 @@ class SupernoteService:
             read_results = await self.reader.process_file(note_bytes, notebook_name)
 
             for result in read_results:
-                # All transcriptions go to folio
                 await self.events.publish_note_transcribed(
                     result.notebook, result.page_num, result.text
                 )
+                if str(result.notebook).casefold() == "walk":
+                    await self.events.publish_walk_feedback_detected(
+                        notebook=result.notebook,
+                        page=result.page_num,
+                        text=result.text,
+                    )
 
                 if result.content_type == "task":
                     await self._handle_task_content(result)
@@ -219,19 +395,54 @@ class SupernoteService:
                         task_text=checkbox.task_text,
                         tag=checkbox.tag,
                     )
-                    # tasks.note checkboxes → mark done in paia-work
+                    # tasks.note checkboxes → mark done in Linear
                     await self._handle_task_checkbox(
-                        result.notebook, result.page_num,
-                        checkbox.task_text, checkbox.tag,
+                        result.notebook,
+                        result.page_num,
+                        checkbox.task_text,
+                        checkbox.tag,
                     )
+
+            await self._run_note_filing_if_configured(notebook_name, note_bytes)
 
         except Exception as exc:
             log.error("file_processing_error", notebook=notebook_name, error=str(exc))
 
+    async def _run_note_filing_if_configured(
+        self, notebook_name: str, note_bytes: bytes
+    ) -> None:
+        if not self.config.get("filing_enabled"):
+            return
+        source_notebooks = {
+            str(name).strip()
+            for name in self.config.get("filing_source_notebooks") or []
+            if str(name).strip()
+        }
+        if notebook_name not in source_notebooks:
+            return
+
+        service = QuickFilingService(
+            uploader=self.uploader,
+            ledger_db_path=Path(self.config["filing_ledger_db_path"]),
+            source_notebook=notebook_name,
+            destination_map=_filing_destination_map(self.config),
+            dry_run=bool(self.config.get("filing_dry_run", True)),
+            allowed_source_notebooks=source_notebooks,
+            reader=self.reader,
+        )
+        result = await service.run_once(source_bytes=note_bytes)
+        log.info(
+            "note_filing_checked",
+            notebook=notebook_name,
+            candidate_count=result.get("candidate_count"),
+            dry_run=result.get("dry_run"),
+        )
+
     async def _handle_task_content(self, result) -> None:
         """Handle task content (box/circle markers)."""
-        log.info("task_content_detected", notebook=result.notebook,
-                 preview=result.text[:100])
+        log.info(
+            "task_content_detected", notebook=result.notebook, preview=result.text[:100]
+        )
 
     async def _handle_strategy_snippet(self, result) -> None:
         """Handle strategy snippet detection — route to appropriate agent."""
@@ -243,33 +454,81 @@ class SupernoteService:
             agent=agent,
         )
 
-    async def _handle_task_checkbox(self, notebook: str, page: int, task_text: str, tag: str) -> None:
-        """Mark a task done in paia-work when checked off on tasks.note.
+    async def _handle_task_checkbox(
+        self, notebook: str, page: int, task_text: str, tag: str
+    ) -> None:
+        """Mark a Linear issue done when checked off on tasks.note.
 
-        Parses the task ID from text like '☑ Task title  [abc123]'.
+        Parses the issue identifier from text like '☑ Task title  [LFW-42]'.
         """
         import re
-        import httpx
+
+        from paia_agent_runtime.tools.linear import LinearTool
 
         if notebook != "tasks":
             return
 
-        match = re.search(r'\[([^\]]+)\]', task_text)
+        match = re.search(r"\[([A-Z][A-Z0-9]*-\d+)\]", task_text)
         if not match:
             log.warning("tasks_checkbox_no_id", text=task_text[:80])
             return
 
-        task_id = match.group(1)
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{self.config['work_url']}/api/tasks/{task_id}/done",
-                    timeout=5.0,
-                )
-                resp.raise_for_status()
-            log.info("task_marked_done", task_id=task_id)
-        except httpx.HTTPError as exc:
-            log.warning("task_mark_done_failed", task_id=task_id, error=str(exc))
+        identifier = match.group(1)
+        linear = LinearTool(
+            api_key=self.config["linear_api_key"],
+            team_id=self.config.get("linear_team_id"),
+        )
+        result = await linear.execute("complete_issue", id=identifier)
+        if result.get("status") == "ok":
+            log.info("task_marked_done", identifier=identifier)
+        else:
+            log.warning(
+                "task_mark_done_failed",
+                identifier=identifier,
+                error=result.get("error"),
+            )
+
+    async def _publish_write_completed(
+        self,
+        event_data: Dict[str, Any],
+        *,
+        agent: str,
+        notebook: str,
+        content_type: str | None,
+        page_count: int,
+        artifact_refs: dict[str, Any] | None = None,
+    ) -> None:
+        await self.events.publish_write_completed(
+            request_event_id=event_data.get("request_event_id"),
+            request_source_event_id=event_data.get("request_source_event_id"),
+            run_id=event_data.get("run_id") or event_data.get("action_id"),
+            agent=agent,
+            notebook=notebook,
+            content_type=content_type,
+            page_count=page_count,
+            artifact_refs=artifact_refs,
+        )
+
+    async def _publish_write_failed(
+        self,
+        event_data: Dict[str, Any],
+        *,
+        agent: str | None,
+        notebook: str | None,
+        content_type: str | None,
+        page_count: int = 0,
+        error: str,
+    ) -> None:
+        await self.events.publish_write_failed(
+            request_event_id=event_data.get("request_event_id"),
+            request_source_event_id=event_data.get("request_source_event_id"),
+            run_id=event_data.get("run_id") or event_data.get("action_id"),
+            agent=agent,
+            notebook=notebook,
+            content_type=content_type,
+            page_count=page_count,
+            error=error,
+        )
 
     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
         """Handle write request events from agents.
@@ -277,30 +536,130 @@ class SupernoteService:
         Pipeline: download from cloud → render_page → append → upload/replace.
         Does not require Partner app sync — reads directly from Supernote Cloud.
         """
-        import tempfile
         import os
+        import tempfile
+
+        raw_agent: str | None = None
+        agent: str | None = None
+        notebook: str | None = None
+        content_type: str | None = None
 
         try:
-            agent = event_data["agent"]
-            notebook = event_data.get("notebook") or self.config["agent_mappings"].get(agent, {}).get("notebook", "")
+            raw_agent = str(event_data["agent"])
+            agent = self._resolve_agent_name(raw_agent)
+            notebook = event_data.get("notebook") or self.config["agent_mappings"].get(
+                agent, {}
+            ).get("notebook", "")
             content = event_data.get("content", "")
             content_type = event_data.get("content_type")
 
             # Validate agent is known
-            if agent not in self.config["agent_mappings"]:
-                log.warning("write_request_unknown_agent", agent=agent)
+            if agent is None or agent not in self.config["agent_mappings"]:
+                log.warning("write_request_unknown_agent", agent=raw_agent)
+                await self._publish_write_failed(
+                    event_data,
+                    agent=raw_agent,
+                    notebook=notebook,
+                    content_type=content_type,
+                    error="unknown_agent",
+                )
+                return
+
+            # Delegate task_page_curate to TaskCurator (can target tasks.note)
+            if content_type == "task_page_curate":
+                log.info(
+                    "delegating_task_page_curation", agent=agent, notebook=notebook
+                )
+                event_data["notebook_bytes"] = await self.uploader.download_notebook(
+                    f"{notebook}.note"
+                )
+                await self.task_curator.handle_write_requested(event_data)
                 return
 
             # tasks.note is owned by TasksSync — agents cannot write to it
             if notebook == "tasks":
                 log.warning("write_request_rejected_tasks_notebook", agent=agent)
+                await self._publish_write_failed(
+                    event_data,
+                    agent=agent,
+                    notebook=notebook,
+                    content_type=content_type,
+                    error="tasks_notebook_rejected",
+                )
                 return
 
-            # Delegate task_page_curate to TaskCurator
-            if content_type == "task_page_curate":
-                log.info("delegating_task_page_curation", agent=agent, notebook=notebook)
-                event_data["notebook_bytes"] = await self.uploader.download_notebook(f"{notebook}.note")
-                await self.task_curator.handle_write_requested(event_data)
+            # Handle replace_pages content type
+            if content_type == "replace_pages":
+                page_specs = [
+                    NotebookPageSpec(
+                        agent=str(page.get("agent") or agent),
+                        content=str(page.get("content") or ""),
+                    )
+                    for page in event_data.get("pages", [])
+                ]
+                if not page_specs:
+                    log.warning("write_request_replace_pages_empty", notebook=notebook)
+                    await self._publish_write_failed(
+                        event_data,
+                        agent=agent,
+                        notebook=notebook,
+                        content_type=content_type,
+                        error="empty_pages",
+                    )
+                    return
+
+                target_name = f"{notebook}.note"
+                try:
+                    success = await self._replace_pages_with_uploader(
+                        uploader=self.uploader,
+                        target_name=target_name,
+                        page_specs=page_specs,
+                    )
+                except RuntimeError as exc:
+                    log.warning(
+                        "replace_pages_retrying_with_fresh_uploader",
+                        agent=agent,
+                        notebook=notebook,
+                        error=str(exc),
+                    )
+                    fresh_uploader = SupernoteUploader()
+                    await fresh_uploader.start()
+                    try:
+                        success = await self._replace_pages_with_uploader(
+                            uploader=fresh_uploader,
+                            target_name=target_name,
+                            page_specs=page_specs,
+                        )
+                    finally:
+                        await fresh_uploader.stop()
+
+                if success:
+                    log.info(
+                        "replace_pages_complete",
+                        agent=agent,
+                        notebook=notebook,
+                        page_count=len(page_specs),
+                    )
+                    await self._publish_write_completed(
+                        event_data,
+                        agent=agent,
+                        notebook=notebook,
+                        content_type=content_type,
+                        page_count=len(page_specs),
+                        artifact_refs={"notebook": target_name},
+                    )
+                else:
+                    log.warning(
+                        "replace_pages_upload_failed", agent=agent, notebook=notebook
+                    )
+                    await self._publish_write_failed(
+                        event_data,
+                        agent=agent,
+                        notebook=notebook,
+                        content_type=content_type,
+                        page_count=len(page_specs),
+                        error="upload_failed",
+                    )
                 return
 
             target_name = f"{notebook}.note"
@@ -309,8 +668,9 @@ class SupernoteService:
 
             # Step 1: Download the current notebook from cloud
             notebook_bytes = await self.uploader.download_notebook(target_name)
-            log.info("notebook_downloaded", target_name=target_name,
-                     size=len(notebook_bytes))
+            log.info(
+                "notebook_downloaded", target_name=target_name, size=len(notebook_bytes)
+            )
 
             # Step 2: Render page content to RATTA_RLE bytes
             ratta_rle_bytes = self.writer.render_page(agent, content)
@@ -332,11 +692,68 @@ class SupernoteService:
 
             if success:
                 log.info("write_complete", agent=agent, notebook=notebook)
+                await self._publish_write_completed(
+                    event_data,
+                    agent=agent,
+                    notebook=notebook,
+                    content_type=content_type,
+                    page_count=1,
+                    artifact_refs={"notebook": target_name},
+                )
             else:
                 log.warning("write_upload_failed", agent=agent, notebook=notebook)
+                await self._publish_write_failed(
+                    event_data,
+                    agent=agent,
+                    notebook=notebook,
+                    content_type=content_type,
+                    page_count=1,
+                    error="upload_failed",
+                )
 
         except Exception as exc:
             log.error("write_request_error", error=str(exc))
+            await self._publish_write_failed(
+                event_data,
+                agent=agent or raw_agent,
+                notebook=notebook,
+                content_type=content_type,
+                error=str(exc),
+            )
+
+    async def _replace_pages_with_uploader(
+        self,
+        *,
+        uploader: SupernoteUploader,
+        target_name: str,
+        page_specs: list[NotebookPageSpec],
+    ) -> bool:
+        import os
+        import tempfile
+
+        try:
+            notebook_bytes = await uploader.download_notebook(target_name)
+        except RuntimeError as exc:
+            if "not found in Note folder" not in str(exc):
+                raise
+            notebook_bytes = await uploader.download_notebook("Quick.note")
+
+        updated_bytes = replace_notebook_pages(
+            notebook_bytes,
+            writer=self.writer,
+            pages=page_specs,
+        )
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".note", delete=False, dir="/tmp"
+        ) as tmp:
+            tmp.write(updated_bytes)
+            tmp_path = tmp.name
+
+        try:
+            return await uploader.upload_notebook(tmp_path, target_name)
+        finally:
+            os.unlink(tmp_path)
 
 
 def _configure_logging() -> None:
@@ -356,6 +773,7 @@ def _configure_logging() -> None:
 
 def render_status(db_path: Path) -> str:
     from .page_state import PageStateStore
+
     if not db_path.exists():
         return "No state database found."
     store = PageStateStore(db_path)
@@ -381,6 +799,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Path to config TOML file (default: {DEFAULT_CONFIG_PATH})",
     )
     subparsers = parser.add_subparsers(dest="mode", required=False)
+    subparsers.add_parser("service", help="Run the event-backed Supernote service")
     subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
     subparsers.add_parser("status", help="Show pipeline queue counts")
@@ -395,13 +814,15 @@ def main(argv: list[str] | None = None) -> None:
     _configure_logging()
 
     config = load_config(args.config)
-    mode = args.mode or "ingest"
+    mode = args.mode or "service"
 
     if mode == "status":
         print(render_status(Path(config["state_db_path"])))
         return
 
-    if mode == "enrich":
+    if mode == "service":
+        service: Any = SupernoteService(config)
+    elif mode == "enrich":
         service: Any = EnrichService(config)
     else:
         service = IngestService(config)

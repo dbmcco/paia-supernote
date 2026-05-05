@@ -48,8 +48,9 @@ def parse_filing_header(text: str) -> FilingHeader:
     header = lines[0] if lines else ""
     title = lines[1] if len(lines) > 1 else None
     date_match = _DATE_RE.search(header)
-    bundle_match = _BUNDLE_RE.search(header)
-    tags = [tag.lower() for tag in _TAG_RE.findall(header)]
+    header_block = "\n".join(lines[:5])
+    bundle_match = _BUNDLE_RE.search(header_block)
+    tags = [tag.lower() for tag in _TAG_RE.findall(header_block)]
     return FilingHeader(
         note_date=date_match.group(1) if date_match else None,
         tags=tags,
@@ -60,11 +61,27 @@ def parse_filing_header(text: str) -> FilingHeader:
     )
 
 
+def _destination_from_lines(
+    lines: list[str], destination_map: dict[str, str]
+) -> tuple[str, str] | None:
+    for line in lines[:5]:
+        cleaned = re.sub(r"^[*★☆\-\s]+", "", line).strip()
+        if not cleaned or cleaned.startswith("#") or _DATE_RE.fullmatch(cleaned):
+            continue
+        normalized = notebook_name_to_tag(cleaned)
+        target = destination_map.get(normalized)
+        if target:
+            return cleaned, target
+    return None
+
+
 def _bundle_key(header: FilingHeader) -> str | None:
     if header.note_date is None or header.bundle_total is None:
         return None
     tag_key = "-".join(header.tags)
-    title_key = re.sub(r"[^a-z0-9]+", "-", (header.title or "untitled").lower()).strip("-")
+    title_key = re.sub(r"[^a-z0-9]+", "-", (header.title or "untitled").lower()).strip(
+        "-"
+    )
     return f"{header.note_date}:{tag_key}:{title_key}:{header.bundle_total}"
 
 
@@ -78,6 +95,7 @@ def route_page(
     destination_map: dict[str, str],
 ) -> FilingCandidate:
     header = parse_filing_header(text)
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     bundle_key = _bundle_key(header)
     if not starred:
         return FilingCandidate(
@@ -94,22 +112,22 @@ def route_page(
             confidence=0.0,
         )
 
-    for tag in header.tags:
-        target = destination_map.get(tag)
-        if target:
-            return FilingCandidate(
-                status="ready",
-                source_notebook=notebook,
-                source_pages=[page],
-                source_revision=source_revision,
-                detected_header=header.raw_header,
-                detected_tags=header.tags,
-                target_notebook=target,
-                bundle_key=bundle_key,
-                title=header.title,
-                reason=f"matched #{tag}",
-                confidence=1.0,
-            )
+    destination_match = _destination_from_lines(lines, destination_map)
+    if destination_match:
+        destination, target = destination_match
+        return FilingCandidate(
+            status="ready",
+            source_notebook=notebook,
+            source_pages=[page],
+            source_revision=source_revision,
+            detected_header=header.raw_header,
+            detected_tags=header.tags,
+            target_notebook=target,
+            bundle_key=bundle_key,
+            title=header.title,
+            reason=f"matched destination {destination}",
+            confidence=1.0,
+        )
 
     return FilingCandidate(
         status="needs_review",
@@ -121,7 +139,7 @@ def route_page(
         target_notebook=None,
         bundle_key=bundle_key,
         title=header.title,
-        reason="no known destination tag",
+        reason="no known destination line",
         confidence=0.0,
     )
 

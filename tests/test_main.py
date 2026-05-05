@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import signal
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,18 +10,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from paia_supernote.enrich_service import EnrichService
+from paia_supernote.ingest_service import IngestService
 from paia_supernote.main import (
     DEFAULT_CONFIG,
     SupernoteService,
+    _filing_destination_map,
+    _watched_notebooks,
     build_parser,
     load_config,
     main,
     render_status,
 )
-from paia_supernote.ingest_service import IngestService
-from paia_supernote.enrich_service import EnrichService
 from paia_supernote.page_state import PageStateStore
-
 
 # -- Config loading -----------------------------------------------------------
 
@@ -31,7 +31,10 @@ class TestLoadConfig:
     """Config loaded from TOML correctly, with env var overrides."""
 
     def test_defaults_when_no_file(self, tmp_path: Path) -> None:
-        config = load_config(config_path=tmp_path / "nonexistent.toml")
+        with patch(
+            "paia_supernote.main.resolve_supernote_zai_api_key", return_value=None
+        ):
+            config = load_config(config_path=tmp_path / "nonexistent.toml")
         assert config["events_url"] == "http://localhost:3511"
         assert config["folio_url"] == "http://localhost:3512"
         assert config["work_url"] == "http://localhost:3560"
@@ -45,14 +48,16 @@ class TestLoadConfig:
 
     def test_loads_toml_file(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(textwrap.dedent("""\
+        cfg_file.write_text(
+            textwrap.dedent("""\
             [supernote]
             poll_interval = 30
 
             [services]
             events_url = "http://events:9000"
             folio_url = "http://folio:9001"
-        """))
+        """)
+        )
 
         config = load_config(config_path=cfg_file)
         assert config["poll_interval"] == 30
@@ -61,32 +66,72 @@ class TestLoadConfig:
         # Unset keys keep defaults
         assert config["work_url"] == "http://localhost:3560"
 
-    def test_env_vars_override_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_vars_override_toml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(textwrap.dedent("""\
+        cfg_file.write_text(
+            textwrap.dedent("""\
             [services]
             events_url = "http://toml-events:1111"
-        """))
+        """)
+        )
         monkeypatch.setenv("PAIA_EVENTS_URL", "http://env-events:2222")
 
         config = load_config(config_path=cfg_file)
         assert config["events_url"] == "http://env-events:2222"
 
-    def test_env_var_poll_interval(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_var_poll_interval(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("SUPERNOTE_POLL_INTERVAL", "120")
         config = load_config(config_path=tmp_path / "nope.toml")
         assert config["poll_interval"] == 120
 
     def test_agent_mappings_from_toml(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(textwrap.dedent("""\
+        cfg_file.write_text(
+            textwrap.dedent("""\
             [agents.Sam]
             font = "Comic Sans"
             notebook = "Fun"
-        """))
+        """)
+        )
 
         config = load_config(config_path=cfg_file)
         assert config["agent_mappings"]["Sam"]["font"] == "Comic Sans"
+
+    def test_filing_config_loads_explicit_sources_and_destinations(
+        self, tmp_path: Path
+    ) -> None:
+        cfg_file = tmp_path / "config.toml"
+        cfg_file.write_text(
+            textwrap.dedent("""\
+            [filing]
+            enabled = true
+            dry_run = false
+            source_notebooks = ["LFW", "MGMT"]
+            destination_notebooks = ["Navicyte", "Synth"]
+
+            [filing.destination_map]
+            "LFW HEC" = "LFW"
+        """)
+        )
+
+        config = load_config(config_path=cfg_file)
+
+        assert config["filing_enabled"] is True
+        assert config["filing_dry_run"] is False
+        assert _watched_notebooks(config) >= {
+            "Walk",
+            "tasks",
+            "LFW",
+            "MGMT",
+            "Navicyte",
+            "Synth",
+        }
+        assert _filing_destination_map(config)["lfw-hec"] == "LFW"
+        assert _filing_destination_map(config)["navicyte"] == "Navicyte"
 
     def test_state_db_path_can_be_loaded_from_file_and_env(
         self,
@@ -94,10 +139,12 @@ class TestLoadConfig:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(textwrap.dedent("""\
+        cfg_file.write_text(
+            textwrap.dedent("""\
             [supernote]
             state_db_path = "/tmp/from-file.db"
-        """))
+        """)
+        )
 
         config = load_config(config_path=cfg_file)
         assert config["state_db_path"] == "/tmp/from-file.db"
@@ -111,18 +158,27 @@ class TestLoadConfig:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.delenv("SUPERNOTE_ZAI_API_KEY", raising=False)
+        monkeypatch.delenv("ZAI_API_KEY", raising=False)
         cfg_file = tmp_path / "config.toml"
-        cfg_file.write_text(textwrap.dedent("""\
+        cfg_file.write_text(
+            textwrap.dedent("""\
             [supernote]
             zai_api_key = "file-token"
-        """))
+        """)
+        )
 
         config = load_config(config_path=cfg_file)
         assert config["zai_api_key"] == "file-token"
 
-        monkeypatch.setenv("ZAI_API_KEY", "env-token")
+        monkeypatch.setenv("SUPERNOTE_ZAI_API_KEY", "supernote-env-token")
         config = load_config(config_path=cfg_file)
-        assert config["zai_api_key"] == "env-token"
+        assert config["zai_api_key"] == "supernote-env-token"
+
+        monkeypatch.delenv("SUPERNOTE_ZAI_API_KEY")
+        monkeypatch.setenv("ZAI_API_KEY", "legacy-env-token")
+        config = load_config(config_path=cfg_file)
+        assert config["zai_api_key"] == "legacy-env-token"
 
     def test_default_config_includes_state_db_path(self, tmp_path: Path) -> None:
         config = load_config(config_path=tmp_path / "missing.toml")
@@ -163,7 +219,7 @@ def _make_service(tmp_path: Path) -> SupernoteService:
 
 
 class TestServiceStart:
-    """main() starts without exception (mock all I/O); cloud poller and events loop both started."""
+    """main() starts without exception with all I/O mocked."""
 
     @pytest.mark.asyncio
     async def test_start_invokes_all_components(self, tmp_path: Path) -> None:
@@ -219,7 +275,9 @@ class TestServiceStart:
         service.events.stop.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_start_raises_when_cloud_poller_task_dies(self, tmp_path: Path) -> None:
+    async def test_start_raises_when_cloud_poller_task_dies(
+        self, tmp_path: Path
+    ) -> None:
         service = _make_service(tmp_path)
         service.events = MagicMock()
         service.events.start = AsyncMock()
@@ -252,6 +310,68 @@ class TestServiceStart:
 
         with pytest.raises(RuntimeError, match="poller died"):
             await asyncio.wait_for(service.start(), timeout=0.2)
+
+
+class TestNoteChangeProcessing:
+    @pytest.mark.asyncio
+    async def test_walk_note_changes_publish_feedback_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        service = _make_service(tmp_path)
+        service.reader = AsyncMock()
+        service.reader.process_file.return_value = [
+            SimpleNamespace(
+                notebook="Walk",
+                page_num=0,
+                text="Prior Gene context exists.",
+                content_type="general",
+                checkboxes=[],
+            )
+        ]
+        service.events = MagicMock()
+        service.events.publish_note_transcribed = AsyncMock()
+        service.events.publish_walk_feedback_detected = AsyncMock()
+
+        await service._process_file_change("Walk", b"walk-bytes")
+
+        service.events.publish_walk_feedback_detected.assert_awaited_once_with(
+            notebook="Walk",
+            page=0,
+            text="Prior Gene context exists.",
+        )
+
+    @pytest.mark.asyncio
+    async def test_configured_filing_source_runs_filing_service(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        config = dict(DEFAULT_CONFIG)
+        config.update(
+            {
+                "filing_enabled": True,
+                "filing_dry_run": False,
+                "filing_ledger_db_path": str(tmp_path / "filing.db"),
+                "filing_source_notebooks": ["LFW"],
+                "filing_destination_notebooks": ["MGMT"],
+            }
+        )
+        service = SupernoteService(config=config)
+        service.reader = AsyncMock()
+        service.reader.process_file.return_value = []
+
+        with patch("paia_supernote.main.QuickFilingService") as mock_cls:
+            mock_service = AsyncMock()
+            mock_service.run_once.return_value = {
+                "status": "ok",
+                "candidate_count": 1,
+                "dry_run": False,
+            }
+            mock_cls.return_value = mock_service
+
+            await service._process_file_change("LFW", b"lfw-bytes")
+
+        mock_cls.assert_called_once()
+        mock_service.run_once.assert_awaited_once_with(source_bytes=b"lfw-bytes")
 
 
 # -- SIGTERM clean shutdown ---------------------------------------------------
@@ -355,8 +475,9 @@ class TestIngestService:
     """IngestService persists page revisions to SQLite on each note change."""
 
     @pytest.mark.asyncio
-    async def test_ingest_service_persists_latest_page_revision(self, tmp_path: Path) -> None:
-        from paia_supernote.ingest_service import IngestService
+    async def test_ingest_service_persists_latest_page_revision(
+        self, tmp_path: Path
+    ) -> None:
 
         config = dict(DEFAULT_CONFIG)
         config["state_db_path"] = str(tmp_path / "state.db")
@@ -389,7 +510,6 @@ class TestEnrichService:
     async def test_enrich_service_discards_stale_revision_before_folio_write(
         self, tmp_path: Path
     ) -> None:
-        from paia_supernote.enrich_service import EnrichService
 
         config = dict(DEFAULT_CONFIG)
         config["state_db_path"] = str(tmp_path / "state.db")
@@ -398,11 +518,17 @@ class TestEnrichService:
         store.init_schema()
         store.upsert_ocr_page("Quick", 19, "rev-1", "raw v1", "glm-4.5v")
 
-        async def mutate_revision_then_return(*, notebook: str, page: int, raw_text: str):
+        async def mutate_revision_then_return(
+            *, notebook: str, page: int, raw_text: str
+        ):
             store.upsert_ocr_page(notebook, page, "rev-2", "raw v2", "glm-4.5v")
             return SimpleNamespace(
                 markdown="# Updated",
-                diagram={"kind": "scene", "scene": {"nodes": [], "edges": []}, "render_version": "1"},
+                diagram={
+                    "kind": "scene",
+                    "scene": {"nodes": [], "edges": []},
+                    "render_version": "1",
+                },
             )
 
         mock_enricher = AsyncMock()
@@ -430,7 +556,7 @@ class TestMainEntrypoint2:
         self,
         tmp_path: Path,
     ) -> None:
-        """content_type=task_page_curate is routed to TaskCurator, not the generic write path.
+        """content_type=task_page_curate routes to TaskCurator.
 
         Regression: @patch on instance attributes (uploader, task_curator) raises
         AttributeError because they are set in __init__, not defined at class level.
@@ -455,13 +581,15 @@ class TestMainEntrypoint2:
         await service._handle_write_request(event_data)
 
         # Assert — TaskCurator received the event with notebook bytes injected
-        mock_task_curator.handle_write_requested.assert_awaited_once_with({
-            "agent": "Sam",
-            "notebook": "Quick",
-            "content": "some new content",
-            "content_type": "task_page_curate",
-            "notebook_bytes": b"mock_notebook_bytes",
-        })
+        mock_task_curator.handle_write_requested.assert_awaited_once_with(
+            {
+                "agent": "Sam",
+                "notebook": "Quick",
+                "content": "some new content",
+                "content_type": "task_page_curate",
+                "notebook_bytes": b"mock_notebook_bytes",
+            }
+        )
         mock_uploader.download_notebook.assert_awaited_once_with("Quick.note")
 
     @pytest.mark.asyncio
@@ -469,7 +597,7 @@ class TestMainEntrypoint2:
         self,
         tmp_path: Path,
     ) -> None:
-        """content_type=replace_pages uses replace_notebook_pages for stable publishing."""
+        """content_type=replace_pages uses stable page replacement."""
         service = SupernoteService(config=DEFAULT_CONFIG)
         mock_uploader = AsyncMock()
         mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")

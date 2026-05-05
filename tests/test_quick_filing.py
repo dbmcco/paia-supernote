@@ -18,7 +18,7 @@ def test_parse_filing_header_with_bundle_marker() -> None:
     assert parsed.title == "Gene King check-in"
 
 
-def test_route_page_requires_known_destination_tag() -> None:
+def test_route_page_requires_known_destination_line() -> None:
     routed = route_page(
         notebook="Test Note 1",
         page=0,
@@ -30,17 +30,17 @@ def test_route_page_requires_known_destination_tag() -> None:
 
     assert routed.status == "needs_review"
     assert routed.target_notebook is None
-    assert "no known destination tag" in routed.reason
+    assert "no known destination line" in routed.reason
 
 
-def test_route_page_uses_test_destination_when_starred() -> None:
+def test_route_page_uses_destination_line_when_starred() -> None:
     routed = route_page(
         notebook="Test Note 1",
         page=3,
         source_revision="rev-1",
-        text="2026-04-29 #test #meeting\nPilot page",
+        text="2026-04-29 #meeting\nTest Note 2\nPilot page",
         starred=True,
-        destination_map={"test": "Test Note 2"},
+        destination_map={"test-note-2": "Test Note 2"},
     )
 
     assert routed.status == "ready"
@@ -48,7 +48,7 @@ def test_route_page_uses_test_destination_when_starred() -> None:
     assert routed.source_pages == [3]
 
 
-def test_route_page_supports_target_note_name_tag() -> None:
+def test_route_page_preserves_tags_without_using_them_as_destination() -> None:
     routed = route_page(
         notebook="Test Note 1",
         page=0,
@@ -58,9 +58,28 @@ def test_route_page_supports_target_note_name_tag() -> None:
         destination_map={"test-note-2": "Test Note 2"},
     )
 
+    assert routed.status == "needs_review"
+    assert routed.target_notebook is None
+    assert routed.detected_tags == ["test-note-2"]
+
+
+def test_route_page_uses_star_destination_line_before_semantic_tags() -> None:
+    routed = route_page(
+        notebook="Test Note 1",
+        page=0,
+        source_revision="rev-1",
+        text="2026-05-01\nTest Note 2\n#meeting #pilot\nPage content",
+        starred=True,
+        destination_map={
+            "meeting": "Meeting Archive",
+            "test-note-2": "Test Note 2",
+        },
+    )
+
     assert routed.status == "ready"
     assert routed.target_notebook == "Test Note 2"
-    assert routed.reason == "matched #test-note-2"
+    assert routed.detected_tags == ["meeting", "pilot"]
+    assert routed.reason == "matched destination Test Note 2"
 
 
 def test_route_page_does_not_move_unstarred_page() -> None:
@@ -92,11 +111,12 @@ def test_notebook_name_to_tag_normalizes_target_note_name() -> None:
 
 def test_star_detector_reads_fivestar_page_metadata() -> None:
     detector = StarDetector()
+    star_value = "14031,1694,14395,1581,14164,1885,14164,1502,14395,1809,1"
 
     assert detector.starred_pages_from_metadata(
         {
             "page_metadata": [
-                {"FIVESTAR": "14031,1694,14395,1581,14164,1885,14164,1502,14395,1809,1"},
+                {"FIVESTAR": star_value},
                 {"FIVESTAR": "0"},
                 {},
             ]

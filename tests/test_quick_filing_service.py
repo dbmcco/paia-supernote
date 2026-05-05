@@ -18,6 +18,7 @@ async def test_service_dry_run_does_not_upload(tmp_path: Path) -> None:
         destination_map={"test": "Test Note 2"},
         dry_run=True,
     )
+
     async def no_candidates(_bytes: bytes) -> list[FilingCandidate]:
         return []
 
@@ -32,16 +33,17 @@ async def test_service_dry_run_does_not_upload(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_service_refuses_non_test_source(tmp_path: Path) -> None:
+async def test_service_refuses_source_outside_configured_scope(tmp_path: Path) -> None:
     service = QuickFilingService(
         uploader=AsyncMock(),
         ledger_db_path=tmp_path / "filing.db",
         source_notebook="Quick",
         destination_map={"lfw": "LFW"},
         dry_run=True,
+        allowed_source_notebooks={"Test Note 1"},
     )
 
-    with pytest.raises(ValueError, match="pilot only supports test notebooks"):
+    with pytest.raises(ValueError, match="source notebook is not configured"):
         await service.run_once()
 
 
@@ -56,22 +58,23 @@ async def test_service_records_ready_candidates_in_dry_run(tmp_path: Path) -> No
         destination_map={"test": "Test Note 2"},
         dry_run=True,
     )
+
     async def ready_candidates(_bytes: bytes) -> list[FilingCandidate]:
         return [
-        FilingCandidate(
-            status="ready",
-            source_notebook="Test Note 1",
-            source_pages=[0],
-            source_revision="rev-1",
-            detected_header="2026-04-29 #test",
-            detected_tags=["test"],
-            target_notebook="Test Note 2",
-            bundle_key=None,
-            title="Pilot",
-            reason="matched #test",
-            confidence=1.0,
-        )
-    ]
+            FilingCandidate(
+                status="ready",
+                source_notebook="Test Note 1",
+                source_pages=[0],
+                source_revision="rev-1",
+                detected_header="2026-04-29 #test",
+                detected_tags=["test"],
+                target_notebook="Test Note 2",
+                bundle_key=None,
+                title="Pilot",
+                reason="matched #test",
+                confidence=1.0,
+            )
+        ]
 
     service._detect_candidates = ready_candidates
 
@@ -95,22 +98,23 @@ async def test_service_marks_source_cleanup_pending_after_target_write(
         destination_map={"test": "Test Note 2"},
         dry_run=False,
     )
+
     async def ready_candidates(_bytes: bytes) -> list[FilingCandidate]:
         return [
-        FilingCandidate(
-            status="ready",
-            source_notebook="Test Note 1",
-            source_pages=[0],
-            source_revision="rev-1",
-            detected_header="2026-04-29 #test",
-            detected_tags=["test"],
-            target_notebook="Test Note 2",
-            bundle_key=None,
-            title="Pilot",
-            reason="matched #test",
-            confidence=1.0,
-        )
-    ]
+            FilingCandidate(
+                status="ready",
+                source_notebook="Test Note 1",
+                source_pages=[0],
+                source_revision="rev-1",
+                detected_header="2026-04-29 #test",
+                detected_tags=["test"],
+                target_notebook="Test Note 2",
+                bundle_key=None,
+                title="Pilot",
+                reason="matched #test",
+                confidence=1.0,
+            )
+        ]
 
     service._detect_candidates = ready_candidates
     monkeypatch.setattr(
@@ -204,7 +208,9 @@ async def test_service_retry_after_target_written_does_not_upload_target_again(
 
 
 @pytest.mark.asyncio
-async def test_service_detects_starred_pages_from_reader_results(tmp_path: Path) -> None:
+async def test_service_detects_starred_pages_from_reader_results(
+    tmp_path: Path,
+) -> None:
     uploader = AsyncMock()
     reader = AsyncMock()
     uploader.download_notebook.return_value = b"source"
@@ -214,7 +220,7 @@ async def test_service_detects_starred_pages_from_reader_results(tmp_path: Path)
             (),
             {
                 "page_num": 0,
-                "text": "2026-04-29 #test #meeting\nPilot page",
+                "text": "2026-04-29 #meeting\nTest Note 2\nPilot page",
             },
         )()
     ]
@@ -222,7 +228,7 @@ async def test_service_detects_starred_pages_from_reader_results(tmp_path: Path)
         uploader=uploader,
         ledger_db_path=tmp_path / "filing.db",
         source_notebook="Test Note 1",
-        destination_map={"test": "Test Note 2"},
+        destination_map={"test-note-2": "Test Note 2"},
         dry_run=True,
         reader=reader,
     )
