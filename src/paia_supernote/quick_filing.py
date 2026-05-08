@@ -30,6 +30,15 @@ class FilingCandidate:
     confidence: float
 
 
+@dataclass(slots=True)
+class FilingDestinationDecision:
+    action: str
+    target_notebook: str | None
+    evidence: str
+    confidence: float
+    raw_response: str
+
+
 _DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
 _TAG_RE = re.compile(r"#([A-Za-z][A-Za-z0-9_-]*)")
 _BUNDLE_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\b")
@@ -61,20 +70,6 @@ def parse_filing_header(text: str) -> FilingHeader:
     )
 
 
-def _destination_from_lines(
-    lines: list[str], destination_map: dict[str, str]
-) -> tuple[str, str] | None:
-    for line in lines[:5]:
-        cleaned = re.sub(r"^[*★☆\-\s]+", "", line).strip()
-        if not cleaned or cleaned.startswith("#") or _DATE_RE.fullmatch(cleaned):
-            continue
-        normalized = notebook_name_to_tag(cleaned)
-        target = destination_map.get(normalized)
-        if target:
-            return cleaned, target
-    return None
-
-
 def _bundle_key(header: FilingHeader) -> str | None:
     if header.note_date is None or header.bundle_total is None:
         return None
@@ -85,17 +80,16 @@ def _bundle_key(header: FilingHeader) -> str | None:
     return f"{header.note_date}:{tag_key}:{title_key}:{header.bundle_total}"
 
 
-def route_page(
+def route_page_from_decision(
     *,
     notebook: str,
     page: int,
     source_revision: str,
     text: str,
     starred: bool,
-    destination_map: dict[str, str],
+    decision: FilingDestinationDecision,
 ) -> FilingCandidate:
     header = parse_filing_header(text)
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     bundle_key = _bundle_key(header)
     if not starred:
         return FilingCandidate(
@@ -112,9 +106,7 @@ def route_page(
             confidence=0.0,
         )
 
-    destination_match = _destination_from_lines(lines, destination_map)
-    if destination_match:
-        destination, target = destination_match
+    if decision.action == "move" and decision.target_notebook:
         return FilingCandidate(
             status="ready",
             source_notebook=notebook,
@@ -122,11 +114,14 @@ def route_page(
             source_revision=source_revision,
             detected_header=header.raw_header,
             detected_tags=header.tags,
-            target_notebook=target,
+            target_notebook=decision.target_notebook,
             bundle_key=bundle_key,
             title=header.title,
-            reason=f"matched destination {destination}",
-            confidence=1.0,
+            reason=(
+                f"model selected destination {decision.target_notebook}: "
+                f"{decision.evidence}"
+            ),
+            confidence=decision.confidence,
         )
 
     return FilingCandidate(
@@ -139,8 +134,8 @@ def route_page(
         target_notebook=None,
         bundle_key=bundle_key,
         title=header.title,
-        reason="no known destination line",
-        confidence=0.0,
+        reason=f"model requested review: {decision.evidence}",
+        confidence=decision.confidence,
     )
 
 

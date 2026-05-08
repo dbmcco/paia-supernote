@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 
 import httpx
 
-from .model_config import default_zai_base_url, default_zai_text_model
+from .model_config import (
+    default_zai_base_url,
+    default_zai_text_model,
+    resolve_supernote_zai_api_key,
+)
 
 
 @dataclass(slots=True)
@@ -27,7 +30,11 @@ class SupernoteEnricher:
         zai_base_url: str | None = None,
         zai_text_model: str | None = None,
     ) -> None:
-        self.zai_api_key = zai_api_key or os.environ["ZAI_API_KEY"]
+        self.zai_api_key = zai_api_key or resolve_supernote_zai_api_key()
+        if not self.zai_api_key:
+            raise RuntimeError(
+                "SUPERNOTE_ZAI_API_KEY is required when using the zai enrichment backend"
+            )
         self.zai_base_url = (zai_base_url or default_zai_base_url()).rstrip("/")
         self.zai_text_model = zai_text_model or default_zai_text_model()
 

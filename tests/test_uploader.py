@@ -127,6 +127,10 @@ class TestSupernoteUploader:
             mock_browser.new_context.assert_called_once_with(
                 storage_state=str(mock_session_file)
             )
+            mock_page.goto.assert_awaited_once_with(
+                f"{uploader.CLOUD_URL}/",
+                wait_until="networkidle",
+            )
 
     @pytest.mark.asyncio
     async def test_upload_flow_with_mocked_network(self, uploader, mock_note_file):
@@ -342,6 +346,7 @@ class TestSupernoteUploader:
         """Test that _initiate_upload raises UploadAuthError on 403 response."""
         mock_page = Mock()
         mock_page.evaluate = AsyncMock(return_value={'status': 403, 'body': None})
+        mock_page.goto = AsyncMock()
         uploader.page = mock_page
 
         with pytest.raises(UploadAuthError, match="403"):
@@ -407,3 +412,78 @@ class TestSupernoteUploader:
                           return_value=["some-id"]):
             with pytest.raises(RuntimeError, match="No URL"):
                 await uploader.download_notebook("Quick.note")
+
+    @pytest.mark.asyncio
+    async def test_api_call_recovers_when_page_target_is_closed(self, uploader):
+        """_api_call should restart the browser session once when Playwright target is closed."""
+        dead_page = Mock()
+        dead_page.evaluate = AsyncMock(
+            side_effect=RuntimeError("Page.evaluate: Target page, context or browser has been closed")
+        )
+        live_page = Mock()
+        live_page.evaluate = AsyncMock(return_value={"status": 200, "body": {"success": True}})
+        uploader.page = dead_page
+
+        async def fake_start() -> None:
+            uploader.page = live_page
+
+        with patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop, \
+             patch.object(uploader, "start", side_effect=fake_start) as mock_start:
+            result = await uploader._api_call("/api/file/list/query", {"pageNo": 1})
+
+        assert result == {"status": 200, "body": {"success": True}}
+        mock_stop.assert_awaited_once()
+        mock_start.assert_awaited_once()
+        dead_page.evaluate.assert_awaited_once()
+        live_page.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_authenticated_recovers_when_page_target_is_closed(self, uploader):
+        """_ensure_authenticated should restart the browser session once when page navigation fails."""
+        dead_page = Mock()
+        dead_page.goto = AsyncMock(
+            side_effect=RuntimeError("Page.goto: Target page, context or browser has been closed")
+        )
+        live_page = Mock()
+        live_response = Mock()
+        live_response.status = 200
+        live_page.goto = AsyncMock(return_value=live_response)
+        live_page.url = "https://cloud.supernote.com/files"
+        uploader.page = dead_page
+
+        async def fake_start() -> None:
+            uploader.page = live_page
+
+        with patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop, \
+             patch.object(uploader, "start", side_effect=fake_start) as mock_start, \
+             patch.object(uploader, "_interactive_reauth", new_callable=AsyncMock) as mock_reauth:
+            await uploader._ensure_authenticated()
+
+        mock_stop.assert_awaited_once()
+        mock_start.assert_awaited_once()
+        mock_reauth.assert_not_called()
+        dead_page.goto.assert_awaited_once()
+        live_page.goto.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_api_call_refreshes_csrf_token_and_retries_once(self, uploader):
+        """_api_call should refresh the XSRF token and retry once on CSRF expiry."""
+        mock_page = Mock()
+        mock_page.evaluate = AsyncMock(side_effect=[
+            {
+                "status": 403,
+                "body": '{"error":"CSRF token validation failed","code":"CSRF_TOKEN_EXPIRED"}',
+            },
+            {
+                "status": 200,
+                "body": {"success": True},
+            },
+        ])
+        uploader.page = mock_page
+
+        with patch.object(uploader, "_refresh_csrf_token", new_callable=AsyncMock) as mock_refresh:
+            result = await uploader._api_call("/api/file/list/query", {"pageNo": 1})
+
+        assert result == {"status": 200, "body": {"success": True}}
+        mock_refresh.assert_awaited_once()
+        assert mock_page.evaluate.await_count == 2

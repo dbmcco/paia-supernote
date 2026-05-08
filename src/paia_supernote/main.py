@@ -407,10 +407,13 @@ class SupernoteService:
                         checkbox.tag,
                     )
 
-            await self._run_note_filing_if_configured(notebook_name, note_bytes)
-
         except Exception as exc:
             log.error("file_processing_error", notebook=notebook_name, error=str(exc))
+
+        try:
+            await self._run_note_filing_if_configured(notebook_name, note_bytes)
+        except Exception as exc:
+            log.error("note_filing_error", notebook=notebook_name, error=str(exc))
 
     async def _run_note_filing_if_configured(
         self, notebook_name: str, note_bytes: bytes
@@ -422,7 +425,8 @@ class SupernoteService:
             for name in self.config.get("filing_source_notebooks") or []
             if str(name).strip()
         }
-        if notebook_name not in source_notebooks:
+        source_notebook_keys = {name.casefold() for name in source_notebooks}
+        if notebook_name.casefold() not in source_notebook_keys:
             return
 
         service = QuickFilingService(
@@ -431,7 +435,7 @@ class SupernoteService:
             source_notebook=notebook_name,
             destination_map=_filing_destination_map(self.config),
             dry_run=bool(self.config.get("filing_dry_run", True)),
-            allowed_source_notebooks=source_notebooks,
+            allowed_source_notebooks={notebook_name},
             reader=self.reader,
         )
         result = await service.run_once(source_bytes=note_bytes)

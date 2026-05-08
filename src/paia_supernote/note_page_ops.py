@@ -7,7 +7,14 @@ import tempfile
 import supernotelib.manipulator as sn_manip
 import supernotelib.parser as sn_parser
 
-_OFFSET_FIELDS = ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE")
+_OFFSET_FIELDS = (
+    "RECOGNTEXT",
+    "RECOGNFILE",
+    "TOTALPATH",
+    "EXTERNALLINKINFO",
+    "IDTABLE",
+)
+_FILING_MARKER_FIELDS = ("FIVESTAR",)
 
 
 def copy_pages_to_end(
@@ -20,6 +27,7 @@ def copy_pages_to_end(
     for page_index in source_pages:
         page = copy.deepcopy(source.get_page(page_index))
         clear_recognition_metadata(page)
+        clear_filing_marker_metadata(page)
         target.pages.append(page)
     _sync_metadata_pages(target)
     return sn_manip.reconstruct(target)
@@ -31,7 +39,9 @@ def remove_pages(source_bytes: bytes, *, pages: list[int]) -> bytes:
     _clear_all_recognition_metadata(source)
     original_pages = list(source.pages)
     source.pages = [
-        page for page_index, page in enumerate(source.pages) if page_index not in remove_set
+        page
+        for page_index, page in enumerate(source.pages)
+        if page_index not in remove_set
     ]
     if not source.pages:
         source.pages = [_blank_page_like(original_pages[0])]
@@ -77,3 +87,9 @@ def clear_recognition_metadata(page) -> None:
             page.metadata[key] = "0"
     page.metadata["RECOGNSTATUS"] = "0"
     page.metadata["RECOGNFILESTATUS"] = "0"
+
+
+def clear_filing_marker_metadata(page) -> None:
+    for key in _FILING_MARKER_FIELDS:
+        if key in page.metadata:
+            page.metadata[key] = "0"

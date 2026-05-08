@@ -186,7 +186,7 @@ class EventsClient:
         """Publish Walk-note handwriting as model-readable feedback evidence."""
         revision = source_revision or str(uuid.uuid4())
         await self._publish(
-            event_type="supernote.walk.feedback.detected",
+            event_type="supernote.walk_feedback.detected",
             payload={
                 "schema_version": "supernote-walk-feedback-v1",
                 "notebook": notebook,
@@ -274,7 +274,7 @@ class EventsClient:
         """POST /v1/events — fire and forget with warning on failure."""
         try:
             async with httpx.AsyncClient() as client:
-                await client.post(
+                resp = await client.post(
                     f"{self._base_url}/v1/events",
                     json={
                         "event_type": event_type,
@@ -286,6 +286,7 @@ class EventsClient:
                     },
                     timeout=5.0,
                 )
+                resp.raise_for_status()
             log.debug("event_published", event_type=event_type)
         except httpx.HTTPError as exc:
             log.warning("event_publish_failed", event_type=event_type, error=str(exc))

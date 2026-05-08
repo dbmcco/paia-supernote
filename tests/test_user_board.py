@@ -93,7 +93,7 @@ class TestUserBoard:
         user_board._save_session.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_show_status_service_running(self, user_board, capsys):
+    async def test_handle_status_service_running(self, user_board, capsys):
         """Test status display when services are running."""
         with patch("httpx.AsyncClient") as mock_client:
             mock_response = MagicMock()
@@ -104,22 +104,22 @@ class TestUserBoard:
             mock_stat.st_mtime = 0.0
             mock_note1 = MagicMock(spec=Path)
             mock_note1.stat.return_value = mock_stat
-            mock_note1.name = "notebook1.note"
+            mock_note1.stem = "notebook1"
             mock_note2 = MagicMock(spec=Path)
             mock_note2.stat.return_value = mock_stat
-            mock_note2.name = "notebook2.note"
+            mock_note2.stem = "notebook2"
 
             with patch("pathlib.Path.exists", return_value=True), \
                  patch("pathlib.Path.glob", return_value=[mock_note1, mock_note2]):
 
-                await user_board._show_status()
+                await user_board._handle_status()
 
                 captured = capsys.readouterr()
-                assert "paia-events service: running" in captured.out
-                assert "2 notebooks found" in captured.out
+                assert "RUNNING" in captured.out
+                assert "2 notebooks" in captured.out
 
     @pytest.mark.asyncio
-    async def test_show_recent_events(self, user_board, capsys):
+    async def test_handle_events(self, user_board, capsys):
         """Test displaying recent events."""
         mock_events = {
             "events": [
@@ -141,18 +141,45 @@ class TestUserBoard:
             mock_response.json.return_value = mock_events
             mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
 
-            await user_board._show_recent_events()
+            await user_board._handle_events()
 
             captured = capsys.readouterr()
             assert "test_notebook:1" in captured.out
             assert "This is a test transcription" in captured.out
 
-    def test_show_help(self, user_board, capsys):
+    @pytest.mark.asyncio
+    async def test_handle_help(self, user_board, capsys):
         """Test help display."""
-        user_board._show_help()
+        await user_board._handle_help()
 
         captured = capsys.readouterr()
-        assert "PAIA Supernote User Board Help" in captured.out
-        assert "STATUS: Check if services" in captured.out
-        assert "EVENTS: View recent" in captured.out
-        assert "WRITE: Send content" in captured.out
+        assert "Available Commands" in captured.out
+        assert "status" in captured.out
+        assert "events" in captured.out
+        assert "write" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_send_write_request_publishes_current_event_shape(self, user_board):
+        """Manual writes use the same supernote.write.requested contract as agents."""
+        user_board.events._publish = AsyncMock()
+        inputs = iter([
+            "Walk",
+            "1",
+            "Manual test note",
+            "",
+            "",
+            "y",
+        ])
+
+        with patch("builtins.input", side_effect=lambda _prompt="": next(inputs)):
+            await user_board._send_write_request()
+
+        user_board.events._publish.assert_awaited_once()
+        kwargs = user_board.events._publish.await_args.kwargs
+        assert kwargs["event_type"] == "supernote.write.requested"
+        assert kwargs["dedupe_key"].startswith("supernote.write.requested:user_board:")
+        assert kwargs["occurred_at"].tzinfo is not None
+        assert kwargs["payload"]["agent"] == "braydon"
+        assert kwargs["payload"]["notebook"] == "Walk"
+        assert kwargs["payload"]["content_type"] == "note"
+        assert kwargs["payload"]["content"] == "Manual test note"

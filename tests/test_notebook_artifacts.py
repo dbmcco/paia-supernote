@@ -65,6 +65,18 @@ class TestReplaceNotebookPages:
         nb = supernotelib.load(io.BytesIO(result))
         assert nb.get_total_pages() == 1
 
+    def test_long_page_content_spills_into_continuation_pages(self) -> None:
+        content = "\n".join(
+            f"Brief line {index}: {'meeting ' * 10}".strip()
+            for index in range(80)
+        )
+        pages = [NotebookPageSpec(agent="Sam", content=content)]
+
+        result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
+
+        nb = supernotelib.load(io.BytesIO(result))
+        assert nb.get_total_pages() > 1
+
     def test_mainlayer_has_content_after_replace(self) -> None:
         pages = [NotebookPageSpec(agent="Caroline", content="Check layer")]
         result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
@@ -88,3 +100,22 @@ class TestReplaceNotebookPages:
         result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
         nb = supernotelib.load(io.BytesIO(result))
         assert nb.get_total_pages() == extra
+
+    def test_rebuilds_pages_with_fresh_page_ids(self) -> None:
+        original = supernotelib.load(io.BytesIO(self.base_bytes))
+        original_ids = {
+            original.get_page(index).metadata.get("PAGEID")
+            for index in range(original.get_total_pages())
+        }
+
+        pages = [NotebookPageSpec(agent="Sam", content="Fresh page")]
+        result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
+
+        rebuilt = supernotelib.load(io.BytesIO(result))
+        rebuilt_ids = {
+            rebuilt.get_page(index).metadata.get("PAGEID")
+            for index in range(rebuilt.get_total_pages())
+        }
+
+        assert rebuilt_ids
+        assert rebuilt_ids.isdisjoint(original_ids)

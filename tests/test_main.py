@@ -375,6 +375,73 @@ class TestNoteChangeProcessing:
         mock_cls.assert_called_once()
         mock_service.run_once.assert_awaited_once_with(source_bytes=b"lfw-bytes")
 
+    @pytest.mark.asyncio
+    async def test_configured_filing_source_matches_cloud_name_case_insensitively(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        config = dict(DEFAULT_CONFIG)
+        config.update(
+            {
+                "filing_enabled": True,
+                "filing_dry_run": False,
+                "filing_ledger_db_path": str(tmp_path / "filing.db"),
+                "filing_source_notebooks": ["MGMT"],
+                "filing_destination_notebooks": ["Synth"],
+            }
+        )
+        service = SupernoteService(config=config)
+        service.reader = AsyncMock()
+        service.reader.process_file.return_value = []
+
+        with patch("paia_supernote.main.QuickFilingService") as mock_cls:
+            mock_service = AsyncMock()
+            mock_service.run_once.return_value = {
+                "status": "ok",
+                "candidate_count": 1,
+                "dry_run": False,
+            }
+            mock_cls.return_value = mock_service
+
+            await service._process_file_change("Mgmt", b"mgmt-bytes")
+
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["source_notebook"] == "Mgmt"
+        mock_service.run_once.assert_awaited_once_with(source_bytes=b"mgmt-bytes")
+
+    @pytest.mark.asyncio
+    async def test_configured_filing_still_runs_when_reader_processing_fails(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        config = dict(DEFAULT_CONFIG)
+        config.update(
+            {
+                "filing_enabled": True,
+                "filing_dry_run": False,
+                "filing_ledger_db_path": str(tmp_path / "filing.db"),
+                "filing_source_notebooks": ["Quick"],
+                "filing_destination_notebooks": ["Mgmt"],
+            }
+        )
+        service = SupernoteService(config=config)
+        service.reader = AsyncMock()
+        service.reader.process_file.side_effect = RuntimeError("vision unavailable")
+
+        with patch("paia_supernote.main.QuickFilingService") as mock_cls:
+            mock_service = AsyncMock()
+            mock_service.run_once.return_value = {
+                "status": "ok",
+                "candidate_count": 1,
+                "dry_run": False,
+            }
+            mock_cls.return_value = mock_service
+
+            await service._process_file_change("Quick", b"quick-bytes")
+
+        mock_cls.assert_called_once()
+        mock_service.run_once.assert_awaited_once_with(source_bytes=b"quick-bytes")
+
 
 # -- SIGTERM clean shutdown ---------------------------------------------------
 

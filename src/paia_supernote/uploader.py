@@ -11,6 +11,7 @@ All notebooks (Quick.note, LFW.note, Synth.note) live in the "Note" folder,
 directoryId = NOTE_FOLDER_ID.  Files sync at SYNC_BASE on Mac.
 """
 
+import asyncio
 import hashlib
 import io
 from pathlib import Path
@@ -45,6 +46,7 @@ class SupernoteUploader:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self._playwright = None
+        self._recovery_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Launch browser and restore session if available."""
@@ -59,7 +61,7 @@ class SupernoteUploader:
             self.context = await self.browser.new_context()
 
         self.page = await self.context.new_page()
-        await self.page.goto(f"{self.CLOUD_URL}/#/home", wait_until="networkidle")
+        await self._refresh_csrf_token()
 
     async def stop(self) -> None:
         """Persist session and close browser. Safe to call more than once."""
@@ -197,19 +199,32 @@ class SupernoteUploader:
 
     async def _ensure_authenticated(self) -> None:
         """Check auth state; trigger interactive re-auth when session expired."""
-        if not self.page:
-            raise RuntimeError("Browser not started")
+        async def do_check() -> None:
+            if not self.page:
+                raise RuntimeError("Browser not started")
 
-        response = await self.page.goto(f"{self.CLOUD_URL}/#/home")
+            response = await self.page.goto(f"{self.CLOUD_URL}/", wait_until="networkidle")
 
-        needs_reauth = False
-        if response and response.status in (401, 403):
-            needs_reauth = True
-        elif "login" in self.page.url:
-            needs_reauth = True
+            needs_reauth = False
+            if response and response.status in (401, 403):
+                needs_reauth = True
+            elif "login" in self.page.url:
+                needs_reauth = True
 
-        if needs_reauth:
-            await self._interactive_reauth()
+            if needs_reauth:
+                await self._interactive_reauth()
+
+        await self._retry_on_closed_target(do_check)
+
+    async def _refresh_csrf_token(self) -> None:
+        """Reload the cloud root so the browser session gets a fresh XSRF token."""
+
+        async def do_refresh() -> None:
+            if not self.page:
+                raise RuntimeError("Browser not started")
+            await self.page.goto(f"{self.CLOUD_URL}/", wait_until="networkidle")
+
+        await self._retry_on_closed_target(do_refresh)
 
     async def _interactive_reauth(self) -> None:
         """Open login page and wait for user to complete authentication."""
@@ -229,30 +244,63 @@ class SupernoteUploader:
 
     async def _api_call(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Make an authenticated API call via the Playwright page context."""
-        result = await self.page.evaluate("""
-            async ([endpoint, body]) => {
-                const xsrfCookie = document.cookie.split(';')
-                    .map(c => c.trim())
-                    .find(c => c.startsWith('XSRF-TOKEN='));
-                const xsrfToken = xsrfCookie
-                    ? decodeURIComponent(xsrfCookie.split('=')[1])
-                    : '';
+        async def do_call() -> Dict[str, Any]:
+            if not self.page:
+                raise RuntimeError("Browser not started")
+            result = await self.page.evaluate("""
+                async ([endpoint, body]) => {
+                    const xsrfCookie = document.cookie.split(';')
+                        .map(c => c.trim())
+                        .find(c => c.startsWith('XSRF-TOKEN='));
+                    const xsrfToken = xsrfCookie
+                        ? decodeURIComponent(xsrfCookie.split('=')[1])
+                        : '';
 
-                const resp = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-XSRF-TOKEN': xsrfToken,
-                    },
-                    body: JSON.stringify(body),
-                });
-                return {
-                    status: resp.status,
-                    body: resp.ok ? await resp.json() : await resp.text(),
-                };
-            }
-        """, [endpoint, body])
+                    const resp = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-XSRF-TOKEN': xsrfToken,
+                        },
+                        body: JSON.stringify(body),
+                    });
+                    return {
+                        status: resp.status,
+                        body: resp.ok ? await resp.json() : await resp.text(),
+                    };
+                }
+            """, [endpoint, body])
+            return result  # type: ignore[return-value]
+
+        result = await self._retry_on_closed_target(do_call)
+        if self._is_csrf_expired_response(result):
+            await self._refresh_csrf_token()
+            result = await self._retry_on_closed_target(do_call)
         return result  # type: ignore[return-value]
+
+    async def _retry_on_closed_target(self, operation):
+        try:
+            return await operation()
+        except Exception as exc:
+            if not self._is_closed_target_error(exc):
+                raise
+            await self._restart_browser_session()
+            return await operation()
+
+    async def _restart_browser_session(self) -> None:
+        async with self._recovery_lock:
+            await self.stop()
+            await self.start()
+
+    @staticmethod
+    def _is_closed_target_error(exc: Exception) -> bool:
+        message = str(exc)
+        return "Target page, context or browser has been closed" in message
+
+    @staticmethod
+    def _is_csrf_expired_response(result: Dict[str, Any]) -> bool:
+        """Treat any 403 as potentially CSRF-related — refresh token and retry once."""
+        return result.get("status") == 403
 
     async def _initiate_upload(
         self, file_path: str, target_name: str

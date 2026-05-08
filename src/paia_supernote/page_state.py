@@ -29,6 +29,7 @@ class PageStateStore:
         self._db_path = Path(db_path)
 
     def init_schema(self) -> None:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self._db_path) as conn:
             conn.execute(
                 """
@@ -183,6 +184,36 @@ class PageStateStore:
                 (
                     source_revision,
                     folio_object_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    notebook,
+                    page,
+                    source_revision,
+                ),
+            )
+        return cur.rowcount == 1
+
+    def mark_enrichment_skipped(
+        self,
+        notebook: str,
+        page: int,
+        source_revision: str,
+    ) -> bool:
+        with sqlite3.connect(self._db_path) as conn:
+            cur = conn.execute(
+                """
+                UPDATE page_state
+                SET dirty_for_enrichment = 0,
+                    last_enriched_revision = ?,
+                    last_folio_object_id = NULL,
+                    retry_count = 0,
+                    next_retry_at = NULL,
+                    last_error = NULL,
+                    last_error_stage = NULL,
+                    updated_at = ?
+                WHERE notebook = ? AND page = ? AND source_revision = ?
+                """,
+                (
+                    source_revision,
                     datetime.now(timezone.utc).isoformat(),
                     notebook,
                     page,

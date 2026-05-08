@@ -33,6 +33,15 @@ def test_upsert_page_overwrites_same_notebook_page_and_marks_dirty(tmp_path: Pat
     assert row.retry_count == 0
 
 
+def test_init_schema_creates_parent_directory(tmp_path: Path) -> None:
+    db_path = tmp_path / "nested" / "state.db"
+    store = PageStateStore(db_path)
+
+    store.init_schema()
+
+    assert db_path.parent.exists()
+
+
 def test_mark_enriched_only_updates_matching_revision(tmp_path: Path) -> None:
     store = PageStateStore(tmp_path / "state.db")
     store.init_schema()
@@ -56,6 +65,31 @@ def test_mark_enriched_only_updates_matching_revision(tmp_path: Path) -> None:
     assert row.last_enriched_revision is None
     assert row.last_folio_object_id is None
     assert row.dirty_for_enrichment is True
+
+
+def test_mark_enrichment_skipped_clears_dirty_without_folio_object(tmp_path: Path) -> None:
+    store = PageStateStore(tmp_path / "state.db")
+    store.init_schema()
+    store.upsert_ocr_page(
+        notebook="Quick",
+        page=19,
+        source_revision="rev-2",
+        raw_text="inbox page",
+        ocr_model="glm-4.5v",
+    )
+
+    updated = store.mark_enrichment_skipped(
+        notebook="Quick",
+        page=19,
+        source_revision="rev-2",
+    )
+
+    row = store.get_page("Quick", 19)
+    assert updated is True
+    assert row.dirty_for_enrichment is False
+    assert row.last_enriched_revision == "rev-2"
+    assert row.last_folio_object_id is None
+    assert row.last_error is None
 
 
 def test_next_dirty_page_skips_future_retry_rows(tmp_path: Path) -> None:

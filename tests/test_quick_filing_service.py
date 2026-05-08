@@ -208,13 +208,81 @@ async def test_service_retry_after_target_written_does_not_upload_target_again(
 
 
 @pytest.mark.asyncio
+async def test_service_removes_multiple_moved_pages_in_one_source_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uploader = AsyncMock()
+    uploader.download_notebook.side_effect = [b"synth target", b"lfw target"]
+    uploader.upload_notebook.return_value = True
+    service = QuickFilingService(
+        uploader=uploader,
+        ledger_db_path=tmp_path / "filing.db",
+        source_notebook="Mgmt",
+        destination_map={"synth": "Synth", "lfw": "LFW"},
+        dry_run=False,
+    )
+
+    async def ready_candidates(_bytes: bytes) -> list[FilingCandidate]:
+        return [
+            FilingCandidate(
+                status="ready",
+                source_notebook="Mgmt",
+                source_pages=[0],
+                source_revision="rev-1",
+                detected_header="Synth Orbit",
+                detected_tags=[],
+                target_notebook="Synth",
+                bundle_key=None,
+                title=None,
+                reason="matched destination Synth",
+                confidence=1.0,
+            ),
+            FilingCandidate(
+                status="ready",
+                source_notebook="Mgmt",
+                source_pages=[1],
+                source_revision="rev-1",
+                detected_header="LFW Orbit",
+                detected_tags=[],
+                target_notebook="LFW",
+                bundle_key=None,
+                title=None,
+                reason="matched destination LFW",
+                confidence=1.0,
+            ),
+        ]
+
+    removed_pages: list[list[int]] = []
+    service._detect_candidates = ready_candidates
+    monkeypatch.setattr(
+        "paia_supernote.quick_filing_service.copy_pages_to_end",
+        lambda _source, target, source_pages: b"updated " + target,
+    )
+
+    def fake_remove_pages(_source: bytes, *, pages: list[int]) -> bytes:
+        removed_pages.append(pages)
+        return b"source without moved pages"
+
+    monkeypatch.setattr(
+        "paia_supernote.quick_filing_service.remove_pages",
+        fake_remove_pages,
+    )
+
+    result = await service.run_once(source_bytes=b"source")
+
+    assert result["completed_count"] == 2
+    assert removed_pages == [[0, 1]]
+    assert uploader.upload_notebook.await_count == 3
+
+
+@pytest.mark.asyncio
 async def test_service_detects_starred_pages_from_reader_results(
     tmp_path: Path,
 ) -> None:
     uploader = AsyncMock()
     reader = AsyncMock()
     uploader.download_notebook.return_value = b"source"
-    reader.read_all_pages.return_value = [
+    reader.read_pages.return_value = [
         type(
             "ReadResult",
             (),
@@ -224,6 +292,12 @@ async def test_service_detects_starred_pages_from_reader_results(
             },
         )()
     ]
+    reader.resolve_filing_destination.return_value = {
+        "action": "move",
+        "target_notebook": "Test Note 2",
+        "evidence": "The target note name is written beside the star.",
+        "confidence": 1.0,
+    }
     service = QuickFilingService(
         uploader=uploader,
         ledger_db_path=tmp_path / "filing.db",
@@ -238,3 +312,54 @@ async def test_service_detects_starred_pages_from_reader_results(
 
     assert result["candidate_count"] == 1
     assert result["operations"][0]["target_notebook"] == "Test Note 2"
+    reader.read_pages.assert_awaited_once_with(
+        b"source",
+        "Test Note 1",
+        pages=[0],
+    )
+    reader.resolve_filing_destination.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_service_lets_model_choose_destination_from_page_context(
+    tmp_path: Path,
+) -> None:
+    uploader = AsyncMock()
+    reader = AsyncMock()
+    uploader.download_notebook.return_value = b"source"
+    reader.read_pages.return_value = [
+        type(
+            "ReadResult",
+            (),
+            {
+                "page_num": 3,
+                "text": "OCR did not clearly capture the destination.",
+                "page_image": object(),
+            },
+        )()
+    ]
+    reader.resolve_filing_destination.return_value = {
+        "action": "move",
+        "target_notebook": "Mgmt",
+        "evidence": "Mgmt is written beside the native star marker.",
+        "confidence": 0.86,
+    }
+    service = QuickFilingService(
+        uploader=uploader,
+        ledger_db_path=tmp_path / "filing.db",
+        source_notebook="Quick",
+        destination_map={"mgmt": "Mgmt", "lfw": "LFW"},
+        dry_run=True,
+        reader=reader,
+    )
+    service._starred_pages_from_note = lambda _bytes: {3}
+
+    result = await service.run_once()
+
+    assert result["operations"][0]["target_notebook"] == "Mgmt"
+    reader.resolve_filing_destination.assert_awaited_once_with(
+        page_image=reader.read_pages.return_value[0].page_image,
+        transcription="OCR did not clearly capture the destination.",
+        source_notebook="Quick",
+        destination_notebooks=["Mgmt", "LFW"],
+    )

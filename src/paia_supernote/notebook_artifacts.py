@@ -22,31 +22,22 @@ def replace_notebook_pages(base_bytes: bytes, *, writer, pages: list[NotebookPag
     if not pages:
         raise ValueError("pages must not be empty")
 
-    page_rles = [writer.render_page(spec.agent, spec.content) for spec in pages]
+    page_rles = [
+        writer.render_page(spec.agent, chunk)
+        for spec in pages
+        for chunk in writer.paginate_content(spec.agent, spec.content)
+    ]
 
     fd, path = tempfile.mkstemp(suffix=".note")
     try:
         os.write(fd, base_bytes)
         os.close(fd)
         notebook = sn_parser.load_notebook(path)
-        existing = notebook.get_total_pages()
-
-        # Replace existing pages with new content
-        for index, rle in enumerate(page_rles[:existing]):
-            page = notebook.get_page(index)
-            page.get_layer(0).set_content(rle)
-
-        # Remove extra pages if we have fewer new pages than existing
-        if existing > len(page_rles):
-            notebook.pages = notebook.pages[:len(page_rles)]
-            notebook.metadata.pages = notebook.metadata.pages[:len(page_rles)]
-
+        fresh_pages = [writer.build_page(rle) for rle in page_rles]
+        notebook.pages = fresh_pages
+        notebook.metadata.pages = [page.metadata for page in fresh_pages]
         rebuilt = sn_manip.reconstruct(notebook)
     finally:
         os.unlink(path)
-
-    # Add any additional pages beyond the existing page count
-    for rle in page_rles[existing:]:
-        rebuilt = writer.append_rle_page(rebuilt, rle)
 
     return rebuilt

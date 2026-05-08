@@ -58,3 +58,38 @@ async def test_enricher_returns_markdown_and_scene(mock_client) -> None:
     assert result.diagram["scene"]["nodes"][0]["label"] == "Start"
     assert result.summary == "Simple flow"
     assert result.confidence == 0.92
+
+
+@pytest.mark.asyncio
+@patch("paia_supernote.enrichment.httpx.AsyncClient")
+async def test_enricher_normalizes_string_diagram_to_mermaid(mock_client) -> None:
+    mock_http = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": """
+                    {
+                      "markdown": "# Flow",
+                      "diagram": "graph TD\\n  A[Start] --> B[Done]"
+                    }
+                    """
+                }
+            }
+        ]
+    }
+    mock_http.post.return_value = mock_response
+    mock_client.return_value.__aenter__.return_value = mock_http
+    mock_client.return_value.__aexit__.return_value = False
+
+    enricher = SupernoteEnricher(zai_api_key="token")
+    result = await enricher.enrich_page(notebook="Quick", page=19, raw_text="raw flow")
+
+    assert result.markdown == "# Flow"
+    assert result.diagram["kind"] == "mermaid"
+    assert "A[Start]" in result.diagram["mermaid"]
+    assert result.diagram["render_version"] == "1"
+    assert result.summary is None
+    assert result.confidence is None

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import supernotelib
 
+from paia_supernote.notebook_artifacts import NotebookPageSpec, replace_notebook_pages
 from paia_supernote.writer import SupernoteWriter
 
 
@@ -71,6 +72,30 @@ class TestSupernoteWriter:
 
         # Content should result in more bytes (different compression)
         assert len(result_with_content) != len(result_empty)
+
+    def test_paginate_content_keeps_short_content_on_one_page(self):
+        """Short content should remain a single logical page."""
+        pages = self.writer.paginate_content(
+            agent="Sam",
+            content="Short executive brief",
+        )
+
+        assert pages == ["Short executive brief"]
+
+    def test_paginate_content_splits_long_content_without_losing_words(self):
+        """Long content should split into continuation pages instead of truncating."""
+        content = "\n".join(
+            f"Agenda item {index}: {'priority ' * 10}".strip()
+            for index in range(80)
+        )
+
+        pages = self.writer.paginate_content(
+            agent="Sam",
+            content=content,
+        )
+
+        assert len(pages) > 1
+        assert " ".join("\n".join(pages).split()) == " ".join(content.split())
 
     def test_font_size_is_configurable_constant(self):
         """Should have configurable font size constants."""
@@ -244,3 +269,41 @@ class TestAppendRlePage:
         last_page = nb.get_page(nb.get_total_pages() - 1)
         mainlayer = last_page.get_layer(0)
         assert mainlayer.get_content() == rle
+
+
+class TestReplaceNotebookPages:
+    """Integration tests for stable notebook replacement."""
+
+    def setup_method(self):
+        self.writer = SupernoteWriter()
+
+    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
+    def test_replace_pages_rebuilds_notebook_to_exact_page_count(self):
+        """Notebook replacement should trim/pad to exactly the requested page count."""
+        base_bytes = _NOTE_FIXTURE.read_bytes()
+        page_specs = [
+            NotebookPageSpec(agent="Sam", content="Walk brief\n\nWhat matters most"),
+            NotebookPageSpec(
+                agent="Sam",
+                content="2026-04-24 LightforgeWorks Weekly\n\nKeywords: lfw, prep",
+            ),
+        ]
+
+        result = replace_notebook_pages(base_bytes, writer=self.writer, pages=page_specs)
+
+        notebook = supernotelib.load(io.BytesIO(result))
+        assert notebook.get_total_pages() == 2
+
+    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
+    def test_replace_pages_reuses_existing_pages_before_appending(self):
+        """Replacement should rebuild in place without leaving extra template pages behind."""
+        base_bytes = _NOTE_FIXTURE.read_bytes()
+        page_specs = [
+            NotebookPageSpec(agent="Sam", content=f"Page {index}")
+            for index in range(3)
+        ]
+
+        result = replace_notebook_pages(base_bytes, writer=self.writer, pages=page_specs)
+
+        notebook = supernotelib.load(io.BytesIO(result))
+        assert notebook.get_total_pages() == 3

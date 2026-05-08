@@ -15,6 +15,23 @@ from typing import Union
 import supernotelib.parser as sn_parser
 import supernotelib.manipulator as sn_manip
 
+OFFSET_FIELDS = (
+    "RECOGNTEXT",
+    "RECOGNFILE",
+    "TOTALPATH",
+    "EXTERNALLINKINFO",
+    "IDTABLE",
+)
+
+
+def clear_recognition_metadata(page) -> None:
+    """Zero stale recognition offsets and status fields on a notebook page."""
+    for key in OFFSET_FIELDS:
+        if key in page.metadata:
+            page.metadata[key] = "0"
+    page.metadata["RECOGNSTATUS"] = "0"
+    page.metadata["RECOGNFILESTATUS"] = "0"
+
 
 def append_page_to_notebook(
     note_source: Union[str, Path, bytes], ratta_rle_bytes: bytes
@@ -61,14 +78,9 @@ def _append_from_path(note_path: str, ratta_rle_bytes: bytes) -> bytes:
     # changes, so ALL existing pages' recognition offsets become dangling
     # pointers — causing the device to close the file immediately on open.
     # Zero them on every page before appending.
-    _OFFSET_FIELDS = ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE")
     for i in range(notebook.get_total_pages()):
         page = notebook.get_page(i)
-        for key in _OFFSET_FIELDS:
-            if key in page.metadata:
-                page.metadata[key] = "0"
-        page.metadata["RECOGNSTATUS"] = "0"
-        page.metadata["RECOGNFILESTATUS"] = "0"
+        clear_recognition_metadata(page)
 
     # Template: deepcopy the last page to inherit all metadata fields and structure
     last_idx = notebook.get_total_pages() - 1
@@ -85,11 +97,7 @@ def _append_from_path(note_path: str, ratta_rle_bytes: bytes) -> bytes:
     template_page.set_recogn_file(None)
     template_page.set_recogn_text(None)
     template_page.set_totalpath(None)
-    for key in ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE"):
-        if key in template_page.metadata:
-            template_page.metadata[key] = "0"
-    template_page.metadata["RECOGNSTATUS"] = "0"
-    template_page.metadata["RECOGNFILESTATUS"] = "0"
+    clear_recognition_metadata(template_page)
 
     # Replace MAINLAYER (layer 0) with our RATTA_RLE bytes
     if template_page.is_layer_supported():

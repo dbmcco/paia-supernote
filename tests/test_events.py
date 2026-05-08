@@ -22,6 +22,7 @@ class TestEventPublishing:
     async def test_publish_note_transcribed(self, client: EventsClient) -> None:
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -44,6 +45,7 @@ class TestEventPublishing:
     async def test_publish_checkbox_completed(self, client: EventsClient) -> None:
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -68,6 +70,7 @@ class TestEventPublishing:
     async def test_publish_snippet_detected(self, client: EventsClient) -> None:
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -87,6 +90,7 @@ class TestEventPublishing:
     ) -> None:
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -98,10 +102,29 @@ class TestEventPublishing:
             )
 
             body = mock_http.post.call_args[1]["json"]
-            assert body["event_type"] == "supernote.walk.feedback.detected"
+            assert body["event_type"] == "supernote.walk_feedback.detected"
             assert body["payload"]["schema_version"] == "supernote-walk-feedback-v1"
             assert body["payload"]["decision_owner"] == "model"
             assert body["payload"]["text"] == "Gene history exists from last week."
+
+    @pytest.mark.asyncio
+    async def test_publish_checks_event_bus_status(self, client: EventsClient) -> None:
+        with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_http = AsyncMock()
+            mock_http.post.return_value = mock_resp
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await client.publish_walk_feedback_detected(
+                notebook="Walk",
+                page=1,
+                text="Feedback note",
+                source_revision="rev-2",
+            )
+
+            mock_resp.raise_for_status.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_publish_write_completed_includes_request_correlation(
@@ -109,6 +132,7 @@ class TestEventPublishing:
     ) -> None:
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -140,6 +164,7 @@ class TestEventPublishing:
     ) -> None:
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 

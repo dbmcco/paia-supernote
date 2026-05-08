@@ -41,6 +41,32 @@ class SupernoteWriter:
     MARGIN = 80
     LINE_SPACING = 16
 
+    def paginate_content(self, agent: str, content: str) -> list[str]:
+        """Split body content into page-sized chunks without dropping text."""
+        draw = ImageDraw.Draw(
+            Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
+        )
+        body_font = self._load_font(agent, size=self.BODY_FONT_SIZE)
+        current_lines: list[str] = []
+        pages: list[str] = []
+        y = self._body_start_y()
+
+        for line in self._iter_wrapped_body_lines(draw, content, body_font):
+            line_height = self._body_line_height(draw, line, body_font)
+            if current_lines and y + line_height > self._body_bottom_limit():
+                pages.append("\n".join(current_lines))
+                current_lines = [line]
+                y = self._body_start_y() + line_height
+                continue
+
+            current_lines.append(line)
+            y += line_height
+
+        if current_lines:
+            pages.append("\n".join(current_lines))
+
+        return pages or [""]
+
     def render_page(self, agent: str, content: str, content_type: str = "text") -> bytes:
         """
         Render content to RATTA_RLE encoded bytes in the agent's font.
@@ -68,16 +94,13 @@ class SupernoteWriter:
         )
 
         # Body text with word wrapping
-        y = self.MARGIN + 60
-        max_width = self.DEVICE_WIDTH - 2 * self.MARGIN
-        for line in content.split("\n"):
-            wrapped = self._wrap_text(draw, line, body_font, max_width)
-            for wline in wrapped:
-                if y > self.DEVICE_HEIGHT - self.MARGIN - 60:
-                    break
-                draw.text((self.MARGIN, y), wline, fill=0, font=body_font)
-                line_bbox = draw.textbbox((0, 0), wline or "A", font=body_font)
-                y += (line_bbox[3] - line_bbox[1]) + self.LINE_SPACING
+        y = self._body_start_y()
+        for line in self._iter_wrapped_body_lines(draw, content, body_font):
+            line_height = self._body_line_height(draw, line, body_font)
+            if y + line_height > self._body_bottom_limit():
+                break
+            draw.text((self.MARGIN, y), line, fill=0, font=body_font)
+            y += line_height
 
         # Agent signature bottom-left
         sig_font = self._load_font(None, size=self.SIGNATURE_FONT_SIZE)
@@ -362,3 +385,36 @@ class SupernoteWriter:
             lines.append(current)
         return lines or [""]
 
+    def _iter_wrapped_body_lines(
+        self, draw: ImageDraw.ImageDraw, content: str, body_font
+    ) -> list[str]:
+        """Return wrapped body lines using the same layout rules as page rendering."""
+        max_width = self.DEVICE_WIDTH - 2 * self.MARGIN
+        lines: list[str] = []
+        for line in content.split("\n"):
+            lines.extend(self._wrap_text(draw, line, body_font, max_width))
+        return lines or [""]
+
+    def _body_line_height(self, draw: ImageDraw.ImageDraw, line: str, body_font) -> int:
+        """Measure one rendered body line including spacing."""
+        line_bbox = draw.textbbox((0, 0), line or "A", font=body_font)
+        return (line_bbox[3] - line_bbox[1]) + self.LINE_SPACING
+
+    def _body_start_y(self) -> int:
+        """Return the first y-position used for body text rendering."""
+        return self.MARGIN + 60
+
+    def _body_bottom_limit(self) -> int:
+        """Return the exclusive lower bound for body text rendering."""
+        return self.DEVICE_HEIGHT - self.MARGIN - 60
+
+    def append_rle_page(self, notebook_bytes: bytes, rle_content: bytes) -> bytes:
+        """Append a new page with RLE content to an existing notebook."""
+        import io
+        import supernotelib
+
+        page = self.build_page(rle_content)
+        notebook = supernotelib.load(io.BytesIO(notebook_bytes))
+        notebook.pages.append(page)
+        notebook.metadata.pages.append(page.metadata)
+        return supernotelib.reconstruct(notebook)

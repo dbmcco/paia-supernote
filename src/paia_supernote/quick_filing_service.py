@@ -9,7 +9,12 @@ import supernotelib.parser as sn_parser
 
 from paia_supernote.filing_ledger import FilingLedger, FilingOperation
 from paia_supernote.note_page_ops import copy_pages_to_end, remove_pages
-from paia_supernote.quick_filing import FilingCandidate, StarDetector, route_page
+from paia_supernote.quick_filing import (
+    FilingCandidate,
+    FilingDestinationDecision,
+    StarDetector,
+    route_page_from_decision,
+)
 from paia_supernote.reader import SupernoteReader
 
 
@@ -47,24 +52,38 @@ class QuickFilingService:
         starred_pages = self._starred_pages_from_note(source_bytes)
         if not starred_pages:
             return []
-        read_results = await self.reader.read_all_pages(
+        read_results = await self.reader.read_pages(
             source_bytes,
             self.source_notebook,
-            page_range=(min(starred_pages), max(starred_pages)),
+            pages=sorted(starred_pages),
         )
         candidates: list[FilingCandidate] = []
         for result in read_results:
             page_num = int(result.page_num)
             if page_num not in starred_pages:
                 continue
+            decision = await self.reader.resolve_filing_destination(
+                page_image=getattr(result, "page_image", None),
+                transcription=str(result.text),
+                source_notebook=self.source_notebook,
+                destination_notebooks=list(dict.fromkeys(self.destination_map.values())),
+            )
             candidates.append(
-                route_page(
+                route_page_from_decision(
                     notebook=self.source_notebook,
                     page=page_num,
                     source_revision=_source_revision(source_bytes, page_num),
                     text=str(result.text),
                     starred=True,
-                    destination_map=self.destination_map,
+                    decision=FilingDestinationDecision(
+                        action=str(decision.get("action") or "needs_review"),
+                        target_notebook=decision.get("target_notebook"),
+                        evidence=str(
+                            decision.get("evidence") or "No decision evidence."
+                        ),
+                        confidence=float(decision.get("confidence") or 0.0),
+                        raw_response=str(decision.get("raw_response") or decision),
+                    ),
                 )
             )
         return candidates
@@ -99,15 +118,61 @@ class QuickFilingService:
             return _result(dry_run=True, candidates=candidates, operations=operations)
 
         completed = 0
-        for candidate, operation in zip(candidates, operations, strict=True):
-            if candidate.status != "ready" or candidate.target_notebook is None:
+        ready_pairs = [
+            (candidate, operation)
+            for candidate, operation in zip(candidates, operations, strict=True)
+            if candidate.status == "ready" and candidate.target_notebook is not None
+        ]
+        source_cleanup_pairs: list[tuple[FilingCandidate, FilingOperation]] = []
+        for candidate, operation in ready_pairs:
+            if operation.status == "completed":
+                completed += 1
                 continue
-            await self._move_candidate(
+            if operation.status == "source_removed":
+                self.ledger.mark_completed(operation.operation_id)
+                completed += 1
+                continue
+            await self._write_target_if_needed(
                 candidate=candidate,
                 operation=operation,
                 source_bytes=source_bytes,
             )
-            completed += 1
+            source_cleanup_pairs.append(
+                (candidate, self.ledger.get(operation.operation_id))
+            )
+
+        if source_cleanup_pairs:
+            moved_pages = sorted(
+                {
+                    page
+                    for candidate, _operation in source_cleanup_pairs
+                    for page in candidate.source_pages
+                }
+            )
+            try:
+                updated_source = remove_pages(source_bytes, pages=moved_pages)
+                await _upload_bytes(
+                    self.uploader,
+                    updated_source,
+                    f"{self.source_notebook}.note",
+                )
+            except Exception as exc:
+                for _candidate, operation in source_cleanup_pairs:
+                    self.ledger.mark_target_written_source_pending(
+                        operation.operation_id,
+                        target_revision_after=(
+                            operation.target_revision_after or "uploaded"
+                        ),
+                        error=str(exc),
+                    )
+                raise
+            for _candidate, operation in source_cleanup_pairs:
+                self.ledger.mark_source_removed(
+                    operation.operation_id,
+                    quick_revision_after="uploaded",
+                )
+                self.ledger.mark_completed(operation.operation_id)
+                completed += 1
         return {
             **_result(dry_run=False, candidates=candidates, operations=operations),
             "completed_count": completed,
@@ -126,7 +191,7 @@ class QuickFilingService:
             confidence=candidate.confidence,
         )
 
-    async def _move_candidate(
+    async def _write_target_if_needed(
         self,
         *,
         candidate: FilingCandidate,
@@ -135,53 +200,26 @@ class QuickFilingService:
     ) -> None:
         if candidate.target_notebook is None:
             return
-        if operation.status not in {
+        if operation.status in {
             "target_written",
             "target_written_source_pending",
             "source_removed",
+            "completed",
         }:
-            target_name = f"{candidate.target_notebook}.note"
-            target_bytes = await self.uploader.download_notebook(target_name)
-            updated_target = copy_pages_to_end(
-                source_bytes,
-                target_bytes,
-                source_pages=candidate.source_pages,
-            )
-            await _upload_bytes(self.uploader, updated_target, target_name)
-            self.ledger.mark_target_written(
-                operation.operation_id,
-                target_revision_after="uploaded",
-            )
-
-        if operation.status == "source_removed":
-            self.ledger.mark_completed(operation.operation_id)
             return
 
-        try:
-            updated_source = remove_pages(source_bytes, pages=candidate.source_pages)
-        except Exception as exc:
-            self.ledger.mark_target_written_source_pending(
-                operation.operation_id,
-                target_revision_after=operation.target_revision_after or "uploaded",
-                error=str(exc),
-            )
-            raise
-        try:
-            await _upload_bytes(
-                self.uploader, updated_source, f"{candidate.source_notebook}.note"
-            )
-        except Exception as exc:
-            self.ledger.mark_target_written_source_pending(
-                operation.operation_id,
-                target_revision_after=operation.target_revision_after or "uploaded",
-                error=str(exc),
-            )
-            raise
-        self.ledger.mark_source_removed(
-            operation.operation_id,
-            quick_revision_after="uploaded",
+        target_name = f"{candidate.target_notebook}.note"
+        target_bytes = await self.uploader.download_notebook(target_name)
+        updated_target = copy_pages_to_end(
+            source_bytes,
+            target_bytes,
+            source_pages=candidate.source_pages,
         )
-        self.ledger.mark_completed(operation.operation_id)
+        await _upload_bytes(self.uploader, updated_target, target_name)
+        self.ledger.mark_target_written(
+            operation.operation_id,
+            target_revision_after="uploaded",
+        )
 
 
 async def _upload_bytes(uploader: Any, notebook_bytes: bytes, target_name: str) -> None:

@@ -30,15 +30,31 @@ class EnrichService:
         self.page_state = page_state or PageStateStore(Path(self.config["state_db_path"]))
         self.page_state.init_schema()
         self.enricher = enricher or SupernoteEnricher(
+            zai_api_key=self.config["zai_api_key"],
             zai_base_url=self.config["zai_base_url"],
             zai_text_model=self.config["zai_text_model"],
         )
         self.folio_client = folio_upserter or folio_client or upsert_supernote_page
         self._shutdown_event = asyncio.Event()
 
+    def _should_sync_to_folio(self, notebook: str) -> bool:
+        configured = self.config.get("folio_sync_notebooks")
+        if not configured:
+            return True
+        allowed = {str(item).strip().casefold() for item in configured if str(item).strip()}
+        return str(notebook or "").strip().casefold() in allowed
+
     async def run_once(self) -> bool:
         row = self.page_state.next_dirty_page()
         if row is None:
+            return False
+        if not self._should_sync_to_folio(row.notebook):
+            self.page_state.mark_enrichment_skipped(
+                notebook=row.notebook,
+                page=row.page,
+                source_revision=row.source_revision,
+            )
+            log.info("enrich_skipped_notebook", notebook=row.notebook, page=row.page)
             return False
         log.info("enrich_started", notebook=row.notebook, page=row.page)
         try:

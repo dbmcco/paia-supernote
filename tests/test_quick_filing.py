@@ -1,8 +1,9 @@
 from paia_supernote.quick_filing import (
+    FilingDestinationDecision,
     StarDetector,
     notebook_name_to_tag,
     parse_filing_header,
-    route_page,
+    route_page_from_decision,
 )
 
 
@@ -18,44 +19,63 @@ def test_parse_filing_header_with_bundle_marker() -> None:
     assert parsed.title == "Gene King check-in"
 
 
-def test_route_page_requires_known_destination_line() -> None:
-    routed = route_page(
+def test_route_page_requires_model_move_decision() -> None:
+    routed = route_page_from_decision(
         notebook="Test Note 1",
         page=0,
         source_revision="rev-1",
         text="2026-04-29 #unknown\nUntitled",
         starred=True,
-        destination_map={"test": "Test Note 2"},
+        decision=FilingDestinationDecision(
+            action="needs_review",
+            target_notebook=None,
+            evidence="No destination marker was visible.",
+            confidence=0.0,
+            raw_response="{}",
+        ),
     )
 
     assert routed.status == "needs_review"
     assert routed.target_notebook is None
-    assert "no known destination line" in routed.reason
+    assert "No destination marker" in routed.reason
 
 
-def test_route_page_uses_destination_line_when_starred() -> None:
-    routed = route_page(
+def test_route_page_uses_model_destination_when_starred() -> None:
+    routed = route_page_from_decision(
         notebook="Test Note 1",
         page=3,
         source_revision="rev-1",
         text="2026-04-29 #meeting\nTest Note 2\nPilot page",
         starred=True,
-        destination_map={"test-note-2": "Test Note 2"},
+        decision=FilingDestinationDecision(
+            action="move",
+            target_notebook="Test Note 2",
+            evidence="The target note name is written beside the star.",
+            confidence=0.92,
+            raw_response='{"action":"move"}',
+        ),
     )
 
     assert routed.status == "ready"
     assert routed.target_notebook == "Test Note 2"
     assert routed.source_pages == [3]
+    assert routed.confidence == 0.92
 
 
 def test_route_page_preserves_tags_without_using_them_as_destination() -> None:
-    routed = route_page(
+    routed = route_page_from_decision(
         notebook="Test Note 1",
         page=0,
         source_revision="rev-1",
         text="2026-04-29 #test-note-2\nPilot page",
         starred=True,
-        destination_map={"test-note-2": "Test Note 2"},
+        decision=FilingDestinationDecision(
+            action="needs_review",
+            target_notebook=None,
+            evidence="Has tags, but no visible move destination.",
+            confidence=0.0,
+            raw_response="{}",
+        ),
     )
 
     assert routed.status == "needs_review"
@@ -63,33 +83,42 @@ def test_route_page_preserves_tags_without_using_them_as_destination() -> None:
     assert routed.detected_tags == ["test-note-2"]
 
 
-def test_route_page_uses_star_destination_line_before_semantic_tags() -> None:
-    routed = route_page(
+def test_route_page_records_model_evidence_instead_of_semantic_tags() -> None:
+    routed = route_page_from_decision(
         notebook="Test Note 1",
         page=0,
         source_revision="rev-1",
         text="2026-05-01\nTest Note 2\n#meeting #pilot\nPage content",
         starred=True,
-        destination_map={
-            "meeting": "Meeting Archive",
-            "test-note-2": "Test Note 2",
-        },
+        decision=FilingDestinationDecision(
+            action="move",
+            target_notebook="Test Note 2",
+            evidence="The model saw Test Note 2 written as the destination.",
+            confidence=1.0,
+            raw_response="{}",
+        ),
     )
 
     assert routed.status == "ready"
     assert routed.target_notebook == "Test Note 2"
     assert routed.detected_tags == ["meeting", "pilot"]
-    assert routed.reason == "matched destination Test Note 2"
+    assert "model selected destination Test Note 2" in routed.reason
 
 
 def test_route_page_does_not_move_unstarred_page() -> None:
-    routed = route_page(
+    routed = route_page_from_decision(
         notebook="Test Note 1",
         page=3,
         source_revision="rev-1",
         text="2026-04-29 #test #meeting\nPilot page",
         starred=False,
-        destination_map={"test": "Test Note 2"},
+        decision=FilingDestinationDecision(
+            action="move",
+            target_notebook="Test Note 2",
+            evidence="ignored for unstarred pages",
+            confidence=1.0,
+            raw_response="{}",
+        ),
     )
 
     assert routed.status == "detected"

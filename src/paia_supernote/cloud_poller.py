@@ -6,7 +6,7 @@ ABOUTME: Polls /api/file/list/query, downloads changed files, fires callback wit
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Awaitable, Dict, Optional
+from typing import Awaitable, Callable, Dict, Iterable, Optional
 
 import structlog
 
@@ -28,29 +28,50 @@ class CloudPoller:
     DEFAULT_POLL_INTERVAL = 60  # seconds
 
     # Only watch these notebooks (stem name without .note)
-    WATCHED_NOTEBOOKS = {"Quick", "Walk", "LFW", "Synth", "test", "tasks"}
+    WATCHED_NOTEBOOKS = {"Quick", "Walk", "LFW", "Navicyte", "Synth", "test", "tasks"}
 
     def __init__(
         self,
         uploader,
         on_note_changed: NoteChangedCallback,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
+        watched_notebooks: Iterable[str] | None = None,
+        process_existing_on_start: bool = True,
     ) -> None:
         """
         Args:
             uploader: A started SupernoteUploader instance (browser session active).
-            on_note_changed: Async callback(notebook_name, note_bytes) fired per changed file.
+            on_note_changed: Async callback fired per changed file.
             poll_interval: How often to poll in seconds (default 60).
+            watched_notebooks: Optional notebook stems to watch.
+            process_existing_on_start: Whether existing files should fire on first poll.
         """
         self._uploader = uploader
         self._callback = on_note_changed
         self._poll_interval = poll_interval
+        self._process_existing_on_start = process_existing_on_start
+        self._watched_notebooks = {
+            str(name).strip()
+            for name in (watched_notebooks or self.WATCHED_NOTEBOOKS)
+            if str(name).strip()
+        }
+        self._watched_notebook_keys = {
+            name.casefold() for name in self._watched_notebooks
+        }
 
         # Tracks last-seen updateTime per file name
         self._last_seen: Dict[str, int] = {}
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._stopping = False
+
+    @property
+    def watched_notebooks(self) -> set[str]:
+        return set(self._watched_notebooks)
+
+    @property
+    def process_existing_on_start(self) -> bool:
+        return self._process_existing_on_start
 
     def start(self) -> None:
         """Start the polling loop as a background asyncio task."""
@@ -93,7 +114,7 @@ class CloudPoller:
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:
-        """Single poll: list Note folder, detect changes, download and fire callbacks."""
+        """Single poll: list Note folder, detect changes, and fire callbacks."""
         file_list = await self._list_notes()
 
         for entry in file_list:
@@ -110,10 +131,17 @@ class CloudPoller:
                 continue
 
             notebook_name = name[:-5]  # strip .note suffix
-            if notebook_name not in self.WATCHED_NOTEBOOKS:
+            if notebook_name.casefold() not in self._watched_notebook_keys:
                 continue
 
             last_update = self._last_seen.get(name, 0)
+            if (
+                last_update == 0
+                and not self._process_existing_on_start
+                and name not in self._last_seen
+            ):
+                self._last_seen[name] = update_time
+                continue
             if update_time <= last_update:
                 continue
 
