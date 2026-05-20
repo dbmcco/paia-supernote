@@ -12,13 +12,14 @@ from paia_agent_runtime import (
 )
 
 LEGACY_ZAI_API_KEY_ENV = "ZAI_API_KEY"
+SUPPORTED_SUPERNOTE_PROVIDERS = frozenset({"zai", "openrouter"})
 
 
 def _supernote_route(profile: ExecutionProfile) -> ResolvedCognitionRoute:
     route = get_cognition_registry().route_for(profile, service_id="supernote")
-    if route.provider != "zai":
+    if route.provider not in SUPPORTED_SUPERNOTE_PROVIDERS:
         raise RuntimeError(
-            "Supernote Z.AI backend is configured with non-Z.AI route "
+            "Supernote model backend is configured with unsupported route "
             f"{route.surface!r}"
         )
     if route.base_url is None:
@@ -36,29 +37,32 @@ def supernote_text_route() -> ResolvedCognitionRoute:
 
 def supernote_zai_credential_env_var() -> str:
     route = supernote_text_route()
-    if route.credential_id != "supernote_zai":
-        raise RuntimeError(
-            f"Supernote Z.AI route uses unexpected credential {route.credential_id!r}"
-        )
     if not route.credential_env_var:
-        raise RuntimeError("Supernote Z.AI credential has no env var configured")
+        raise RuntimeError("Supernote model credential has no env var configured")
     return route.credential_env_var
 
 
 def resolve_supernote_zai_api_key(
     *, env: Mapping[str, str] | None = None, legacy_fallback: bool = True
 ) -> str | None:
-    """Resolve Supernote's Z.AI secret from central credential metadata.
+    """Resolve Supernote's active model secret from central credential metadata.
 
     Resolution order:
     1. The registry-assigned Supernote credential env var.
-    2. Legacy ZAI_API_KEY, retained only for backward compatibility.
+    2. Legacy ZAI_API_KEY, only when the active route is still the Z.AI route.
     """
     environ = env or os.environ
-    credential_env_var = supernote_zai_credential_env_var()
+    route = supernote_text_route()
+    credential_env_var = route.credential_env_var
+    if not credential_env_var:
+        raise RuntimeError("Supernote model credential has no env var configured")
     if api_key := environ.get(credential_env_var):
         return api_key
-    if legacy_fallback and (api_key := environ.get(LEGACY_ZAI_API_KEY_ENV)):
+    if (
+        route.provider == "zai"
+        and legacy_fallback
+        and (api_key := environ.get(LEGACY_ZAI_API_KEY_ENV))
+    ):
         return api_key
     return None
 

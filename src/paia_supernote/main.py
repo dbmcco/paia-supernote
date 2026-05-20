@@ -36,7 +36,11 @@ from .quick_filing_service import QuickFilingService
 from .reader import SupernoteReader
 from .task_curator import TaskCurator
 from .tasks_sync import TasksSync
-from .uploader import SupernoteUploader
+from .uploader import (
+    SupernoteUploadConflictError,
+    SupernoteUploader,
+    UploadSyncInProgressError,
+)
 from .writer import SupernoteWriter
 
 log = structlog.get_logger(__name__)
@@ -76,6 +80,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "Synthera",
     ],
     "filing_destination_map": {},
+    "service_cloud_poller_enabled": True,
+    "service_uploader_start_mode": "eager",
     "agent_mappings": {
         "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
         "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
@@ -115,6 +121,8 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
                 "zai_text_model",
                 "state_db_path",
                 "folio_sync_notebooks",
+                "service_cloud_poller_enabled",
+                "service_uploader_start_mode",
             ):
                 if key in sn:
                     config[key] = sn[key]
@@ -196,6 +204,16 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
             for notebook in env_filing_sources.split(",")
             if notebook.strip()
         ]
+    if env_service_cloud_poller := os.environ.get(
+        "SUPERNOTE_SERVICE_CLOUD_POLLER_ENABLED"
+    ):
+        config["service_cloud_poller_enabled"] = (
+            env_service_cloud_poller.strip().lower() in {"1", "true", "yes", "on"}
+        )
+    if env_uploader_start_mode := os.environ.get(
+        "SUPERNOTE_SERVICE_UPLOADER_START_MODE"
+    ):
+        config["service_uploader_start_mode"] = env_uploader_start_mode.strip().lower()
 
     return config
 
@@ -272,6 +290,19 @@ class SupernoteService:
             linear_team_id=self.config.get("linear_team_id"),
         )
         self._shutdown_event = asyncio.Event()
+        self._uploader_started = False
+
+    def _should_start_uploader_on_service_start(self) -> bool:
+        if self.config.get("service_cloud_poller_enabled", True):
+            return True
+        return self.config.get("service_uploader_start_mode", "eager") != "lazy"
+
+    async def _ensure_service_uploader_started(self) -> None:
+        if getattr(self.uploader, "page", None) is not None:
+            self._uploader_started = True
+            return
+        await self.uploader.start()
+        self._uploader_started = True
 
     def _resolve_agent_name(self, raw_agent: str) -> str | None:
         candidate = str(raw_agent or "").strip()
@@ -300,15 +331,20 @@ class SupernoteService:
         log.info("service_starting", config_keys=list(self.config.keys()))
 
         try:
-            # Start events connection
-            await self.events.start()
+            if self._should_start_uploader_on_service_start():
+                await self.uploader.start()
+                self._uploader_started = True
+            else:
+                log.info("service_uploader_lazy_start_enabled")
+
+            # Register inbound writes only after the uploader is ready.
             self.events.register_write_handler(self._handle_write_request)
+            await self.events.start()
 
-            # Start uploader browser session (also used by cloud poller for API calls)
-            await self.uploader.start()
-
-            # Start cloud poller (no Partner app needed)
-            self.cloud_poller.start()
+            if self.config.get("service_cloud_poller_enabled", True):
+                self.cloud_poller.start()
+            else:
+                log.info("service_cloud_poller_disabled")
 
             # Start tasks sync (Linear → tasks.note)
             self.tasks_sync.start()
@@ -321,9 +357,11 @@ class SupernoteService:
             with suppress(Exception):
                 await self.tasks_sync.stop()
             with suppress(Exception):
-                await self.cloud_poller.stop()
+                if self.config.get("service_cloud_poller_enabled", True):
+                    await self.cloud_poller.stop()
             with suppress(Exception):
-                await self.uploader.stop()
+                if self._uploader_started:
+                    await self.uploader.stop()
             with suppress(Exception):
                 await self.events.stop()
             raise
@@ -333,14 +371,20 @@ class SupernoteService:
         log.info("service_stopping")
 
         await self.tasks_sync.stop()
-        await self.cloud_poller.stop()
-        await self.uploader.stop()
+        if self.config.get("service_cloud_poller_enabled", True):
+            await self.cloud_poller.stop()
+        if self._uploader_started:
+            await self.uploader.stop()
         await self.events.stop()
 
         self._shutdown_event.set()
         log.info("service_stopped")
 
     async def _wait_until_shutdown_or_poller_exit(self) -> None:
+        if not self.config.get("service_cloud_poller_enabled", True):
+            await self._shutdown_event.wait()
+            return
+
         poller_wait = getattr(self.cloud_poller, "wait", None)
         if poller_wait is None or not inspect.iscoroutinefunction(poller_wait):
             await self._shutdown_event.wait()
@@ -596,6 +640,8 @@ class SupernoteService:
                 )
                 return
 
+            await self._ensure_service_uploader_started()
+
             # Handle replace_pages content type
             if content_type == "replace_pages":
                 page_specs = [
@@ -623,7 +669,11 @@ class SupernoteService:
                         target_name=target_name,
                         page_specs=page_specs,
                     )
-                except NotebookConflictError as exc:
+                except (
+                    NotebookConflictError,
+                    SupernoteUploadConflictError,
+                    UploadSyncInProgressError,
+                ) as exc:
                     log.warning(
                         "replace_pages_conflict_blocked",
                         agent=agent,

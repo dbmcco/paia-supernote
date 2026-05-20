@@ -246,20 +246,21 @@ class SupernoteReader:
     async def _zai_chat_completion(
         self, model: str, messages: List[Dict[str, Any]], max_tokens: int
     ) -> str:
-        """Call Z.AI's coding-plan chat completion endpoint."""
+        """Call the configured OpenAI-compatible Supernote model endpoint."""
         if not self.zai_api_key:
             raise RuntimeError(
-                "SUPERNOTE_ZAI_API_KEY is required when using the zai backend"
+                "The configured Supernote model API key is required when using the zai backend"
             )
 
         payload = {
             "model": model,
             "messages": messages,
-            "thinking": {"type": "disabled"},
             "temperature": 0,
             "stream": False,
             "max_tokens": max_tokens,
         }
+        if "openrouter.ai" not in self.zai_base_url:
+            payload["thinking"] = {"type": "disabled"}
         async with httpx.AsyncClient() as client:
             for attempt in range(self.zai_retry_attempts):
                 response = await client.post(

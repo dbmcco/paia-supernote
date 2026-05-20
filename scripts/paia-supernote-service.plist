@@ -17,6 +17,10 @@
   <dict>
     <key>PATH</key>
     <string>/Users/braydon/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>SUPERNOTE_SERVICE_CLOUD_POLLER_ENABLED</key>
+    <string>false</string>
+    <key>SUPERNOTE_SERVICE_UPLOADER_START_MODE</key>
+    <string>lazy</string>
   </dict>
   <key>KeepAlive</key>
   <true/>

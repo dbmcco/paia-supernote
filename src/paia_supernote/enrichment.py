@@ -33,7 +33,7 @@ class SupernoteEnricher:
         self.zai_api_key = zai_api_key or resolve_supernote_zai_api_key()
         if not self.zai_api_key:
             raise RuntimeError(
-                "SUPERNOTE_ZAI_API_KEY is required when using the zai enrichment backend"
+                "The configured Supernote model API key is required when using the zai enrichment backend"
             )
         self.zai_base_url = (zai_base_url or default_zai_base_url()).rstrip("/")
         self.zai_text_model = zai_text_model or default_zai_text_model()

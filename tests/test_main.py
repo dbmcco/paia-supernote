@@ -25,6 +25,7 @@ from paia_supernote.main import (
     render_status,
 )
 from paia_supernote.page_state import PageStateStore
+from paia_supernote.uploader import SupernoteUploadConflictError
 
 # -- Config loading -----------------------------------------------------------
 
@@ -155,6 +156,28 @@ class TestLoadConfig:
         config = load_config(config_path=cfg_file)
         assert config["state_db_path"] == "/tmp/from-env.db"
 
+    def test_service_cloud_poller_can_be_disabled_from_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SUPERNOTE_SERVICE_CLOUD_POLLER_ENABLED", "false")
+
+        config = load_config(config_path=tmp_path / "nonexistent.toml")
+
+        assert config["service_cloud_poller_enabled"] is False
+
+    def test_service_uploader_can_be_lazy_started_from_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SUPERNOTE_SERVICE_UPLOADER_START_MODE", "lazy")
+
+        config = load_config(config_path=tmp_path / "nonexistent.toml")
+
+        assert config["service_uploader_start_mode"] == "lazy"
+
     def test_zai_api_key_can_be_loaded_from_file_and_env(
         self,
         tmp_path: Path,
@@ -226,12 +249,15 @@ class TestServiceStart:
     @pytest.mark.asyncio
     async def test_start_invokes_all_components(self, tmp_path: Path) -> None:
         service = _make_service(tmp_path)
+        calls: list[str] = []
         service.events = MagicMock()
-        service.events.start = AsyncMock()
+        service.events.start = AsyncMock(side_effect=lambda: calls.append("events"))
         service.events.stop = AsyncMock()
-        service.events.register_write_handler = MagicMock()
+        service.events.register_write_handler = MagicMock(
+            side_effect=lambda _handler: calls.append("handler")
+        )
         service.uploader = MagicMock()
-        service.uploader.start = AsyncMock()
+        service.uploader.start = AsyncMock(side_effect=lambda: calls.append("uploader"))
         service.uploader.stop = AsyncMock()
         service.cloud_poller = MagicMock()
         service.cloud_poller.start = MagicMock()
@@ -256,6 +282,95 @@ class TestServiceStart:
         service.events.register_write_handler.assert_called_once()
         service.uploader.start.assert_awaited_once()
         service.cloud_poller.start.assert_called_once()
+        assert calls[:3] == ["uploader", "handler", "events"]
+
+    @pytest.mark.asyncio
+    async def test_start_skips_cloud_poller_when_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        config = dict(DEFAULT_CONFIG)
+        config["service_cloud_poller_enabled"] = False
+        config["state_db_path"] = str(tmp_path / "state.db")
+        service = SupernoteService(config=config)
+        service.events = MagicMock()
+        service.events.start = AsyncMock()
+        service.events.stop = AsyncMock()
+        service.events.register_write_handler = MagicMock()
+        service.uploader = MagicMock()
+        service.uploader.start = AsyncMock()
+        service.uploader.stop = AsyncMock()
+        service.cloud_poller = MagicMock()
+        service.cloud_poller.start = MagicMock()
+        service.cloud_poller.stop = AsyncMock()
+        service.tasks_sync = MagicMock()
+        service.tasks_sync.start = MagicMock()
+        service.tasks_sync.stop = AsyncMock()
+
+        async def stop_after_start() -> None:
+            await asyncio.sleep(0.05)
+            await service.stop()
+
+        await asyncio.gather(service.start(), stop_after_start())
+
+        service.cloud_poller.start.assert_not_called()
+        service.cloud_poller.stop.assert_not_awaited()
+        service.events.start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_start_skips_uploader_when_lazy_and_poller_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        config = dict(DEFAULT_CONFIG)
+        config["service_cloud_poller_enabled"] = False
+        config["service_uploader_start_mode"] = "lazy"
+        config["state_db_path"] = str(tmp_path / "state.db")
+        service = SupernoteService(config=config)
+        service.events = MagicMock()
+        service.events.start = AsyncMock()
+        service.events.stop = AsyncMock()
+        service.events.register_write_handler = MagicMock()
+        service.uploader = MagicMock()
+        service.uploader.start = AsyncMock()
+        service.uploader.stop = AsyncMock()
+        service.cloud_poller = MagicMock()
+        service.cloud_poller.start = MagicMock()
+        service.cloud_poller.stop = AsyncMock()
+        service.tasks_sync = MagicMock()
+        service.tasks_sync.start = MagicMock()
+        service.tasks_sync.stop = AsyncMock()
+
+        async def stop_after_start() -> None:
+            await asyncio.sleep(0.05)
+            await service.stop()
+
+        await asyncio.gather(service.start(), stop_after_start())
+
+        service.uploader.start.assert_not_awaited()
+        service.uploader.stop.assert_not_awaited()
+        service.events.start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_write_request_lazy_starts_service_uploader(self) -> None:
+        config = dict(DEFAULT_CONFIG)
+        config["service_uploader_start_mode"] = "lazy"
+        service = SupernoteService(config=config)
+        service.uploader = MagicMock()
+        service.uploader.page = None
+        service.uploader.start = AsyncMock()
+        service.events = AsyncMock()
+        service._replace_pages_with_uploader = AsyncMock(return_value=True)
+
+        await service._handle_write_request(
+            {
+                "agent": "Sam",
+                "notebook": "Walk",
+                "content_type": "replace_pages",
+                "pages": [{"agent": "Sam", "content": "Page 1"}],
+            }
+        )
+
+        service.uploader.start.assert_awaited_once()
+        service._replace_pages_with_uploader.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_stop_invokes_all_components(self, tmp_path: Path) -> None:
@@ -264,6 +379,7 @@ class TestServiceStart:
         service.events.stop = AsyncMock()
         service.uploader = MagicMock()
         service.uploader.stop = AsyncMock()
+        service._uploader_started = True
         service.cloud_poller = MagicMock()
         service.cloud_poller.stop = AsyncMock()
         service.tasks_sync = MagicMock()
@@ -740,5 +856,35 @@ class TestMainEntrypoint2:
         service.events.publish_write_failed.assert_awaited_once()
         assert (
             "unresolved cloud conflict"
+            in service.events.publish_write_failed.await_args.kwargs["error"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_replace_pages_upload_conflict_is_failed_without_fresh_retry(
+        self,
+    ) -> None:
+        service = SupernoteService(config=DEFAULT_CONFIG)
+        service.uploader = AsyncMock()
+        service.events = AsyncMock()
+        service._replace_pages_with_uploader = AsyncMock(
+            side_effect=SupernoteUploadConflictError(
+                "Walk.note has blocking cloud copies: Walk(1).note"
+            )
+        )
+
+        with patch("paia_supernote.main.SupernoteUploader") as fresh_uploader:
+            await service._handle_write_request(
+                {
+                    "agent": "Sam",
+                    "notebook": "Walk",
+                    "content_type": "replace_pages",
+                    "pages": [{"agent": "Sam", "content": "Page 1"}],
+                }
+            )
+
+        fresh_uploader.assert_not_called()
+        service.events.publish_write_failed.assert_awaited_once()
+        assert (
+            "blocking cloud copies"
             in service.events.publish_write_failed.await_args.kwargs["error"]
         )

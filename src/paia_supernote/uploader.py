@@ -4,7 +4,8 @@ ABOUTME: Uses Playwright browser context for auth; httpx for the direct S3 PUT.
 
 Upload flow (calibrated against live Supernote Cloud 2026-04-14):
   1. POST /api/file/upload/apply  → presigned S3 URL + s3Authorization + xamzDate
-  2. PUT  <s3_url>                → S3 direct upload (Authorization + x-amz-date headers)
+  2. PUT  <s3_url>                → S3 direct upload
+                                      (Authorization + x-amz-date headers)
   3. POST /api/file/upload/finish → { innerName: <s3_object_key>, ... }
 
 All notebooks (Quick.note, LFW.note, Synth.note) live in the "Note" folder,
@@ -12,25 +13,40 @@ directoryId = NOTE_FOLDER_ID.  Files sync at SYNC_BASE on Mac.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+import fcntl
 import hashlib
-import io
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 
 class UploadAuthError(Exception):
     """Raised when an upload API call returns 401/403, indicating session expiry."""
 
 
+class UploadSyncInProgressError(RuntimeError):
+    """Raised when Supernote Cloud reports the target is still syncing."""
+
+
+class SupernoteUploadConflictError(RuntimeError):
+    """Raised when a target has duplicate/conflict cloud copies."""
+
+
+_UPLOAD_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 class SupernoteUploader:
     """Handles uploads to Supernote Cloud via Playwright browser automation."""
 
     CLOUD_URL = "https://cloud.supernote.com"
+    CLOUD_HOME_URL = f"{CLOUD_URL}/#/home"
     SESSION_FILE = Path("~/.paia/supernote/session.json").expanduser()
+    CLOUD_API_LOCK_FILE = Path("~/.paia/supernote/cloud-api.lock").expanduser()
 
     # All user notebooks live in the "Note" folder on the cloud
     NOTE_FOLDER_ID = "955311389939859457"
@@ -106,26 +122,34 @@ class SupernoteUploader:
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
 
-        await self._ensure_authenticated()
+        async with _upload_lock(target_name):
+            await self._ensure_authenticated()
 
-        # Delete existing file(s) BEFORE uploading so the new upload gets the
-        # correct name. If the old file exists when we upload, the cloud
-        # auto-increments to "test(1).note" etc.
-        existing_ids = await self._find_file_ids(target_name)
-        if existing_ids:
-            await self._delete_by_ids(existing_ids)
+            blocking_siblings = await self._find_blocking_sibling_names(target_name)
+            if blocking_siblings:
+                joined = ", ".join(blocking_siblings)
+                raise SupernoteUploadConflictError(
+                    f"{target_name} has blocking cloud copies: {joined}"
+                )
 
-        try:
-            upload_info = await self._initiate_upload(notebook_path, target_name)
-        except UploadAuthError:
-            await self._interactive_reauth()
-            upload_info = await self._initiate_upload(notebook_path, target_name)
+            # Delete existing file(s) BEFORE uploading so the new upload gets the
+            # correct name. If the old file exists when we upload, the cloud
+            # auto-increments to "test(1).note" etc.
+            existing_ids = await self._find_file_ids(target_name)
+            if existing_ids:
+                await self._delete_by_ids(existing_ids)
+                await self._wait_for_target_absent(target_name)
 
-        if not upload_info.get("_skip_s3"):
-            await self._upload_to_s3(notebook_path, upload_info)
-        await self._finish_upload(notebook_path, target_name, upload_info)
+            upload_info = await self._initiate_upload_with_recovery(
+                notebook_path, target_name
+            )
 
-        return True
+            if not upload_info.get("_skip_s3"):
+                await self._upload_to_s3(notebook_path, upload_info)
+            await self._finish_upload(notebook_path, target_name, upload_info)
+            await self._wait_for_stable_single_target(target_name)
+
+            return True
 
     async def download_notebook(self, target_name: str) -> bytes:
         """Download a .note file from Supernote Cloud by filename.
@@ -145,11 +169,15 @@ class SupernoteUploader:
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
 
-        file_ids = await self._find_file_ids(target_name)
+        try:
+            file_ids = await self._find_file_ids(target_name)
+        except UploadAuthError:
+            await self._restart_browser_session()
+            file_ids = await self._find_file_ids(target_name)
         if not file_ids:
             raise RuntimeError(f"{target_name!r} not found in Note folder")
 
-        # Use the most recent entry (first ID since list/query returns newest-first by time)
+        # Use the most recent entry; list/query returns newest first by time.
         file_id = file_ids[0]
 
         result = await self._api_call("/api/file/download/url", {
@@ -172,6 +200,14 @@ class SupernoteUploader:
 
     async def _find_file_ids(self, target_name: str) -> List[str]:
         """Return cloud file IDs matching target_name in the Note folder."""
+        files = await self._list_note_files()
+        return [
+            f["id"] for f in files
+            if f.get("fileName") == target_name and f.get("isFolder") == "N"
+        ]
+
+    async def _list_note_files(self) -> list[dict[str, Any]]:
+        """Return current file entries in the cloud Note folder."""
         result = await self._api_call("/api/file/list/query", {
             "directoryId": self.NOTE_FOLDER_ID,
             "pageNo": 1,
@@ -180,22 +216,40 @@ class SupernoteUploader:
             "sequence": "desc",
             "filterType": 0,
         })
+        if result["status"] in (401, 403):
+            raise UploadAuthError(f"list/query returned {result['status']}")
         if result["status"] != 200 or not isinstance(result["body"], dict):
             return []
-        files = result["body"].get("userFileVOList", [])
-        return [
-            f["id"] for f in files
-            if f.get("fileName") == target_name and f.get("isFolder") == "N"
-        ]
+        return list(result["body"].get("userFileVOList", []))
+
+    async def _find_blocking_sibling_names(self, target_name: str) -> list[str]:
+        """Return conflict or numbered copies for target_name in the Note folder."""
+        stem = target_name.removesuffix(".note")
+        files = await self._list_note_files()
+        return sorted(
+            {
+                str(f.get("fileName") or "")
+                for f in files
+                if f.get("isFolder") == "N"
+                and _is_blocking_sibling_name(str(f.get("fileName") or ""), stem)
+            }
+        )
 
     async def _delete_by_ids(self, file_ids: list) -> None:
         """Delete cloud files by ID list. No-op on empty list."""
         if not file_ids:
             return
-        await self._api_call("/api/file/delete", {
+        result = await self._api_call("/api/file/delete", {
             "idList": file_ids,
             "directoryId": self.NOTE_FOLDER_ID,
         })
+        if result.get("status") != 200:
+            raise RuntimeError(
+                f"delete failed ({result.get('status')}): {result.get('body')}"
+            )
+        body = result.get("body")
+        if isinstance(body, dict) and not body.get("success", False):
+            raise RuntimeError(f"delete failed: {body}")
 
     async def _ensure_authenticated(self) -> None:
         """Check auth state; trigger interactive re-auth when session expired."""
@@ -203,7 +257,9 @@ class SupernoteUploader:
             if not self.page:
                 raise RuntimeError("Browser not started")
 
-            response = await self.page.goto(f"{self.CLOUD_URL}/", wait_until="networkidle")
+            response = await self.page.goto(
+                self.CLOUD_HOME_URL, wait_until="networkidle"
+            )
 
             needs_reauth = False
             if response and response.status in (401, 403):
@@ -217,12 +273,12 @@ class SupernoteUploader:
         await self._retry_on_closed_target(do_check)
 
     async def _refresh_csrf_token(self) -> None:
-        """Reload the cloud root so the browser session gets a fresh XSRF token."""
+        """Reload the cloud app route so the browser session gets a fresh XSRF token."""
 
         async def do_refresh() -> None:
             if not self.page:
                 raise RuntimeError("Browser not started")
-            await self.page.goto(f"{self.CLOUD_URL}/", wait_until="networkidle")
+            await self.page.goto(self.CLOUD_HOME_URL, wait_until="networkidle")
 
         await self._retry_on_closed_target(do_refresh)
 
@@ -272,11 +328,24 @@ class SupernoteUploader:
             """, [endpoint, body])
             return result  # type: ignore[return-value]
 
-        result = await self._retry_on_closed_target(do_call)
-        if self._is_csrf_expired_response(result):
-            await self._refresh_csrf_token()
+        async with self._cloud_api_lock():
             result = await self._retry_on_closed_target(do_call)
+            if self._is_csrf_expired_response(result):
+                await self._refresh_csrf_token()
+                result = await self._retry_on_closed_target(do_call)
         return result  # type: ignore[return-value]
+
+    @asynccontextmanager
+    async def _cloud_api_lock(self):
+        """Serialize Supernote Cloud API calls across service processes."""
+        self.CLOUD_API_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = self.CLOUD_API_LOCK_FILE.open("a+")
+        try:
+            await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
 
     async def _retry_on_closed_target(self, operation):
         try:
@@ -323,19 +392,68 @@ class SupernoteUploader:
         if result["status"] in (401, 403):
             raise UploadAuthError(f"upload/apply returned {result['status']}")
         if result["status"] != 200 or not isinstance(result["body"], dict):
-            raise RuntimeError(f"upload/apply failed ({result['status']}): {result['body']}")
+            raise RuntimeError(
+                f"upload/apply failed ({result['status']}): {result['body']}"
+            )
 
         body = result["body"]
-        # E0310 = identical MD5 already exists — no S3 upload needed, go straight to finish.
+        # E0310 = identical MD5 already exists; go straight to finish.
         # Mark with a flag so upload_notebook can skip _upload_to_s3.
         if not body.get("success") and body.get("errorCode") == "E0310":
             body["_skip_s3"] = True
             return body
 
+        if not body.get("success") and body.get("errorCode") == "E0301":
+            raise UploadSyncInProgressError(
+                str(body.get("errorMsg") or "Sync in progress")
+            )
+
         if not body.get("success"):
             raise RuntimeError(f"upload/apply error: {body}")
 
         return body
+
+    async def _initiate_upload_with_recovery(
+        self,
+        notebook_path: str,
+        target_name: str,
+    ) -> Dict[str, Any]:
+        """Initiate upload with auth recovery and bounded sync-in-progress waits."""
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                return await self._initiate_upload(notebook_path, target_name)
+            except UploadAuthError:
+                if attempts > 1:
+                    raise
+                await self._interactive_reauth()
+            except UploadSyncInProgressError:
+                if attempts >= 6:
+                    raise
+                await asyncio.sleep(min(2 ** attempts, 10))
+
+    async def _wait_for_target_absent(self, target_name: str) -> None:
+        """Wait briefly for a deleted target name to disappear from cloud listing."""
+        for _ in range(10):
+            if not await self._find_file_ids(target_name):
+                return
+            await asyncio.sleep(0.5)
+        raise RuntimeError(f"{target_name} still exists after delete")
+
+    async def _wait_for_stable_single_target(self, target_name: str) -> None:
+        """Verify the upload settled as exactly one target and no generated siblings."""
+        await asyncio.sleep(3)
+        exact_ids = await self._find_file_ids(target_name)
+        blocking_siblings = await self._find_blocking_sibling_names(target_name)
+        if len(exact_ids) != 1 or blocking_siblings:
+            details = {
+                "exact_count": len(exact_ids),
+                "blocking_siblings": blocking_siblings,
+            }
+            raise SupernoteUploadConflictError(
+                f"{target_name} did not settle as a single cloud notebook: {details}"
+            )
 
     async def _upload_to_s3(
         self, file_path: str, upload_info: Dict[str, Any]
@@ -370,7 +488,7 @@ class SupernoteUploader:
         target_name: str,
         upload_info: Dict[str, Any],
     ) -> None:
-        """POST /api/file/upload/finish — links S3 object to the user's cloud account."""
+        """POST /api/file/upload/finish to link S3 object to the account."""
         if not self.page:
             raise RuntimeError("Browser not started")
 
@@ -398,6 +516,30 @@ class SupernoteUploader:
         })
 
         if result["status"] != 200 or not isinstance(result["body"], dict):
-            raise RuntimeError(f"upload/finish failed ({result['status']}): {result['body']}")
+            raise RuntimeError(
+                f"upload/finish failed ({result['status']}): {result['body']}"
+            )
         if not result["body"].get("success"):
             raise RuntimeError(f"upload/finish error: {result['body']}")
+
+
+def _upload_lock(target_name: str) -> asyncio.Lock:
+    key = target_name.casefold()
+    lock = _UPLOAD_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _UPLOAD_LOCKS[key] = lock
+    return lock
+
+
+def _is_blocking_sibling_name(file_name: str, target_stem: str) -> bool:
+    lower_name = file_name.casefold()
+    lower_stem = target_stem.casefold()
+    if not lower_name.endswith(".note"):
+        return False
+    if lower_name.startswith(f"{lower_stem}_") and "conflict" in lower_name:
+        return True
+    return (
+        re.fullmatch(rf"{re.escape(lower_stem)}\(\d+\)\.note", lower_name)
+        is not None
+    )

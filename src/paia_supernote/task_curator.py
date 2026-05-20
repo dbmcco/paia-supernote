@@ -273,10 +273,10 @@ class TaskCurator:
         return response.content[0].text
 
     async def _reorganize_with_zai(self, current_text: str, linear_tasks: list[dict[str, Any]] | None = None) -> str:
-        """Rewrite task page content using the Z.AI coding endpoint."""
+        """Rewrite task page content using the configured OpenAI-compatible endpoint."""
         if not self.zai_api_key:
             raise RuntimeError(
-                "SUPERNOTE_ZAI_API_KEY is required when using the zai rewrite backend"
+                "The configured Supernote model API key is required when using the zai rewrite backend"
             )
 
         tasks_context = ""
@@ -304,11 +304,12 @@ class TaskCurator:
                     "content": f"Current task page content:{tasks_context}\n\n{current_text}",
                 },
             ],
-            "thinking": {"type": "disabled"},
             "temperature": 0,
             "stream": False,
             "max_tokens": 2048,
         }
+        if "openrouter.ai" not in self.zai_base_url:
+            payload["thinking"] = {"type": "disabled"}
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self.zai_base_url}/chat/completions",
