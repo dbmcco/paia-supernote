@@ -36,6 +36,8 @@ class _FakeUploader:
         self.downloaded: list[str] = []
         self.uploaded: list[tuple[str, str]] = []
         self.uploaded_bytes: list[bytes] = []
+        self.download_payloads: dict[str, bytes] = {}
+        self.fail_upload_targets: set[str] = set()
 
     async def list_notebooks(self) -> list[dict]:
         return [
@@ -46,11 +48,13 @@ class _FakeUploader:
 
     async def download_notebook(self, target_name: str) -> bytes:
         self.downloaded.append(target_name)
-        return b"notebook-bytes"
+        return self.download_payloads.get(target_name, b"notebook-bytes")
 
     async def upload_notebook(self, notebook_path: str, target_name: str) -> bool:
         self.uploaded.append((notebook_path, target_name))
         self.uploaded_bytes.append(Path(notebook_path).read_bytes())
+        if target_name in self.fail_upload_targets:
+            raise RuntimeError(f"upload failed for {target_name}")
         return True
 
 
@@ -101,6 +105,46 @@ def _snapshot() -> NotebookSnapshot:
             links_by_page_id={"page-a": []},
             stars_by_page_id={"page-a": True},
         ),
+    )
+
+
+def _target_snapshot() -> NotebookSnapshot:
+    page = PageRecord(
+        page_id="target-page",
+        page_index=0,
+        starred=False,
+        page_metadata={"PAGEID": "target-page"},
+        content_hash="target",
+        image_width=1404,
+        image_height=1872,
+    )
+    return NotebookSnapshot(
+        notebook_name="Quick",
+        revision="target-rev",
+        page_order=["target-page"],
+        pages={"target-page": page},
+        metadata=NoteMetadataIndex(
+            headings_by_page_id={},
+            keywords_by_page_id={},
+            links_by_page_id={},
+            stars_by_page_id={},
+        ),
+    )
+
+
+def _move_api(tmp_path, uploader: _FakeUploader):
+    organizer_api = _api_module()
+    snapshots = {
+        ("LFW", b"source-bytes"): _snapshot(),
+        ("Quick", b"target-bytes"): _target_snapshot(),
+    }
+    return organizer_api.OrganizerApi(
+        uploader=uploader,
+        snapshot_loader=lambda name, note_bytes: snapshots.get(
+            (name, note_bytes), _snapshot()
+        ),
+        image_cache=_FakeCache(tmp_path / "page.png"),
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
     )
 
 
@@ -282,3 +326,145 @@ async def test_apply_reorder_uploads_reordered_bytes_without_second_download(
     assert uploader.uploaded[0][1] == "LFW.note"
     assert uploader.uploaded_bytes == [b"reordered-bytes"]
     assert uploader.downloaded == ["LFW.note"]
+
+
+@pytest.mark.asyncio
+async def test_move_page_to_notebook_uploads_target_then_source(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organizer_api = _api_module()
+    uploader = _FakeUploader()
+    uploader.download_payloads = {
+        "LFW.note": b"source-bytes",
+        "Quick.note": b"target-bytes",
+    }
+    api = _move_api(tmp_path, uploader)
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "copy_pages_to_end",
+        lambda source, target, *, source_pages: b"target-with-page",
+    )
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "remove_pages",
+        lambda source, *, pages: b"source-without-page",
+    )
+
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "page-b",
+        source_revision="rev-1",
+        target_notebook="Quick",
+    )
+
+    assert result["ok"] is True
+    assert result["source_notebook"] == "LFW"
+    assert result["target_notebook"] == "Quick"
+    assert result["page_id"] == "page-b"
+    assert result["source_revision"] == hashlib.sha256(b"source-without-page").hexdigest()
+    assert result["target_revision"] == hashlib.sha256(b"target-with-page").hexdigest()
+    assert uploader.downloaded == ["LFW.note", "Quick.note"]
+    assert [target for _path, target in uploader.uploaded] == ["Quick.note", "LFW.note"]
+    assert uploader.uploaded_bytes == [b"target-with-page", b"source-without-page"]
+
+
+@pytest.mark.asyncio
+async def test_move_page_to_notebook_rejects_stale_source_revision(tmp_path) -> None:
+    uploader = _FakeUploader()
+    uploader.download_payloads = {"LFW.note": b"source-bytes"}
+    api = _move_api(tmp_path, uploader)
+
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "page-b",
+        source_revision="old-rev",
+        target_notebook="Quick",
+    )
+
+    assert result == {
+        "ok": False,
+        "reason": "stale_revision",
+        "current_revision": "rev-1",
+    }
+    assert uploader.downloaded == ["LFW.note"]
+    assert uploader.uploaded == []
+
+
+@pytest.mark.asyncio
+async def test_move_page_to_notebook_rejects_same_notebook(tmp_path) -> None:
+    uploader = _FakeUploader()
+    api = _move_api(tmp_path, uploader)
+
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "page-b",
+        source_revision="rev-1",
+        target_notebook="LFW",
+    )
+
+    assert result == {"ok": False, "reason": "same_notebook"}
+    assert uploader.downloaded == []
+    assert uploader.uploaded == []
+
+
+@pytest.mark.asyncio
+async def test_move_page_to_notebook_rejects_unknown_source_page(tmp_path) -> None:
+    uploader = _FakeUploader()
+    uploader.download_payloads = {"LFW.note": b"source-bytes"}
+    api = _move_api(tmp_path, uploader)
+
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "missing-page",
+        source_revision="rev-1",
+        target_notebook="Quick",
+    )
+
+    assert result == {
+        "ok": False,
+        "reason": "unknown_page_id",
+        "page_id": "missing-page",
+    }
+    assert uploader.downloaded == ["LFW.note"]
+    assert uploader.uploaded == []
+
+
+@pytest.mark.asyncio
+async def test_move_page_to_notebook_reports_partial_failure_after_target_upload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organizer_api = _api_module()
+    uploader = _FakeUploader()
+    uploader.download_payloads = {
+        "LFW.note": b"source-bytes",
+        "Quick.note": b"target-bytes",
+    }
+    uploader.fail_upload_targets = {"LFW.note"}
+    api = _move_api(tmp_path, uploader)
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "copy_pages_to_end",
+        lambda source, target, *, source_pages: b"target-with-page",
+    )
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "remove_pages",
+        lambda source, *, pages: b"source-without-page",
+    )
+
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "page-b",
+        source_revision="rev-1",
+        target_notebook="Quick",
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "partial_move_target_uploaded_source_failed"
+    assert result["source_notebook"] == "LFW"
+    assert result["target_notebook"] == "Quick"
+    assert result["page_id"] == "page-b"
+    assert "upload failed for LFW.note" in result["error"]
+    assert [target for _path, target in uploader.uploaded] == ["Quick.note", "LFW.note"]

@@ -70,6 +70,9 @@ def test_render_index_sidebar_links_select_notebooks_through_organizer_route() -
 
     assert 'href="/organizer?notebook=LFW"' in html
     assert 'href="/organizer?notebook=Quick%20Note"' in html
+    assert 'data-drop-target="notebook"' in html
+    assert 'data-notebook-name="LFW"' in html
+    assert 'data-notebook-name="Quick Note"' in html
     assert 'href="/notebooks/' not in html
 
 
@@ -117,6 +120,25 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
     assert "setPointerCapture" in html
     assert "closest('.drag-handle')" in html
     assert "drop" in html
+
+
+def test_render_index_includes_cross_note_move_drop_contract() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert "movePageToNotebook" in html
+    assert "/move" in html
+    assert "Moving page to" in html
+    assert "Moved page to" in html
+    assert "Apply or undo the current reorder before moving pages to another note." in html
+    assert "partial_move_target_uploaded_source_failed" in html
+    assert "dragover" in html
+    assert "dragenter" in html
+    assert "dragleave" in html
 
 
 def test_render_index_uses_deterministic_drag_slots_and_live_page_numbers() -> None:

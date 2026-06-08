@@ -81,6 +81,28 @@ def make_organizer_handler(
         def _route_post(self, path: str, payload: dict[str, Any]) -> None:
             parts = [unquote(part) for part in path.strip("/").split("/") if part]
             if (
+                len(parts) == 6
+                and parts[:2] == ["api", "notebooks"]
+                and parts[3] == "pages"
+                and parts[5] == "move"
+            ):
+                source_revision = str(payload.get("source_revision") or "")
+                target_notebook = str(payload.get("target_notebook") or "")
+                if not source_revision or not target_notebook:
+                    raise ValueError(
+                        "source_revision and target_notebook are required"
+                    )
+                result = self._run_async(
+                    self.organizer_api.move_page_to_notebook(
+                        parts[2],
+                        parts[4],
+                        source_revision=source_revision,
+                        target_notebook=target_notebook,
+                    )
+                )
+                self._send_move_result(result)
+                return
+            if (
                 len(parts) == 5
                 and parts[:2] == ["api", "notebooks"]
                 and parts[3] == "reorder"
@@ -148,6 +170,18 @@ def make_organizer_handler(
                     status = HTTPStatus.CONFLICT
                 elif reason in {"invalid_page_order", "unsupported_link_metadata"}:
                     status = HTTPStatus.UNPROCESSABLE_ENTITY
+            self._send_json(result, status=status)
+
+        def _send_move_result(self, result: dict[str, Any]) -> None:
+            status = HTTPStatus.OK
+            if result.get("ok") is False:
+                reason = result.get("reason")
+                if reason == "stale_revision":
+                    status = HTTPStatus.CONFLICT
+                elif reason in {"same_notebook", "unknown_page_id"}:
+                    status = HTTPStatus.UNPROCESSABLE_ENTITY
+                elif reason == "partial_move_target_uploaded_source_failed":
+                    status = HTTPStatus.INTERNAL_SERVER_ERROR
             self._send_json(result, status=status)
 
         def _send_file(self, path: Path, media_type: str) -> None:

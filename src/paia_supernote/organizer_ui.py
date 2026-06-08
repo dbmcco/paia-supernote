@@ -56,7 +56,7 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
         name = str(notebook.get("name") or "")
         active = " active" if name == current else ""
         items.append(
-            f'<a class="notebook{active}" href="/organizer?notebook={quote(name)}">{escape(name)}</a>'
+            f'<a class="notebook{active}" href="/organizer?notebook={quote(name)}" data-drop-target="notebook" data-notebook-name="{escape(name)}">{escape(name)}</a>'
         )
     return "\n".join(items)
 
@@ -123,6 +123,7 @@ h2 { font-size: 12px; text-transform: uppercase; color: #69717c; margin-bottom: 
 .notebook-list, .sidebar section { display: flex; flex-direction: column; gap: 8px; }
 .notebook { color: #26313d; text-decoration: none; padding: 7px 8px; border-radius: 6px; }
 .notebook.active { background: #e8edf2; }
+.notebook.drop-hover { outline: 2px solid #6b8fab; outline-offset: 2px; background: #eef5f8; }
 label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .workspace { min-width: 0; display: flex; flex-direction: column; }
 .toolbar { height: 64px; border-bottom: 1px solid #d6d9dd; background: #ffffff; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 18px; }
@@ -156,9 +157,11 @@ const zoom = document.querySelector('.zoom input');
 const undoOrder = document.querySelector('#undo-order');
 const applyOrder = document.querySelector('#apply-order');
 const statusEl = document.querySelector('#organizer-status');
-const originalOrder = currentOrder();
+let originalOrder = currentOrder();
 let draggedTile = null;
 let pointerDragging = false;
+let movingPage = false;
+let dragStartedDirty = false;
 let dragSlots = [];
 
 zoom?.addEventListener('input', () => {
@@ -190,7 +193,7 @@ function isDirty() {
 function updateOrderButtons() {
   const dirty = isDirty();
   if (undoOrder) undoOrder.disabled = !dirty;
-  if (applyOrder) applyOrder.disabled = !dirty;
+  if (applyOrder) applyOrder.disabled = !dirty || movingPage;
 }
 
 function renumberTiles() {
@@ -242,6 +245,7 @@ function moveDraggedTile(clientX, clientY) {
 
 function startDrag(tile) {
   draggedTile = tile;
+  dragStartedDirty = isDirty();
   tile.classList.add('dragging');
   buildInsertionSlots();
 }
@@ -249,6 +253,7 @@ function startDrag(tile) {
 function clearDrag() {
   draggedTile?.classList.remove('dragging');
   draggedTile = null;
+  dragStartedDirty = false;
   dragSlots = [];
 }
 
@@ -261,6 +266,15 @@ function restoreOriginalOrder() {
   renumberTiles();
   setStatus('');
   updateOrderButtons();
+}
+
+function resetToOriginalOrderForMove() {
+  if (!grid) return;
+  const byId = Object.fromEntries([...grid.querySelectorAll('.page-tile')].map((tile) => [tile.dataset.pageId, tile]));
+  originalOrder.forEach((pageId) => {
+    if (byId[pageId]) grid.appendChild(byId[pageId]);
+  });
+  renumberTiles();
 }
 
 function endpoint(action) {
@@ -298,6 +312,57 @@ async function applyReorder() {
     window.location.assign(`/organizer?notebook=${encodeURIComponent(grid.dataset.notebook)}`);
   } catch (error) {
     setStatus(error.message, 'error');
+    updateOrderButtons();
+  }
+}
+
+function moveEndpoint(pageId) {
+  return `/api/notebooks/${encodeURIComponent(grid.dataset.notebook)}/pages/${encodeURIComponent(pageId)}/move`;
+}
+
+async function postMove(pageId, targetNotebook) {
+  const response = await fetch(moveEndpoint(pageId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source_revision: grid.dataset.revision,
+      target_notebook: targetNotebook,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.ok === false) {
+    const message = payload.reason === 'partial_move_target_uploaded_source_failed'
+      ? `Page may now exist in both notes: ${payload.error || payload.reason}`
+      : payload.error || payload.reason || 'move failed';
+    throw new Error(message);
+  }
+  return payload;
+}
+
+async function movePageToNotebook(tile, targetNotebook) {
+  if (!grid || !tile || movingPage) return;
+  if (targetNotebook === grid.dataset.notebook) return;
+  if (dragStartedDirty) {
+    setStatus('Apply or undo the current reorder before moving pages to another note.', 'error');
+    return;
+  }
+  movingPage = true;
+  updateOrderButtons();
+  setStatus(`Moving page to ${targetNotebook}...`);
+  try {
+    resetToOriginalOrderForMove();
+    const pageId = tile.dataset.pageId;
+    const payload = await postMove(pageId, targetNotebook);
+    tile.remove();
+    if (payload.source_revision) grid.dataset.revision = payload.source_revision;
+    originalOrder = currentOrder();
+    renumberTiles();
+    setStatus(`Moved page to ${targetNotebook}.`, 'success');
+  } catch (error) {
+    setStatus(error.message, 'error');
+  } finally {
+    movingPage = false;
+    clearDrag();
     updateOrderButtons();
   }
 }
@@ -360,6 +425,28 @@ grid?.addEventListener('pointercancel', endPointerDrag);
 
 undoOrder?.addEventListener('click', restoreOriginalOrder);
 applyOrder?.addEventListener('click', applyReorder);
+
+document.querySelectorAll('[data-drop-target="notebook"]').forEach((target) => {
+  target.addEventListener('dragenter', (event) => {
+    if (!draggedTile || target.dataset.notebookName === grid?.dataset.notebook) return;
+    event.preventDefault();
+    target.classList.add('drop-hover');
+  });
+  target.addEventListener('dragover', (event) => {
+    if (!draggedTile || target.dataset.notebookName === grid?.dataset.notebook) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  });
+  target.addEventListener('dragleave', () => {
+    target.classList.remove('drop-hover');
+  });
+  target.addEventListener('drop', async (event) => {
+    if (!draggedTile || target.dataset.notebookName === grid?.dataset.notebook) return;
+    event.preventDefault();
+    target.classList.remove('drop-hover');
+    await movePageToNotebook(draggedTile, target.dataset.notebookName);
+  });
+});
 
 function applyFilters() {
   const active = [...document.querySelectorAll('[data-filter]:checked')].map((el) => el.dataset.filter);

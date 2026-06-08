@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from PIL import Image
 
-from paia_supernote import note_reorder
+from paia_supernote import note_page_ops, note_reorder
 from paia_supernote.note_snapshot import NotebookSnapshot, PageRecord
 
 
@@ -142,20 +142,86 @@ class OrganizerApi:
             }
 
         target_name = f"{notebook_name}.note"
-        tmp_path = _write_temp_note(reordered_bytes)
-        try:
-            await self.uploader.upload_notebook(tmp_path, target_name)
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        await self._upload_note_bytes(reordered_bytes, target_name)
         return {
             "ok": True,
             "revision": hashlib.sha256(reordered_bytes).hexdigest(),
         }
 
+    async def move_page_to_notebook(
+        self,
+        source_notebook: str,
+        page_id: str,
+        *,
+        source_revision: str,
+        target_notebook: str,
+    ) -> dict[str, Any]:
+        if source_notebook == target_notebook:
+            return {"ok": False, "reason": "same_notebook"}
+
+        source_bytes = await self.uploader.download_notebook(f"{source_notebook}.note")
+        source_snapshot = self.snapshot_loader(source_notebook, source_bytes)
+        if source_snapshot.revision != source_revision:
+            return {
+                "ok": False,
+                "reason": "stale_revision",
+                "current_revision": source_snapshot.revision,
+            }
+        if page_id not in source_snapshot.page_order:
+            return {
+                "ok": False,
+                "reason": "unknown_page_id",
+                "page_id": page_id,
+            }
+
+        source_page_index = source_snapshot.page_order.index(page_id)
+        target_bytes = await self.uploader.download_notebook(f"{target_notebook}.note")
+        target_bytes_with_page = note_page_ops.copy_pages_to_end(
+            source_bytes,
+            target_bytes,
+            source_pages=[source_page_index],
+        )
+        source_bytes_without_page = note_page_ops.remove_pages(
+            source_bytes,
+            pages=[source_page_index],
+        )
+
+        await self._upload_note_bytes(target_bytes_with_page, f"{target_notebook}.note")
+        try:
+            await self._upload_note_bytes(
+                source_bytes_without_page,
+                f"{source_notebook}.note",
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": "partial_move_target_uploaded_source_failed",
+                "source_notebook": source_notebook,
+                "target_notebook": target_notebook,
+                "page_id": page_id,
+                "error": str(exc),
+            }
+
+        return {
+            "ok": True,
+            "source_notebook": source_notebook,
+            "target_notebook": target_notebook,
+            "page_id": page_id,
+            "source_revision": hashlib.sha256(source_bytes_without_page).hexdigest(),
+            "target_revision": hashlib.sha256(target_bytes_with_page).hexdigest(),
+        }
+
     async def _load_snapshot(self, notebook_name: str) -> NotebookSnapshot:
         note_bytes = await self.uploader.download_notebook(f"{notebook_name}.note")
         return self.snapshot_loader(notebook_name, note_bytes)
+
+    async def _upload_note_bytes(self, note_bytes: bytes, target_name: str) -> None:
+        tmp_path = _write_temp_note(note_bytes)
+        try:
+            await self.uploader.upload_notebook(tmp_path, target_name)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
 
 def _write_temp_note(note_bytes: bytes) -> str:

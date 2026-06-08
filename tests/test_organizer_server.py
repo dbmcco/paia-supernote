@@ -27,8 +27,10 @@ class _FakeOrganizerApi:
         self.images: list[tuple[str, str, float]] = []
         self.preview_result: dict = {"ok": True}
         self.apply_result: dict = {"ok": True, "snapshot": {}}
+        self.move_result: dict = {"ok": True}
         self.preview_requests: list[tuple[str, str, list[str]]] = []
         self.apply_requests: list[tuple[str, str, list[str]]] = []
+        self.move_requests: list[tuple[str, str, str, str]] = []
 
     async def list_notebooks(self) -> list[dict]:
         return [
@@ -88,6 +90,19 @@ class _FakeOrganizerApi:
     ) -> dict:
         self.apply_requests.append((notebook_name, expected_revision, page_order))
         return self.apply_result
+
+    async def move_page_to_notebook(
+        self,
+        source_notebook: str,
+        page_id: str,
+        *,
+        source_revision: str,
+        target_notebook: str,
+    ) -> dict:
+        self.move_requests.append(
+            (source_notebook, page_id, source_revision, target_notebook)
+        )
+        return self.move_result
 
 
 class _RunningServer:
@@ -225,6 +240,71 @@ def test_apply_reorder_post_route_returns_api_result(tmp_path: Path) -> None:
     assert status == 200
     assert body == {"ok": True, "snapshot": {"notebook_name": "LFW"}}
     assert api.apply_requests == [("LFW", "rev-1", ["page-a"])]
+
+
+def test_move_page_post_route_returns_api_result(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    api.move_result = {
+        "ok": True,
+        "source_notebook": "LFW",
+        "target_notebook": "Quick",
+        "page_id": "page-a",
+    }
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/pages/page-a/move",
+            {"source_revision": "rev-1", "target_notebook": "Quick"},
+        )
+
+    assert status == 200
+    assert body == {
+        "ok": True,
+        "source_notebook": "LFW",
+        "target_notebook": "Quick",
+        "page_id": "page-a",
+    }
+    assert api.move_requests == [("LFW", "page-a", "rev-1", "Quick")]
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_status"),
+    [
+        ("stale_revision", 409),
+        ("same_notebook", 422),
+        ("unknown_page_id", 422),
+        ("partial_move_target_uploaded_source_failed", 500),
+    ],
+)
+def test_move_page_post_route_maps_domain_failures(
+    tmp_path: Path,
+    reason: str,
+    expected_status: int,
+) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    api.move_result = {"ok": False, "reason": reason, "error": "move failed"}
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/pages/page-a/move",
+            {"source_revision": "rev-1", "target_notebook": "Quick"},
+        )
+
+    assert status == expected_status
+    assert body["reason"] == reason
+
+
+def test_move_page_post_route_rejects_missing_payload_fields(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/pages/page-a/move",
+            {"source_revision": "rev-1"},
+        )
+
+    assert status == 400
+    assert "source_revision and target_notebook are required" in body["error"]
 
 
 def test_reorder_post_route_maps_stale_revision_to_conflict(tmp_path: Path) -> None:
