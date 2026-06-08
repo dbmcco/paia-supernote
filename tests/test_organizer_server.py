@@ -24,7 +24,7 @@ class _FakeOrganizerApi:
         Image.new("RGB", (12, 8), "white").save(image_path, format="PNG")
         self.image_path = image_path
         self.snapshots: list[str] = []
-        self.images: list[tuple[str, str, float]] = []
+        self.images: list[tuple[str, str, float, str | None]] = []
         self.preview_result: dict = {"ok": True}
         self.apply_result: dict = {"ok": True, "snapshot": {}}
         self.move_result: dict = {"ok": True}
@@ -60,9 +60,14 @@ class _FakeOrganizerApi:
         }
 
     async def get_page_image(
-        self, notebook_name: str, page_id: str, *, scale: float
+        self,
+        notebook_name: str,
+        page_id: str,
+        *,
+        scale: float,
+        revision: str | None = None,
     ) -> dict:
-        self.images.append((notebook_name, page_id, scale))
+        self.images.append((notebook_name, page_id, scale, revision))
         return {
             "path": str(self.image_path),
             "media_type": "image/png",
@@ -199,7 +204,22 @@ def test_page_image_route_streams_cached_png(tmp_path: Path) -> None:
 
     assert content_type == "image/png"
     assert body.startswith(b"\x89PNG")
-    assert api.images == [("LFW", "page-a", 0.5)]
+    assert response.headers["Cache-Control"] is None
+    assert api.images == [("LFW", "page-a", 0.5, None)]
+
+
+def test_page_image_route_passes_revision_to_api(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+
+    with _RunningServer(api) as server:
+        with urlopen(
+            f"{server.base_url}/api/notebooks/LFW/pages/page-a/image?scale=0.5&revision=rev-1",
+            timeout=5,
+        ) as response:
+            response.read()
+
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert api.images == [("LFW", "page-a", 0.5, "rev-1")]
 
 
 def test_unknown_route_returns_404(tmp_path: Path) -> None:

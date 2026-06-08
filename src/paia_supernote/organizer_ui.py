@@ -64,6 +64,7 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
 def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
     pages = snapshot.get("pages") or {}
     page_order = snapshot.get("page_order") or []
+    revision = str(snapshot.get("revision") or "")
     tiles = []
     for index, page_id in enumerate(page_order):
         page = dict(pages.get(page_id) or {})
@@ -82,12 +83,12 @@ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
         )
         image_src = (
             f"/api/notebooks/{quote(notebook_name)}/pages/{quote(str(page_id))}"
-            "/image?scale=0.25"
+            f"/image?scale=0.25&amp;revision={quote(revision)}"
         )
         tiles.append(
             f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-position="{index + 1}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
   <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}</div>
-  <img src="{image_src}" alt="Page {page_number}">
+  <img src="{image_src}" alt="Page {page_number}" loading="lazy" decoding="async">
 </article>"""
         )
     return "\n".join(tiles)

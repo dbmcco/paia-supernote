@@ -90,7 +90,9 @@ def test_render_index_marks_metadata_badges_per_page() -> None:
     assert '>Heading<' in html
     assert '>Keyword<' in html
     assert '>Link<' in html
-    assert 'src="/api/notebooks/LFW/pages/page-a/image?scale=0.25"' in html
+    assert 'src="/api/notebooks/LFW/pages/page-a/image?scale=0.25&amp;revision=rev-1"' in html
+    assert 'loading="lazy"' in html
+    assert 'decoding="async"' in html
 
 
 def test_render_index_includes_drag_apply_controls_and_contract() -> None:

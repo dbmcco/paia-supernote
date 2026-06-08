@@ -29,6 +29,7 @@ class OrganizerApi:
         self.snapshot_loader = snapshot_loader
         self.image_cache = image_cache
         self.page_renderer = page_renderer
+        self._snapshots: dict[tuple[str, str], NotebookSnapshot] = {}
 
     async def list_notebooks(self) -> list[dict[str, Any]]:
         entries = await _list_note_entries(self.uploader)
@@ -57,8 +58,9 @@ class OrganizerApi:
         page_id: str,
         *,
         scale: float,
+        revision: str | None = None,
     ) -> dict[str, Any]:
-        snapshot = await self._load_snapshot(notebook_name)
+        snapshot = await self._snapshot_for_image(notebook_name, revision)
         if page_id not in snapshot.pages:
             raise KeyError(f"unknown page_id: {page_id}")
         cached = self.image_cache.get_or_render(
@@ -213,7 +215,26 @@ class OrganizerApi:
 
     async def _load_snapshot(self, notebook_name: str) -> NotebookSnapshot:
         note_bytes = await self.uploader.download_notebook(f"{notebook_name}.note")
-        return self.snapshot_loader(notebook_name, note_bytes)
+        snapshot = self.snapshot_loader(notebook_name, note_bytes)
+        self._snapshots[(snapshot.notebook_name, snapshot.revision)] = snapshot
+        return snapshot
+
+    async def _snapshot_for_image(
+        self,
+        notebook_name: str,
+        revision: str | None,
+    ) -> NotebookSnapshot:
+        if revision:
+            cached = self._snapshots.get((notebook_name, revision))
+            if cached is not None:
+                return cached
+            snapshot = await self._load_snapshot(notebook_name)
+            if snapshot.revision != revision:
+                raise KeyError(
+                    f"cached snapshot not found for {notebook_name}@{revision}"
+                )
+            return snapshot
+        return await self._load_snapshot(notebook_name)
 
     async def _upload_note_bytes(self, note_bytes: bytes, target_name: str) -> None:
         tmp_path = _write_temp_note(note_bytes)

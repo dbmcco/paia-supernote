@@ -214,6 +214,43 @@ async def test_get_page_image_uses_snapshot_revision_page_id_and_cache(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_get_page_image_uses_cached_revision_without_redownloading(tmp_path) -> None:
+    organizer_api = _api_module()
+    uploader = _FakeUploader()
+    cache = _FakeCache(tmp_path / "page.png")
+    api = organizer_api.OrganizerApi(
+        uploader=uploader,
+        snapshot_loader=lambda _name, _bytes: _snapshot(),
+        image_cache=cache,
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
+    )
+
+    await api.get_snapshot("LFW")
+    result = await api.get_page_image("LFW", "page-a", scale=0.25, revision="rev-1")
+
+    assert result["media_type"] == "image/png"
+    assert uploader.downloaded == ["LFW.note"]
+    assert cache.requests[0]["revision"] == "rev-1"
+
+
+@pytest.mark.asyncio
+async def test_get_page_image_rejects_stale_revision_after_fallback_download(tmp_path) -> None:
+    organizer_api = _api_module()
+    uploader = _FakeUploader()
+    api = organizer_api.OrganizerApi(
+        uploader=uploader,
+        snapshot_loader=lambda _name, _bytes: _snapshot(),
+        image_cache=_FakeCache(tmp_path / "page.png"),
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
+    )
+
+    with pytest.raises(KeyError, match="cached snapshot not found"):
+        await api.get_page_image("LFW", "page-a", scale=0.25, revision="stale-rev")
+
+    assert uploader.downloaded == ["LFW.note"]
+
+
+@pytest.mark.asyncio
 async def test_preview_reorder_rejects_stale_revision(tmp_path) -> None:
     organizer_api = _api_module()
     api = organizer_api.OrganizerApi(

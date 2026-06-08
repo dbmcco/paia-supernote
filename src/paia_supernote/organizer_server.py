@@ -70,10 +70,24 @@ def make_organizer_handler(
                 and parts[5] == "image"
             ):
                 scale = _first_float(query.get("scale"), default=0.25)
+                revision = _first(query.get("revision"))
                 image = self._run_async(
-                    self.organizer_api.get_page_image(parts[2], parts[4], scale=scale)
+                    self.organizer_api.get_page_image(
+                        parts[2],
+                        parts[4],
+                        scale=scale,
+                        revision=revision,
+                    )
                 )
-                self._send_file(Path(image["path"]), image.get("media_type", "image/png"))
+                self._send_file(
+                    Path(image["path"]),
+                    image.get("media_type", "image/png"),
+                    cache_control=(
+                        "public, max-age=31536000, immutable"
+                        if revision
+                        else None
+                    ),
+                )
                 return
 
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -184,11 +198,19 @@ def make_organizer_handler(
                     status = HTTPStatus.INTERNAL_SERVER_ERROR
             self._send_json(result, status=status)
 
-        def _send_file(self, path: Path, media_type: str) -> None:
+        def _send_file(
+            self,
+            path: Path,
+            media_type: str,
+            *,
+            cache_control: str | None = None,
+        ) -> None:
             body = path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", media_type)
             self.send_header("Content-Length", str(len(body)))
+            if cache_control:
+                self.send_header("Cache-Control", cache_control)
             self.end_headers()
             self.wfile.write(body)
 
