@@ -5,7 +5,7 @@ import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 from PIL import Image
@@ -25,6 +25,10 @@ class _FakeOrganizerApi:
         self.image_path = image_path
         self.snapshots: list[str] = []
         self.images: list[tuple[str, str, float]] = []
+        self.preview_result: dict = {"ok": True}
+        self.apply_result: dict = {"ok": True, "snapshot": {}}
+        self.preview_requests: list[tuple[str, str, list[str]]] = []
+        self.apply_requests: list[tuple[str, str, list[str]]] = []
 
     async def list_notebooks(self) -> list[dict]:
         return [
@@ -65,6 +69,26 @@ class _FakeOrganizerApi:
             "cache_hit": False,
         }
 
+    async def preview_reorder(
+        self,
+        notebook_name: str,
+        *,
+        expected_revision: str,
+        page_order: list[str],
+    ) -> dict:
+        self.preview_requests.append((notebook_name, expected_revision, page_order))
+        return self.preview_result
+
+    async def apply_reorder(
+        self,
+        notebook_name: str,
+        *,
+        expected_revision: str,
+        page_order: list[str],
+    ) -> dict:
+        self.apply_requests.append((notebook_name, expected_revision, page_order))
+        return self.apply_result
+
 
 class _RunningServer:
     def __init__(self, api: _FakeOrganizerApi, *, async_runner=None) -> None:
@@ -92,6 +116,20 @@ def _get_text(url: str) -> str:
     with urlopen(url, timeout=5) as response:
         assert response.status == 200
         return response.read().decode("utf-8")
+
+
+def _post_json(url: str, payload: dict) -> tuple[int, dict]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_api_routes_use_injected_async_runner(tmp_path: Path) -> None:
@@ -157,3 +195,86 @@ def test_unknown_route_returns_404(tmp_path: Path) -> None:
             urlopen(f"{server.base_url}/missing", timeout=5)
 
     assert exc_info.value.code == 404
+
+
+def test_preview_reorder_post_route_returns_api_result(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    api.preview_result = {"ok": True, "revision": "rev-1"}
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/reorder/preview",
+            {"expected_revision": "rev-1", "page_order": ["page-a"]},
+        )
+
+    assert status == 200
+    assert body == {"ok": True, "revision": "rev-1"}
+    assert api.preview_requests == [("LFW", "rev-1", ["page-a"])]
+
+
+def test_apply_reorder_post_route_returns_api_result(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    api.apply_result = {"ok": True, "snapshot": {"notebook_name": "LFW"}}
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/reorder/apply",
+            {"expected_revision": "rev-1", "page_order": ["page-a"]},
+        )
+
+    assert status == 200
+    assert body == {"ok": True, "snapshot": {"notebook_name": "LFW"}}
+    assert api.apply_requests == [("LFW", "rev-1", ["page-a"])]
+
+
+def test_reorder_post_route_maps_stale_revision_to_conflict(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    api.preview_result = {
+        "ok": False,
+        "reason": "stale_revision",
+        "current_revision": "rev-2",
+    }
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/reorder/preview",
+            {"expected_revision": "rev-1", "page_order": ["page-a"]},
+        )
+
+    assert status == 409
+    assert body["reason"] == "stale_revision"
+
+
+def test_reorder_post_route_maps_invalid_order_to_unprocessable(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    api.preview_result = {
+        "ok": False,
+        "reason": "invalid_page_order",
+        "error": "bad order",
+    }
+
+    with _RunningServer(api) as server:
+        status, body = _post_json(
+            f"{server.base_url}/api/notebooks/LFW/reorder/preview",
+            {"expected_revision": "rev-1", "page_order": ["page-a"]},
+        )
+
+    assert status == 422
+    assert body["reason"] == "invalid_page_order"
+
+
+def test_reorder_post_route_rejects_malformed_json(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    request = Request(
+        "http://example.invalid",
+        data=b"{not-json",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with _RunningServer(api) as server:
+        request.full_url = f"{server.base_url}/api/notebooks/LFW/reorder/preview"
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(request, timeout=5)
+
+    assert exc_info.value.code == 400

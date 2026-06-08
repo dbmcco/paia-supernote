@@ -32,6 +32,20 @@ def make_organizer_handler(
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
 
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            try:
+                self._route_post(parsed.path, self._read_json_body())
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except KeyError as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
         def log_message(self, _format: str, *_args: Any) -> None:
             return
 
@@ -64,6 +78,39 @@ def make_organizer_handler(
 
             self.send_error(HTTPStatus.NOT_FOUND)
 
+        def _route_post(self, path: str, payload: dict[str, Any]) -> None:
+            parts = [unquote(part) for part in path.strip("/").split("/") if part]
+            if (
+                len(parts) == 5
+                and parts[:2] == ["api", "notebooks"]
+                and parts[3] == "reorder"
+                and parts[4] in {"preview", "apply"}
+            ):
+                expected_revision = str(payload.get("expected_revision") or "")
+                page_order = payload.get("page_order")
+                if not expected_revision or not isinstance(page_order, list):
+                    raise ValueError("expected_revision and page_order are required")
+                page_order = [str(page_id) for page_id in page_order]
+                if parts[4] == "preview":
+                    result = self._run_async(
+                        self.organizer_api.preview_reorder(
+                            parts[2],
+                            expected_revision=expected_revision,
+                            page_order=page_order,
+                        )
+                    )
+                else:
+                    result = self._run_async(
+                        self.organizer_api.apply_reorder(
+                            parts[2],
+                            expected_revision=expected_revision,
+                            page_order=page_order,
+                        )
+                    )
+                self._send_reorder_result(result)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+
         def _send_organizer(self, query: dict[str, list[str]]) -> None:
             notebooks = self._run_async(self.organizer_api.list_notebooks())
             selected = _first(query.get("notebook"))
@@ -93,6 +140,16 @@ def make_organizer_handler(
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_reorder_result(self, result: dict[str, Any]) -> None:
+            status = HTTPStatus.OK
+            if result.get("ok") is False:
+                reason = result.get("reason")
+                if reason == "stale_revision":
+                    status = HTTPStatus.CONFLICT
+                elif reason in {"invalid_page_order", "unsupported_link_metadata"}:
+                    status = HTTPStatus.UNPROCESSABLE_ENTITY
+            self._send_json(result, status=status)
+
         def _send_file(self, path: Path, media_type: str) -> None:
             body = path.read_bytes()
             self.send_response(HTTPStatus.OK)
@@ -100,6 +157,17 @@ def make_organizer_handler(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _read_json_body(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length") or "0")
+            raw_body = self.rfile.read(length)
+            try:
+                payload = json.loads(raw_body.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError("malformed JSON body") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("JSON body must be an object")
+            return payload
 
     return OrganizerRequestHandler
 
