@@ -198,6 +198,7 @@ let pointerDragging = false;
 let movingPage = false;
 let dragStartedDirty = false;
 let dragSlots = [];
+let pointerDropTarget = null;
 
 zoom?.addEventListener('input', () => {
   grid?.style.setProperty('--tile-width', `${zoom.value}px`);
@@ -290,6 +291,7 @@ function clearDrag() {
   draggedTile = null;
   dragStartedDirty = false;
   dragSlots = [];
+  updatePointerDropTarget(null);
 }
 
 function restoreOriginalOrder() {
@@ -418,6 +420,19 @@ function toggleMoveMenu(menu) {
   options.hidden = !willOpen;
 }
 
+function notebookDropTargetFromPointer(clientX, clientY) {
+  const target = document.elementFromPoint(clientX, clientY)?.closest('[data-drop-target="notebook"]');
+  if (!target || target.dataset.notebookName === grid?.dataset.notebook) return null;
+  return target;
+}
+
+function updatePointerDropTarget(target) {
+  if (pointerDropTarget === target) return;
+  pointerDropTarget?.classList.remove('drop-hover');
+  pointerDropTarget = target;
+  pointerDropTarget?.classList.add('drop-hover');
+}
+
 grid?.addEventListener('dragstart', (event) => {
   if (event.target.closest('.move-menu')) {
     event.preventDefault();
@@ -459,12 +474,21 @@ grid?.addEventListener('pointerdown', (event) => {
 grid?.addEventListener('pointermove', (event) => {
   if (!pointerDragging) return;
   event.preventDefault();
+  const target = notebookDropTargetFromPointer(event.clientX, event.clientY);
+  updatePointerDropTarget(target);
+  if (target) return;
   moveDraggedTile(event.clientX, event.clientY);
 });
 
-function endPointerDrag() {
+async function endPointerDrag(event) {
   if (!pointerDragging) return;
+  const target = pointerDropTarget || notebookDropTargetFromPointer(event.clientX, event.clientY);
   pointerDragging = false;
+  if (target && draggedTile) {
+    await movePageToNotebook(draggedTile, target.dataset.notebookName);
+    updatePointerDropTarget(null);
+    return;
+  }
   clearDrag();
   setStatus('');
   updateOrderButtons();

@@ -143,6 +143,22 @@ def test_render_index_includes_cross_note_move_drop_contract() -> None:
     assert "dragleave" in html
 
 
+def test_render_index_supports_pointer_drop_to_sidebar_notebook() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert "function notebookDropTargetFromPointer" in html
+    assert "function updatePointerDropTarget" in html
+    assert "pointerDropTarget" in html
+    assert "await movePageToNotebook(draggedTile, target.dataset.notebookName)" in html
+    assert "target.classList.add('drop-hover')" in html
+    assert "target.classList.remove('drop-hover')" in html
+
+
 def test_render_index_includes_per_card_move_menu_for_other_notes() -> None:
     organizer_ui = _ui_module()
 
@@ -202,7 +218,6 @@ def test_render_index_uses_deterministic_drag_slots_and_live_page_numbers() -> N
     assert "function insertionIndexFromPointer" in html
     assert "function renumberTiles" in html
     assert "renumberTiles();" in html
-    assert "document.elementFromPoint" not in html
     assert "clientX > rect.left + rect.width / 2" not in html
 
 
