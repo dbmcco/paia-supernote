@@ -86,7 +86,7 @@ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
         )
         tiles.append(
             f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
-  <div class="page-meta"><span>Page {page_number}</span>{badges}</div>
+  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span>Page {page_number}</span>{badges}</div>
   <img src="{image_src}" alt="Page {page_number}">
 </article>"""
         )
@@ -137,6 +137,8 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 .page-tile { background: #ffffff; border: 1px solid #d6d9dd; border-radius: 8px; min-width: 0; overflow: hidden; }
 .page-tile.dragging { opacity: .55; border-color: #6b8fab; }
 .page-meta { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #e2e5e8; font-size: 13px; white-space: nowrap; }
+.drag-handle { min-height: 24px; width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; color: #5c6874; background: #f8f9fa; border-color: #ccd3da; font-size: 11px; line-height: 1; }
+.drag-handle:active { cursor: grabbing; }
 .badge { border: 1px solid #bac4cc; border-radius: 999px; padding: 2px 6px; font-size: 11px; color: #43505c; }
 .page-tile img { display: block; width: 100%; aspect-ratio: 1404 / 1872; object-fit: contain; background: #f9fafb; }
 @media (max-width: 760px) {
@@ -156,6 +158,7 @@ const applyOrder = document.querySelector('#apply-order');
 const statusEl = document.querySelector('#organizer-status');
 const originalOrder = currentOrder();
 let draggedTile = null;
+let pointerDragging = false;
 
 zoom?.addEventListener('input', () => {
   grid?.style.setProperty('--tile-width', `${zoom.value}px`);
@@ -179,6 +182,19 @@ function updateOrderButtons() {
   const dirty = isDirty();
   if (undoOrder) undoOrder.disabled = !dirty;
   if (applyOrder) applyOrder.disabled = !dirty;
+}
+
+function moveDraggedTile(clientX, clientY) {
+  if (!grid || !draggedTile) return;
+  const target = document.elementFromPoint(clientX, clientY)?.closest('.page-tile');
+  if (!target || target === draggedTile || !grid.contains(target)) return;
+  const rect = target.getBoundingClientRect();
+  const after = clientY > rect.top + rect.height / 2 || (
+    clientY >= rect.top &&
+    clientY <= rect.bottom &&
+    clientX > rect.left + rect.width / 2
+  );
+  grid.insertBefore(draggedTile, after ? target.nextSibling : target);
 }
 
 function restoreOriginalOrder() {
@@ -242,9 +258,7 @@ grid?.addEventListener('dragover', (event) => {
   event.preventDefault();
   const target = event.target.closest('.page-tile');
   if (!grid || !draggedTile || !target || target === draggedTile) return;
-  const rect = target.getBoundingClientRect();
-  const after = event.clientY > rect.top + rect.height / 2;
-  grid.insertBefore(draggedTile, after ? target.nextSibling : target);
+  moveDraggedTile(event.clientX, event.clientY);
 });
 
 grid?.addEventListener('drop', (event) => {
@@ -258,6 +272,36 @@ grid?.addEventListener('dragend', () => {
   draggedTile = null;
   updateOrderButtons();
 });
+
+grid?.addEventListener('pointerdown', (event) => {
+  const handle = event.target.closest('.drag-handle');
+  if (!handle) return;
+  const tile = handle.closest('.page-tile');
+  if (!tile) return;
+  event.preventDefault();
+  draggedTile = tile;
+  pointerDragging = true;
+  tile.classList.add('dragging');
+  handle.setPointerCapture?.(event.pointerId);
+});
+
+grid?.addEventListener('pointermove', (event) => {
+  if (!pointerDragging) return;
+  event.preventDefault();
+  moveDraggedTile(event.clientX, event.clientY);
+});
+
+function endPointerDrag() {
+  if (!pointerDragging) return;
+  pointerDragging = false;
+  draggedTile?.classList.remove('dragging');
+  draggedTile = null;
+  setStatus('');
+  updateOrderButtons();
+}
+
+grid?.addEventListener('pointerup', endPointerDrag);
+grid?.addEventListener('pointercancel', endPointerDrag);
 
 undoOrder?.addEventListener('click', restoreOriginalOrder);
 applyOrder?.addEventListener('click', applyReorder);

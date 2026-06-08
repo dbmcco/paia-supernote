@@ -90,11 +90,18 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
     assert 'id="organizer-status"' in html
     assert 'draggable="true"' in html
     assert html.count('draggable="true"') == 2
+    assert html.count('class="drag-handle"') == 2
+    assert 'aria-label="Drag page"' in html
+    assert "touch-action: none" in html
     assert "/reorder/preview" in html
     assert "/reorder/apply" in html
     assert "expected_revision" in html
     assert "page_order" in html
     assert "dragstart" in html
+    assert "pointerdown" in html
+    assert "pointermove" in html
+    assert "setPointerCapture" in html
+    assert "closest('.drag-handle')" in html
     assert "drop" in html
 
 
