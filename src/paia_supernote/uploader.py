@@ -57,17 +57,18 @@ class SupernoteUploader:
         "Application Support/com.ratta.supernote/908410628964298752/Supernote/Note"
     ).expanduser()
 
-    def __init__(self) -> None:
+    def __init__(self, headless: bool = True) -> None:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self._playwright = None
         self._recovery_lock = asyncio.Lock()
+        self._headless = headless
 
     async def start(self) -> None:
         """Launch browser and restore session if available."""
         self._playwright = await async_playwright().start()
-        self.browser = await self._playwright.chromium.launch(headless=True)
+        self.browser = await self._playwright.chromium.launch(headless=self._headless)
 
         if self.SESSION_FILE.exists():
             self.context = await self.browser.new_context(

@@ -176,7 +176,7 @@ def test_ingest_service_passes_configured_zai_api_key_to_reader(tmp_path: Path) 
     assert service.reader is mock_reader_cls.return_value
 
 
-def test_ingest_service_cloud_poller_watches_only_folio_sync_notebooks(
+def test_ingest_service_tracks_watchlist_before_cloud_poller_fallback_starts(
     tmp_path: Path,
 ) -> None:
     config = dict(DEFAULT_CONFIG)
@@ -189,8 +189,8 @@ def test_ingest_service_cloud_poller_watches_only_folio_sync_notebooks(
         uploader=AsyncMock(),
     )
 
-    assert service.cloud_poller.watched_notebooks == {"LFW", "Navicyte", "Synth"}
-    assert service.cloud_poller.process_existing_on_start is False
+    assert service._watched_notebook_keys == {"walk", "tasks", "lfw", "navicyte", "synth"}
+    assert service._cloud_poller is None
 
 
 def test_enrich_service_passes_configured_zai_api_key_to_enricher(tmp_path: Path) -> None:

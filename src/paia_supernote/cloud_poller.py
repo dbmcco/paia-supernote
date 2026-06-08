@@ -169,6 +169,13 @@ class CloudPoller:
             "sequence": "desc",
             "filterType": 0,
         })
+        if result["status"] in (401, 403):
+            log.warning(
+                "cloud_session_expired",
+                status=result["status"],
+                hint="Run 'paia-supernote login' to re-authenticate",
+            )
+            return []
         if result["status"] != 200 or not isinstance(result["body"], dict):
             log.warning("cloud_list_failed", status=result["status"])
             return []

@@ -920,7 +920,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
     subparsers.add_parser("status", help="Show pipeline queue counts")
+    subparsers.add_parser("login", help="Re-authenticate with Supernote Cloud (opens browser)")
     return parser
+
+
+async def _run_login() -> None:
+    """Open a visible browser to refresh the Supernote Cloud session."""
+    from .uploader import SupernoteUploader
+
+    print("Opening Supernote Cloud in browser — log in, then close the tab or press Ctrl+C here.")
+    uploader = SupernoteUploader(headless=False)
+    await uploader.start()
+    try:
+        await uploader._ensure_authenticated()
+        print(f"Session saved to {uploader.SESSION_FILE}")
+    finally:
+        await uploader.stop()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -935,6 +950,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if mode == "status":
         print(render_status(Path(config["state_db_path"])))
+        return
+
+    if mode == "login":
+        asyncio.run(_run_login())
         return
 
     if mode == "service":
