@@ -159,7 +159,7 @@ def test_render_index_supports_pointer_drop_to_sidebar_notebook() -> None:
     assert "target.classList.remove('drop-hover')" in html
 
 
-def test_render_index_includes_per_card_move_menu_for_other_notes() -> None:
+def test_render_index_includes_shared_searchable_move_picker_for_other_notes() -> None:
     organizer_ui = _ui_module()
 
     html = organizer_ui.render_index(
@@ -167,10 +167,12 @@ def test_render_index_includes_per_card_move_menu_for_other_notes() -> None:
         snapshot=_snapshot_payload(),
     )
 
-    assert html.count('class="move-menu"') == 2
+    assert html.count('class="move-dialog"') == 1
+    assert html.count('id="move-search"') == 1
+    assert html.count('class="move-target-list"') == 1
     assert html.count('class="move-button"') == 2
     assert html.count('aria-label="Move page to another note"') == 2
-    assert html.count('<button type="button" data-move-target="notebook"') == 4
+    assert html.count('<button type="button" data-move-target="notebook"') == 2
     assert 'data-move-notebook="Quick"' in html
     assert 'data-move-notebook="Project Notes"' in html
     assert 'data-move-notebook="LFW"' not in html
@@ -178,7 +180,7 @@ def test_render_index_includes_per_card_move_menu_for_other_notes() -> None:
     assert '>Move to Project Notes<' in html
 
 
-def test_render_index_move_menu_uses_existing_cross_note_move_flow() -> None:
+def test_render_index_move_picker_uses_existing_cross_note_move_flow() -> None:
     organizer_ui = _ui_module()
 
     html = organizer_ui.render_index(
@@ -187,11 +189,12 @@ def test_render_index_move_menu_uses_existing_cross_note_move_flow() -> None:
     )
 
     assert "closest('[data-move-target=\"notebook\"]')" in html
-    assert "movePageToNotebook(tile, target.dataset.moveNotebook)" in html
-    assert "closest('.page-tile')" in html
+    assert "movePageToNotebook(activeMoveTile, target.dataset.moveNotebook)" in html
+    assert "activeMoveTile = tile" in html
     assert "event.stopPropagation()" in html
-    assert "toggleMoveMenu" in html
-    assert "closeMoveMenus" in html
+    assert "openMoveDialog" in html
+    assert "closeMoveDialog" in html
+    assert "filterMoveTargets" in html
 
 
 def test_render_index_cross_note_moves_block_preexisting_unapplied_reorder() -> None:
@@ -230,7 +233,7 @@ def test_render_index_allows_dragging_from_card_except_move_menu() -> None:
     )
 
     assert "event.target.closest('.page-tile')" in html
-    assert "event.target.closest('.move-menu')" in html
+    assert "event.target.closest('.move-button, .move-dialog')" in html
     assert "event.target.closest('.drag-handle')" not in html
     assert "cursor: grab" in html
 

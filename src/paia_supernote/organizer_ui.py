@@ -44,6 +44,7 @@ def render_index(*, notebooks: list[dict[str, Any]], snapshot: dict[str, Any]) -
       {_render_pages(notebook_name, snapshot, notebooks)}
     </main>
   </section>
+  {_render_move_dialog(notebook_name, notebooks)}
   <script>{_JS}</script>
 </body>
 </html>
@@ -83,14 +84,13 @@ def _render_pages(
             keyword_count=keyword_count,
             link_count=link_count,
         )
-        move_menu = _render_move_menu(notebook_name, notebooks)
         image_src = (
             f"/api/notebooks/{quote(notebook_name)}/pages/{quote(str(page_id))}"
             f"/image?scale=0.25&amp;revision={quote(revision)}"
         )
         tiles.append(
             f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-position="{index + 1}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
-  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}{move_menu}</div>
+  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}<button class="move-button" type="button" aria-label="Move page to another note" title="Move page to another note">Move</button></div>
   <img src="{image_src}" alt="Page {page_number}" loading="lazy" decoding="async">
 </article>"""
         )
@@ -116,26 +116,37 @@ def _render_badges(
     return "".join(f'<span class="badge">{badge}</span>' for badge in badges)
 
 
-def _render_move_menu(current: str, notebooks: list[dict[str, Any]]) -> str:
-    targets = [
-        str(notebook.get("name") or "")
-        for notebook in notebooks
-        if str(notebook.get("name") or "") and str(notebook.get("name") or "") != current
+def _move_targets(current: str, notebooks: list[dict[str, Any]]) -> list[str]:
+    return [
+        name
+        for name in (str(notebook.get("name") or "") for notebook in notebooks)
+        if name and name != current
     ]
-    if not targets:
-        return ""
+
+
+def _render_move_dialog(current: str, notebooks: list[dict[str, Any]]) -> str:
+    targets = _move_targets(current, notebooks)
     buttons = "".join(
         (
             '<button type="button" data-move-target="notebook" '
-            f'data-move-notebook="{escape(name)}">Move to {escape(name)}</button>'
+            f'data-move-notebook="{escape(name)}" '
+            f'data-move-search="{escape(name.lower())}">Move to {escape(name)}</button>'
         )
         for name in targets
     )
+    empty = '<div class="move-empty" hidden>No matching notes</div>'
     return (
-        '<div class="move-menu">'
-        '<button class="move-button" type="button" '
-        'aria-label="Move page to another note" title="Move page to another note">Move</button>'
-        f'<div class="move-options" hidden>{buttons}</div>'
+        '<div class="move-dialog" role="dialog" aria-modal="true" '
+        'aria-labelledby="move-dialog-title" hidden>'
+        '<div class="move-panel">'
+        '<div class="move-header">'
+        '<h2 id="move-dialog-title">Move page</h2>'
+        '<button class="move-close" type="button" aria-label="Close move dialog">Close</button>'
+        "</div>"
+        '<input id="move-search" class="move-search" type="search" '
+        'placeholder="Find note" autocomplete="off">'
+        f'<div class="move-target-list">{buttons}{empty}</div>'
+        "</div>"
         "</div>"
     )
 
@@ -170,12 +181,18 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 .drag-handle { min-height: 24px; width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; color: #5c6874; background: #f8f9fa; border-color: #ccd3da; font-size: 11px; line-height: 1; }
 .drag-handle:active { cursor: grabbing; }
 .badge { border: 1px solid #bac4cc; border-radius: 999px; padding: 2px 6px; font-size: 11px; color: #43505c; }
-.move-menu { position: relative; margin-left: auto; }
-.move-menu, .move-menu * { cursor: auto; }
-.move-button { min-height: 24px; padding: 0 8px; font-size: 12px; }
-.move-options { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; min-width: 180px; max-height: 260px; overflow: auto; padding: 5px; border: 1px solid #b8c0c9; border-radius: 6px; background: #ffffff; box-shadow: 0 8px 20px rgba(31, 41, 51, .16); }
-.move-options button { width: 100%; justify-content: flex-start; text-align: left; border: 0; border-radius: 4px; min-height: 30px; background: transparent; }
-.move-options button:hover { background: #eef5f8; }
+.move-button { min-height: 24px; margin-left: auto; padding: 0 8px; font-size: 12px; cursor: auto; }
+.move-dialog { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(31, 41, 51, .28); }
+.move-dialog[hidden] { display: none; }
+.move-panel { width: min(420px, 100%); max-height: min(620px, calc(100vh - 48px)); display: flex; flex-direction: column; border: 1px solid #b8c0c9; border-radius: 8px; background: #ffffff; box-shadow: 0 18px 40px rgba(31, 41, 51, .22); overflow: hidden; }
+.move-header { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px 0 14px; border-bottom: 1px solid #e2e5e8; }
+.move-header h2 { margin: 0; text-transform: none; color: #1f2933; font-size: 16px; }
+.move-close { min-height: 30px; padding: 0 9px; }
+.move-search { margin: 12px; min-height: 36px; border: 1px solid #b8c0c9; border-radius: 6px; padding: 0 10px; font: inherit; }
+.move-target-list { overflow: auto; padding: 0 8px 8px; }
+.move-target-list button { width: 100%; justify-content: flex-start; text-align: left; border: 0; border-radius: 4px; min-height: 34px; background: transparent; }
+.move-target-list button:hover { background: #eef5f8; }
+.move-empty { padding: 12px 8px; color: #69717c; font-size: 13px; }
 .page-tile img { display: block; width: 100%; aspect-ratio: 1404 / 1872; object-fit: contain; background: #f9fafb; border-radius: 0 0 8px 8px; }
 @media (max-width: 760px) {
   body { grid-template-columns: 1fr; }
@@ -199,6 +216,7 @@ let movingPage = false;
 let dragStartedDirty = false;
 let dragSlots = [];
 let pointerDropTarget = null;
+let activeMoveTile = null;
 
 zoom?.addEventListener('input', () => {
   grid?.style.setProperty('--tile-width', `${zoom.value}px`);
@@ -404,20 +422,37 @@ async function movePageToNotebook(tile, targetNotebook) {
   }
 }
 
-function closeMoveMenus(exceptMenu = null) {
-  document.querySelectorAll('.move-menu').forEach((menu) => {
-    if (menu === exceptMenu) return;
-    const options = menu.querySelector('.move-options');
-    if (options) options.hidden = true;
+function filterMoveTargets() {
+  const dialog = document.querySelector('.move-dialog');
+  const query = document.querySelector('#move-search')?.value.trim().toLowerCase() || '';
+  const targets = [...document.querySelectorAll('[data-move-target="notebook"]')];
+  let visibleCount = 0;
+  targets.forEach((target) => {
+    const visible = !query || (target.dataset.moveSearch || '').includes(query);
+    target.hidden = !visible;
+    if (visible) visibleCount += 1;
   });
+  const empty = dialog?.querySelector('.move-empty');
+  if (empty) empty.hidden = visibleCount !== 0;
 }
 
-function toggleMoveMenu(menu) {
-  const options = menu?.querySelector('.move-options');
-  if (!options) return;
-  const willOpen = options.hidden;
-  closeMoveMenus(menu);
-  options.hidden = !willOpen;
+function openMoveDialog(tile) {
+  const dialog = document.querySelector('.move-dialog');
+  if (!dialog || !tile) return;
+  activeMoveTile = tile;
+  dialog.hidden = false;
+  const search = dialog.querySelector('#move-search');
+  if (search) {
+    search.value = '';
+    filterMoveTargets();
+    search.focus();
+  }
+}
+
+function closeMoveDialog() {
+  const dialog = document.querySelector('.move-dialog');
+  if (dialog) dialog.hidden = true;
+  activeMoveTile = null;
 }
 
 function notebookDropTargetFromPointer(clientX, clientY) {
@@ -434,7 +469,7 @@ function updatePointerDropTarget(target) {
 }
 
 grid?.addEventListener('dragstart', (event) => {
-  if (event.target.closest('.move-menu')) {
+  if (event.target.closest('.move-button, .move-dialog')) {
     event.preventDefault();
     return;
   }
@@ -462,7 +497,7 @@ grid?.addEventListener('dragend', () => {
 });
 
 grid?.addEventListener('pointerdown', (event) => {
-  if (event.button !== 0 || event.target.closest('.move-menu')) return;
+  if (event.button !== 0 || event.target.closest('.move-button, .move-dialog')) return;
   const tile = event.target.closest('.page-tile');
   if (!tile) return;
   event.preventDefault();
@@ -505,22 +540,31 @@ grid?.addEventListener('click', async (event) => {
   if (moveButton) {
     event.preventDefault();
     event.stopPropagation();
-    toggleMoveMenu(moveButton.closest('.move-menu'));
+    const tile = moveButton.closest('.page-tile');
+    activeMoveTile = tile;
+    openMoveDialog(tile);
     return;
   }
+});
 
+document.addEventListener('click', async (event) => {
   const target = event.target.closest('[data-move-target="notebook"]');
   if (!target) return;
   event.preventDefault();
   event.stopPropagation();
-  const tile = target.closest('.page-tile');
-  closeMoveMenus();
-  await movePageToNotebook(tile, target.dataset.moveNotebook);
+  await movePageToNotebook(activeMoveTile, target.dataset.moveNotebook);
+  closeMoveDialog();
 });
 
 document.addEventListener('click', (event) => {
-  if (event.target.closest('.move-menu')) return;
-  closeMoveMenus();
+  if (event.target.closest('.move-panel') || event.target.closest('.move-button')) return;
+  closeMoveDialog();
+});
+
+document.querySelector('.move-close')?.addEventListener('click', closeMoveDialog);
+document.querySelector('#move-search')?.addEventListener('input', filterMoveTargets);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeMoveDialog();
 });
 
 document.querySelectorAll('[data-drop-target="notebook"]').forEach((target) => {
