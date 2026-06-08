@@ -105,6 +105,22 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
     assert "drop" in html
 
 
+def test_render_index_uses_deterministic_drag_slots_and_live_page_numbers() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert html.count('class="page-number"') == 2
+    assert "function insertionIndexFromPointer" in html
+    assert "function renumberTiles" in html
+    assert "renumberTiles();" in html
+    assert "document.elementFromPoint" not in html
+    assert "clientX > rect.left + rect.width / 2" not in html
+
+
 def test_render_index_escapes_notebook_and_page_values() -> None:
     organizer_ui = _ui_module()
     snapshot = _snapshot_payload()

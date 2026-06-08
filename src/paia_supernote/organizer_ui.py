@@ -85,8 +85,8 @@ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
             "/image?scale=0.25"
         )
         tiles.append(
-            f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
-  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span>Page {page_number}</span>{badges}</div>
+            f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-position="{index + 1}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
+  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}</div>
   <img src="{image_src}" alt="Page {page_number}">
 </article>"""
         )
@@ -159,6 +159,7 @@ const statusEl = document.querySelector('#organizer-status');
 const originalOrder = currentOrder();
 let draggedTile = null;
 let pointerDragging = false;
+let dragSlots = [];
 
 zoom?.addEventListener('input', () => {
   grid?.style.setProperty('--tile-width', `${zoom.value}px`);
@@ -166,6 +167,14 @@ zoom?.addEventListener('input', () => {
 
 function currentOrder() {
   return [...document.querySelectorAll('.page-tile')].map((tile) => tile.dataset.pageId);
+}
+
+function orderedTiles() {
+  return grid ? [...grid.querySelectorAll('.page-tile')] : [];
+}
+
+function visibleOrderTiles() {
+  return orderedTiles().filter((tile) => !tile.hidden);
 }
 
 function setStatus(message, kind = '') {
@@ -184,17 +193,63 @@ function updateOrderButtons() {
   if (applyOrder) applyOrder.disabled = !dirty;
 }
 
+function renumberTiles() {
+  orderedTiles().forEach((tile, index) => {
+    const pageNumber = index + 1;
+    tile.dataset.position = String(pageNumber);
+    const label = tile.querySelector('.page-number');
+    const image = tile.querySelector('img');
+    if (label) label.textContent = `Page ${pageNumber}`;
+    if (image) image.alt = `Page ${pageNumber}`;
+  });
+}
+
+function buildInsertionSlots() {
+  if (!grid || !draggedTile) return;
+  const tiles = visibleOrderTiles().filter((tile) => tile !== draggedTile);
+  dragSlots = [];
+  tiles.forEach((tile, index) => {
+    const rect = tile.getBoundingClientRect();
+    const y = rect.top + rect.height / 2;
+    dragSlots.push({ index, x: rect.left, y });
+    dragSlots.push({ index: index + 1, x: rect.right, y });
+  });
+}
+
+function insertionIndexFromPointer(clientX, clientY) {
+  if (!dragSlots.length) buildInsertionSlots();
+  if (!dragSlots.length) return 0;
+  let best = dragSlots[0];
+  let bestDistance = Number.POSITIVE_INFINITY;
+  dragSlots.forEach((slot) => {
+    const distance = Math.hypot(clientX - slot.x, clientY - slot.y);
+    if (distance < bestDistance) {
+      best = slot;
+      bestDistance = distance;
+    }
+  });
+  return best.index;
+}
+
 function moveDraggedTile(clientX, clientY) {
   if (!grid || !draggedTile) return;
-  const target = document.elementFromPoint(clientX, clientY)?.closest('.page-tile');
-  if (!target || target === draggedTile || !grid.contains(target)) return;
-  const rect = target.getBoundingClientRect();
-  const after = clientY > rect.top + rect.height / 2 || (
-    clientY >= rect.top &&
-    clientY <= rect.bottom &&
-    clientX > rect.left + rect.width / 2
-  );
-  grid.insertBefore(draggedTile, after ? target.nextSibling : target);
+  const tiles = visibleOrderTiles().filter((tile) => tile !== draggedTile);
+  const insertIndex = insertionIndexFromPointer(clientX, clientY);
+  grid.insertBefore(draggedTile, tiles[insertIndex] || null);
+  renumberTiles();
+  updateOrderButtons();
+}
+
+function startDrag(tile) {
+  draggedTile = tile;
+  tile.classList.add('dragging');
+  buildInsertionSlots();
+}
+
+function clearDrag() {
+  draggedTile?.classList.remove('dragging');
+  draggedTile = null;
+  dragSlots = [];
 }
 
 function restoreOriginalOrder() {
@@ -203,6 +258,7 @@ function restoreOriginalOrder() {
   originalOrder.forEach((pageId) => {
     if (byId[pageId]) grid.appendChild(byId[pageId]);
   });
+  renumberTiles();
   setStatus('');
   updateOrderButtons();
 }
@@ -247,17 +303,19 @@ async function applyReorder() {
 }
 
 grid?.addEventListener('dragstart', (event) => {
-  const tile = event.target.closest('.page-tile');
-  if (!tile) return;
-  draggedTile = tile;
-  tile.classList.add('dragging');
+  const handle = event.target.closest('.drag-handle');
+  const tile = handle?.closest('.page-tile');
+  if (!tile) {
+    event.preventDefault();
+    return;
+  }
+  startDrag(tile);
   event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', tile.dataset.pageId || '');
 });
 
 grid?.addEventListener('dragover', (event) => {
   event.preventDefault();
-  const target = event.target.closest('.page-tile');
-  if (!grid || !draggedTile || !target || target === draggedTile) return;
   moveDraggedTile(event.clientX, event.clientY);
 });
 
@@ -268,8 +326,7 @@ grid?.addEventListener('drop', (event) => {
 });
 
 grid?.addEventListener('dragend', () => {
-  draggedTile?.classList.remove('dragging');
-  draggedTile = null;
+  clearDrag();
   updateOrderButtons();
 });
 
@@ -279,9 +336,8 @@ grid?.addEventListener('pointerdown', (event) => {
   const tile = handle.closest('.page-tile');
   if (!tile) return;
   event.preventDefault();
-  draggedTile = tile;
+  startDrag(tile);
   pointerDragging = true;
-  tile.classList.add('dragging');
   handle.setPointerCapture?.(event.pointerId);
 });
 
@@ -294,8 +350,7 @@ grid?.addEventListener('pointermove', (event) => {
 function endPointerDrag() {
   if (!pointerDragging) return;
   pointerDragging = false;
-  draggedTile?.classList.remove('dragging');
-  draggedTile = null;
+  clearDrag();
   setStatus('');
   updateOrderButtons();
 }
