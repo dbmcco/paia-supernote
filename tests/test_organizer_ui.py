@@ -120,7 +120,7 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
     assert "pointerdown" in html
     assert "pointermove" in html
     assert "setPointerCapture" in html
-    assert "closest('.drag-handle')" in html
+    assert "closest('.page-tile')" in html
     assert "drop" in html
 
 
@@ -204,6 +204,20 @@ def test_render_index_uses_deterministic_drag_slots_and_live_page_numbers() -> N
     assert "renumberTiles();" in html
     assert "document.elementFromPoint" not in html
     assert "clientX > rect.left + rect.width / 2" not in html
+
+
+def test_render_index_allows_dragging_from_card_except_move_menu() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert "event.target.closest('.page-tile')" in html
+    assert "event.target.closest('.move-menu')" in html
+    assert "event.target.closest('.drag-handle')" not in html
+    assert "cursor: grab" in html
 
 
 def test_render_index_escapes_notebook_and_page_values() -> None:

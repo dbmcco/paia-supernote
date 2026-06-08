@@ -163,13 +163,15 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 .status.error { color: #9f2d20; }
 .status.success { color: #266947; }
 .page-grid { --tile-width: 220px; padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-width), 1fr)); gap: 14px; align-items: start; overflow: auto; }
-.page-tile { position: relative; background: #ffffff; border: 1px solid #d6d9dd; border-radius: 8px; min-width: 0; overflow: visible; }
+.page-tile { position: relative; background: #ffffff; border: 1px solid #d6d9dd; border-radius: 8px; min-width: 0; overflow: visible; cursor: grab; }
+.page-tile:active { cursor: grabbing; }
 .page-tile.dragging { opacity: .55; border-color: #6b8fab; }
 .page-meta { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #e2e5e8; font-size: 13px; white-space: nowrap; background: #ffffff; border-radius: 8px 8px 0 0; }
 .drag-handle { min-height: 24px; width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; color: #5c6874; background: #f8f9fa; border-color: #ccd3da; font-size: 11px; line-height: 1; }
 .drag-handle:active { cursor: grabbing; }
 .badge { border: 1px solid #bac4cc; border-radius: 999px; padding: 2px 6px; font-size: 11px; color: #43505c; }
 .move-menu { position: relative; margin-left: auto; }
+.move-menu, .move-menu * { cursor: auto; }
 .move-button { min-height: 24px; padding: 0 8px; font-size: 12px; }
 .move-options { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; min-width: 180px; max-height: 260px; overflow: auto; padding: 5px; border: 1px solid #b8c0c9; border-radius: 6px; background: #ffffff; box-shadow: 0 8px 20px rgba(31, 41, 51, .16); }
 .move-options button { width: 100%; justify-content: flex-start; text-align: left; border: 0; border-radius: 4px; min-height: 30px; background: transparent; }
@@ -417,12 +419,12 @@ function toggleMoveMenu(menu) {
 }
 
 grid?.addEventListener('dragstart', (event) => {
-  const handle = event.target.closest('.drag-handle');
-  const tile = handle?.closest('.page-tile');
-  if (!tile) {
+  if (event.target.closest('.move-menu')) {
     event.preventDefault();
     return;
   }
+  const tile = event.target.closest('.page-tile');
+  if (!tile) return;
   startDrag(tile);
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', tile.dataset.pageId || '');
@@ -445,14 +447,13 @@ grid?.addEventListener('dragend', () => {
 });
 
 grid?.addEventListener('pointerdown', (event) => {
-  const handle = event.target.closest('.drag-handle');
-  if (!handle) return;
-  const tile = handle.closest('.page-tile');
+  if (event.button !== 0 || event.target.closest('.move-menu')) return;
+  const tile = event.target.closest('.page-tile');
   if (!tile) return;
   event.preventDefault();
   startDrag(tile);
   pointerDragging = true;
-  handle.setPointerCapture?.(event.pointerId);
+  event.target.setPointerCapture?.(event.pointerId);
 });
 
 grid?.addEventListener('pointermove', (event) => {
