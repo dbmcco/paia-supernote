@@ -379,7 +379,7 @@ async function postMove(pageId, targetNotebook) {
 async function movePageToNotebook(tile, targetNotebook) {
   if (!grid || !tile || movingPage) return;
   if (targetNotebook === grid.dataset.notebook) return;
-  if (isDirty()) {
+  if (isDirty() && (!draggedTile || draggedTile !== tile || dragStartedDirty)) {
     setStatus('Apply or undo the current reorder before moving pages to another note.', 'error');
     return;
   }

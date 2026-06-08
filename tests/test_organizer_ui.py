@@ -194,7 +194,7 @@ def test_render_index_move_menu_uses_existing_cross_note_move_flow() -> None:
     assert "closeMoveMenus" in html
 
 
-def test_render_index_cross_note_moves_block_any_unapplied_reorder() -> None:
+def test_render_index_cross_note_moves_block_preexisting_unapplied_reorder() -> None:
     organizer_ui = _ui_module()
 
     html = organizer_ui.render_index(
@@ -202,7 +202,7 @@ def test_render_index_cross_note_moves_block_any_unapplied_reorder() -> None:
         snapshot=_snapshot_payload(),
     )
 
-    assert "if (isDirty())" in html
+    assert "if (isDirty() && (!draggedTile || draggedTile !== tile || dragStartedDirty))" in html
     assert "Apply or undo the current reorder before moving pages to another note." in html
 
 
