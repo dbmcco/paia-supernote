@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 from typing import Any
 from urllib.parse import quote
@@ -116,12 +117,19 @@ def _render_badges(
     return "".join(f'<span class="badge">{badge}</span>' for badge in badges)
 
 
-def _move_targets(current: str, notebooks: list[dict[str, Any]]) -> list[str]:
-    return [
-        name
-        for name in (str(notebook.get("name") or "") for notebook in notebooks)
-        if name and name != current
-    ]
+def _move_targets(current: str, notebooks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    targets = []
+    for notebook in notebooks:
+        name = str(notebook.get("name") or "")
+        if not name or name == current:
+            continue
+        targets.append(
+            {
+                "name": name,
+                "update_time": _numeric_update_time(notebook.get("update_time")),
+            }
+        )
+    return sorted(targets, key=lambda target: target["update_time"], reverse=True)
 
 
 def _render_move_dialog(current: str, notebooks: list[dict[str, Any]]) -> str:
@@ -130,9 +138,14 @@ def _render_move_dialog(current: str, notebooks: list[dict[str, Any]]) -> str:
         (
             '<button type="button" data-move-target="notebook" '
             f'data-move-notebook="{escape(name)}" '
-            f'data-move-search="{escape(name.lower())}">Move to {escape(name)}</button>'
+            f'data-move-search="{escape(name.lower())}" '
+            f'data-updated="{int(target["update_time"])}">'
+            f'<span class="move-target-name">{escape(name)}</span>'
+            f'<span class="move-target-meta">{escape(_format_update_time(target["update_time"]))}</span>'
+            "</button>"
         )
-        for name in targets
+        for target in targets
+        for name in [str(target["name"])]
     )
     empty = '<div class="move-empty" hidden>No matching notes</div>'
     return (
@@ -144,11 +157,30 @@ def _render_move_dialog(current: str, notebooks: list[dict[str, Any]]) -> str:
         '<button class="move-close" type="button" aria-label="Close move dialog">Close</button>'
         "</div>"
         '<input id="move-search" class="move-search" type="search" '
-        'placeholder="Find note" autocomplete="off">'
+        'placeholder="Search notes" autocomplete="off">'
+        '<div class="move-list-heading">Recent notes</div>'
         f'<div class="move-target-list">{buttons}{empty}</div>'
         "</div>"
         "</div>"
     )
+
+
+def _numeric_update_time(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_update_time(value: float) -> str:
+    if value <= 0:
+        return "Modified unknown"
+    timestamp = value / 1000 if value > 10_000_000_000 else value
+    try:
+        dt = datetime.fromtimestamp(timestamp)
+    except (OverflowError, OSError, ValueError):
+        return "Modified unknown"
+    return f"Modified {dt:%b} {dt.day}, {dt.year}"
 
 
 _CSS = """
@@ -188,10 +220,13 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 .move-header { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px 0 14px; border-bottom: 1px solid #e2e5e8; }
 .move-header h2 { margin: 0; text-transform: none; color: #1f2933; font-size: 16px; }
 .move-close { min-height: 30px; padding: 0 9px; }
-.move-search { margin: 12px; min-height: 36px; border: 1px solid #b8c0c9; border-radius: 6px; padding: 0 10px; font: inherit; }
+.move-search { margin: 12px 12px 8px; min-height: 36px; border: 1px solid #b8c0c9; border-radius: 6px; padding: 0 10px; font: inherit; }
+.move-list-heading { padding: 0 16px 7px; color: #69717c; font-size: 12px; text-transform: uppercase; }
 .move-target-list { overflow: auto; padding: 0 8px 8px; }
-.move-target-list button { width: 100%; justify-content: flex-start; text-align: left; border: 0; border-radius: 4px; min-height: 34px; background: transparent; }
+.move-target-list button { width: 100%; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; text-align: left; border: 0; border-radius: 4px; min-height: 48px; padding: 6px 8px; background: transparent; }
 .move-target-list button:hover { background: #eef5f8; }
+.move-target-name { color: #1f2933; font-size: 14px; }
+.move-target-meta { color: #69717c; font-size: 12px; }
 .move-empty { padding: 12px 8px; color: #69717c; font-size: 13px; }
 .page-tile img { display: block; width: 100%; aspect-ratio: 1404 / 1872; object-fit: contain; background: #f9fafb; border-radius: 0 0 8px 8px; }
 @media (max-width: 760px) {

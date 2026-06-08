@@ -163,12 +163,18 @@ def test_render_index_includes_shared_searchable_move_picker_for_other_notes() -
     organizer_ui = _ui_module()
 
     html = organizer_ui.render_index(
-        notebooks=[{"name": "LFW"}, {"name": "Quick"}, {"name": "Project Notes"}],
+        notebooks=[
+            {"name": "LFW", "update_time": 30},
+            {"name": "Project Notes", "update_time": 10},
+            {"name": "Quick", "update_time": 20},
+        ],
         snapshot=_snapshot_payload(),
     )
 
     assert html.count('class="move-dialog"') == 1
     assert html.count('id="move-search"') == 1
+    assert "Search notes" in html
+    assert ">Recent notes<" in html
     assert html.count('class="move-target-list"') == 1
     assert html.count('class="move-button"') == 2
     assert html.count('aria-label="Move page to another note"') == 2
@@ -176,8 +182,13 @@ def test_render_index_includes_shared_searchable_move_picker_for_other_notes() -
     assert 'data-move-notebook="Quick"' in html
     assert 'data-move-notebook="Project Notes"' in html
     assert 'data-move-notebook="LFW"' not in html
-    assert '>Move to Quick<' in html
-    assert '>Move to Project Notes<' in html
+    assert '>Quick</span>' in html
+    assert '>Project Notes</span>' in html
+    assert 'class="move-target-name">Quick</span>' in html
+    assert 'class="move-target-meta">Modified' in html
+    assert html.index('data-move-notebook="Quick"') < html.index(
+        'data-move-notebook="Project Notes"'
+    )
 
 
 def test_render_index_move_picker_uses_existing_cross_note_move_flow() -> None:
