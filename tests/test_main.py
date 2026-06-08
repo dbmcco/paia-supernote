@@ -234,6 +234,109 @@ class TestBuildParser:
         assert parser.parse_args(["ingest"]).mode == "ingest"
         assert parser.parse_args(["enrich"]).mode == "enrich"
         assert parser.parse_args(["status"]).mode == "status"
+        organizer = parser.parse_args(
+            [
+                "organizer",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "9999",
+                "--cache-dir",
+                "/tmp/organizer-cache",
+            ]
+        )
+        assert organizer.mode == "organizer"
+        assert organizer.host == "0.0.0.0"
+        assert organizer.port == 9999
+        assert organizer.cache_dir == Path("/tmp/organizer-cache")
+
+
+class TestOrganizerCli:
+    def test_main_routes_organizer_mode_to_launch_helper(self, tmp_path: Path) -> None:
+        with patch("paia_supernote.main._run_organizer", new_callable=AsyncMock) as run:
+            main(
+                [
+                    "organizer",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "8123",
+                    "--cache-dir",
+                    str(tmp_path / "cache"),
+                ]
+            )
+
+        run.assert_awaited_once_with(
+            host="127.0.0.1",
+            port=8123,
+            cache_dir=tmp_path / "cache",
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_organizer_starts_server_and_stops_uploader(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from paia_supernote import main as main_module
+
+        class FakeUploader:
+            def __init__(self) -> None:
+                self.started = False
+                self.stopped = False
+
+            async def start(self) -> None:
+                self.started = True
+
+            async def stop(self) -> None:
+                self.stopped = True
+
+        class FakeServer:
+            server_address = ("127.0.0.1", 8123)
+
+            def __init__(self) -> None:
+                self.served = False
+                self.closed = False
+
+            def serve_forever(self) -> None:
+                self.served = True
+
+            def server_close(self) -> None:
+                self.closed = True
+
+        uploader = FakeUploader()
+        server = FakeServer()
+        created: dict[str, object] = {}
+
+        def fake_create_api(*, uploader, cache_dir):
+            created["uploader"] = uploader
+            created["cache_dir"] = cache_dir
+            return object()
+
+        def fake_handler(_api):
+            return object
+
+        def fake_server_factory(address, handler):
+            created["address"] = address
+            created["handler"] = handler
+            return server
+
+        with patch("paia_supernote.main.create_organizer_api", fake_create_api), \
+             patch("paia_supernote.main.make_organizer_handler", fake_handler):
+            await main_module._run_organizer(
+                host="127.0.0.1",
+                port=8123,
+                cache_dir=tmp_path / "cache",
+                uploader_factory=lambda: uploader,
+                server_factory=fake_server_factory,
+            )
+
+        assert uploader.started is True
+        assert uploader.stopped is True
+        assert server.served is True
+        assert server.closed is True
+        assert created["uploader"] is uploader
+        assert created["cache_dir"] == tmp_path / "cache"
+        assert created["address"] == ("127.0.0.1", 8123)
 
 
 # -- Service lifecycle --------------------------------------------------------

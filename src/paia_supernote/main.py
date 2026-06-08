@@ -13,8 +13,9 @@ import os
 import signal
 import sys
 from contextlib import suppress
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import structlog
 import tomllib
@@ -30,6 +31,8 @@ from .model_config import (
     resolve_supernote_zai_api_key,
 )
 from .notebook_artifacts import NotebookPageSpec, replace_notebook_pages
+from .organizer_runtime import create_organizer_api
+from .organizer_server import make_organizer_handler
 from .notebook_writer import append_page_to_notebook
 from .quick_filing import notebook_name_to_tag
 from .quick_filing_service import QuickFilingService
@@ -920,6 +923,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
     subparsers.add_parser("status", help="Show pipeline queue counts")
+    organizer_parser = subparsers.add_parser(
+        "organizer",
+        help="Run the local Supernote Organizer web UI",
+    )
+    organizer_parser.add_argument("--host", default="127.0.0.1")
+    organizer_parser.add_argument("--port", type=int, default=8765)
+    organizer_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="Directory for rendered organizer page images",
+    )
     subparsers.add_parser("login", help="Re-authenticate with Supernote Cloud (opens browser)")
     return parser
 
@@ -935,6 +950,30 @@ async def _run_login() -> None:
         await uploader._ensure_authenticated()
         print(f"Session saved to {uploader.SESSION_FILE}")
     finally:
+        await uploader.stop()
+
+
+async def _run_organizer(
+    *,
+    host: str,
+    port: int,
+    cache_dir: Path | None,
+    uploader_factory: Callable[[], Any] = SupernoteUploader,
+    server_factory: Callable[..., Any] = ThreadingHTTPServer,
+) -> None:
+    uploader = uploader_factory()
+    await uploader.start()
+    server = None
+    try:
+        api = create_organizer_api(uploader=uploader, cache_dir=cache_dir)
+        handler = make_organizer_handler(api)
+        server = server_factory((host, port), handler)
+        actual_host, actual_port = server.server_address
+        print(f"Supernote Organizer: http://{actual_host}:{actual_port}/organizer")
+        await asyncio.to_thread(server.serve_forever)
+    finally:
+        if server is not None:
+            server.server_close()
         await uploader.stop()
 
 
@@ -954,6 +993,16 @@ def main(argv: list[str] | None = None) -> None:
 
     if mode == "login":
         asyncio.run(_run_login())
+        return
+
+    if mode == "organizer":
+        asyncio.run(
+            _run_organizer(
+                host=args.host,
+                port=args.port,
+                cache_dir=args.cache_dir,
+            )
+        )
         return
 
     if mode == "service":
