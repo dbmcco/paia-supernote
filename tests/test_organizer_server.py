@@ -67,9 +67,9 @@ class _FakeOrganizerApi:
 
 
 class _RunningServer:
-    def __init__(self, api: _FakeOrganizerApi) -> None:
+    def __init__(self, api: _FakeOrganizerApi, *, async_runner=None) -> None:
         organizer_server = _server_module()
-        handler = organizer_server.make_organizer_handler(api)
+        handler = organizer_server.make_organizer_handler(api, async_runner=async_runner)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
@@ -92,6 +92,22 @@ def _get_text(url: str) -> str:
     with urlopen(url, timeout=5) as response:
         assert response.status == 200
         return response.read().decode("utf-8")
+
+
+def test_api_routes_use_injected_async_runner(tmp_path: Path) -> None:
+    api = _FakeOrganizerApi(tmp_path / "page.png")
+    calls = []
+
+    def runner(awaitable):
+        calls.append(awaitable)
+        awaitable.close()
+        return [{"name": "Injected", "file_name": "Injected.note"}]
+
+    with _RunningServer(api, async_runner=runner) as server:
+        notebooks = json.loads(_get_text(f"{server.base_url}/api/notebooks"))
+
+    assert notebooks == [{"name": "Injected", "file_name": "Injected.note"}]
+    assert len(calls) == 1
 
 
 def test_organizer_route_renders_selected_notebook_grid(tmp_path: Path) -> None:

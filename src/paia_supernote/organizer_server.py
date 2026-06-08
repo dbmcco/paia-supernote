@@ -11,9 +11,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 from paia_supernote.organizer_ui import render_index
 
 
-def make_organizer_handler(api: Any) -> type[BaseHTTPRequestHandler]:
+def make_organizer_handler(
+    api: Any,
+    *,
+    async_runner: Any | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class OrganizerRequestHandler(BaseHTTPRequestHandler):
         organizer_api = api
+        organizer_async_runner = staticmethod(async_runner or _run_async)
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -35,13 +40,13 @@ def make_organizer_handler(api: Any) -> type[BaseHTTPRequestHandler]:
                 self._send_organizer(query)
                 return
             if path == "/api/notebooks":
-                notebooks = _run_async(self.organizer_api.list_notebooks())
+                notebooks = self._run_async(self.organizer_api.list_notebooks())
                 self._send_json(notebooks)
                 return
 
             parts = [unquote(part) for part in path.strip("/").split("/") if part]
             if len(parts) == 4 and parts[:2] == ["api", "notebooks"] and parts[3] == "snapshot":
-                snapshot = _run_async(self.organizer_api.get_snapshot(parts[2]))
+                snapshot = self._run_async(self.organizer_api.get_snapshot(parts[2]))
                 self._send_json(snapshot)
                 return
             if (
@@ -51,7 +56,7 @@ def make_organizer_handler(api: Any) -> type[BaseHTTPRequestHandler]:
                 and parts[5] == "image"
             ):
                 scale = _first_float(query.get("scale"), default=0.25)
-                image = _run_async(
+                image = self._run_async(
                     self.organizer_api.get_page_image(parts[2], parts[4], scale=scale)
                 )
                 self._send_file(Path(image["path"]), image.get("media_type", "image/png"))
@@ -60,12 +65,12 @@ def make_organizer_handler(api: Any) -> type[BaseHTTPRequestHandler]:
             self.send_error(HTTPStatus.NOT_FOUND)
 
         def _send_organizer(self, query: dict[str, list[str]]) -> None:
-            notebooks = _run_async(self.organizer_api.list_notebooks())
+            notebooks = self._run_async(self.organizer_api.list_notebooks())
             selected = _first(query.get("notebook"))
             if selected is None and notebooks:
                 selected = str(notebooks[0].get("name") or "")
             snapshot = (
-                _run_async(self.organizer_api.get_snapshot(selected))
+                self._run_async(self.organizer_api.get_snapshot(selected))
                 if selected
                 else _empty_snapshot()
             )
@@ -76,6 +81,9 @@ def make_organizer_handler(api: Any) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _run_async(self, awaitable: Any) -> Any:
+            return self.organizer_async_runner(awaitable)
 
         def _send_json(self, payload: Any, *, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload).encode("utf-8")

@@ -963,16 +963,22 @@ async def _run_organizer(
 ) -> None:
     uploader = uploader_factory()
     await uploader.start()
+    loop = asyncio.get_running_loop()
+
+    def run_on_launcher_loop(awaitable: Any) -> Any:
+        return asyncio.run_coroutine_threadsafe(awaitable, loop).result()
+
     server = None
     try:
         api = create_organizer_api(uploader=uploader, cache_dir=cache_dir)
-        handler = make_organizer_handler(api)
+        handler = make_organizer_handler(api, async_runner=run_on_launcher_loop)
         server = server_factory((host, port), handler)
         actual_host, actual_port = server.server_address
         print(f"Supernote Organizer: http://{actual_host}:{actual_port}/organizer")
         await asyncio.to_thread(server.serve_forever)
     finally:
         if server is not None:
+            server.shutdown()
             server.server_close()
         await uploader.stop()
 

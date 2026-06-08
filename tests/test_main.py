@@ -295,10 +295,14 @@ class TestOrganizerCli:
 
             def __init__(self) -> None:
                 self.served = False
+                self.shutdown_called = False
                 self.closed = False
 
             def serve_forever(self) -> None:
                 self.served = True
+
+            def shutdown(self) -> None:
+                self.shutdown_called = True
 
             def server_close(self) -> None:
                 self.closed = True
@@ -312,7 +316,8 @@ class TestOrganizerCli:
             created["cache_dir"] = cache_dir
             return object()
 
-        def fake_handler(_api):
+        def fake_handler(_api, *, async_runner):
+            created["async_runner"] = async_runner
             return object
 
         def fake_server_factory(address, handler):
@@ -333,10 +338,12 @@ class TestOrganizerCli:
         assert uploader.started is True
         assert uploader.stopped is True
         assert server.served is True
+        assert server.shutdown_called is True
         assert server.closed is True
         assert created["uploader"] is uploader
         assert created["cache_dir"] == tmp_path / "cache"
         assert created["address"] == ("127.0.0.1", 8123)
+        assert callable(created["async_runner"])
 
 
 # -- Service lifecycle --------------------------------------------------------
