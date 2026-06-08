@@ -56,7 +56,7 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
         name = str(notebook.get("name") or "")
         active = " active" if name == current else ""
         items.append(
-            f'<a class="notebook{active}" href="/notebooks/{quote(name)}">{escape(name)}</a>'
+            f'<a class="notebook{active}" href="/organizer?notebook={quote(name)}">{escape(name)}</a>'
         )
     return "\n".join(items)
 

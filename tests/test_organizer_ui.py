@@ -60,6 +60,19 @@ def test_render_index_includes_page_grid_zoom_and_filters() -> None:
     assert html.count('class="page-tile"') == 2
 
 
+def test_render_index_sidebar_links_select_notebooks_through_organizer_route() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick Note"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert 'href="/organizer?notebook=LFW"' in html
+    assert 'href="/organizer?notebook=Quick%20Note"' in html
+    assert 'href="/notebooks/' not in html
+
+
 def test_render_index_marks_metadata_badges_per_page() -> None:
     organizer_ui = _ui_module()
 
