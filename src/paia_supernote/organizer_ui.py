@@ -34,12 +34,13 @@ def render_index(*, notebooks: list[dict[str, Any]], snapshot: dict[str, Any]) -
       <h1>{escape(notebook_name)}</h1>
       <div class="toolbar-actions">
         <button type="button">Refresh</button>
-        <button type="button" disabled>Undo</button>
-        <button type="button" disabled>Apply</button>
+        <button id="undo-order" type="button" disabled>Undo</button>
+        <button id="apply-order" type="button" disabled>Apply</button>
         <label class="zoom">Zoom <input type="range" min="160" max="420" value="220"></label>
       </div>
     </header>
-    <main class="page-grid" data-revision="{escape(str(snapshot.get("revision") or ""))}">
+    <div id="organizer-status" class="status" role="status" aria-live="polite"></div>
+    <main class="page-grid" data-notebook="{escape(notebook_name)}" data-revision="{escape(str(snapshot.get("revision") or ""))}">
       {_render_pages(notebook_name, snapshot)}
     </main>
   </section>
@@ -84,7 +85,7 @@ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
             "/image?scale=0.25"
         )
         tiles.append(
-            f"""<article class="page-tile" data-page-id="{escape(str(page_id))}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
+            f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
   <div class="page-meta"><span>Page {page_number}</span>{badges}</div>
   <img src="{image_src}" alt="Page {page_number}">
 </article>"""
@@ -129,8 +130,12 @@ label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 button { border: 1px solid #b8c0c9; background: #ffffff; color: #1f2933; min-height: 34px; padding: 0 11px; border-radius: 6px; font: inherit; }
 button:disabled { color: #8b949e; background: #f0f2f4; }
 .zoom { min-width: 190px; }
+.status { min-height: 28px; padding: 6px 18px 0; font-size: 13px; color: #43505c; }
+.status.error { color: #9f2d20; }
+.status.success { color: #266947; }
 .page-grid { --tile-width: 220px; padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-width), 1fr)); gap: 14px; align-items: start; overflow: auto; }
 .page-tile { background: #ffffff; border: 1px solid #d6d9dd; border-radius: 8px; min-width: 0; overflow: hidden; }
+.page-tile.dragging { opacity: .55; border-color: #6b8fab; }
 .page-meta { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #e2e5e8; font-size: 13px; white-space: nowrap; }
 .badge { border: 1px solid #bac4cc; border-radius: 999px; padding: 2px 6px; font-size: 11px; color: #43505c; }
 .page-tile img { display: block; width: 100%; aspect-ratio: 1404 / 1872; object-fit: contain; background: #f9fafb; }
@@ -146,9 +151,116 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 _JS = """
 const grid = document.querySelector('.page-grid');
 const zoom = document.querySelector('.zoom input');
+const undoOrder = document.querySelector('#undo-order');
+const applyOrder = document.querySelector('#apply-order');
+const statusEl = document.querySelector('#organizer-status');
+const originalOrder = currentOrder();
+let draggedTile = null;
+
 zoom?.addEventListener('input', () => {
   grid?.style.setProperty('--tile-width', `${zoom.value}px`);
 });
+
+function currentOrder() {
+  return [...document.querySelectorAll('.page-tile')].map((tile) => tile.dataset.pageId);
+}
+
+function setStatus(message, kind = '') {
+  if (!statusEl) return;
+  statusEl.textContent = message;
+  statusEl.className = `status ${kind}`.trim();
+}
+
+function isDirty() {
+  return currentOrder().join('\\u0000') !== originalOrder.join('\\u0000');
+}
+
+function updateOrderButtons() {
+  const dirty = isDirty();
+  if (undoOrder) undoOrder.disabled = !dirty;
+  if (applyOrder) applyOrder.disabled = !dirty;
+}
+
+function restoreOriginalOrder() {
+  if (!grid) return;
+  const byId = Object.fromEntries([...grid.querySelectorAll('.page-tile')].map((tile) => [tile.dataset.pageId, tile]));
+  originalOrder.forEach((pageId) => {
+    if (byId[pageId]) grid.appendChild(byId[pageId]);
+  });
+  setStatus('');
+  updateOrderButtons();
+}
+
+function endpoint(action) {
+  const paths = {
+    preview: '/reorder/preview',
+    apply: '/reorder/apply',
+  };
+  return `/api/notebooks/${encodeURIComponent(grid.dataset.notebook)}${paths[action]}`;
+}
+
+async function postOrder(action) {
+  const response = await fetch(endpoint(action), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      expected_revision: grid.dataset.revision,
+      page_order: currentOrder(),
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || payload.reason || 'reorder failed');
+  }
+  return payload;
+}
+
+async function applyReorder() {
+  if (!isDirty()) return;
+  if (applyOrder) applyOrder.disabled = true;
+  setStatus('Applying...');
+  try {
+    await postOrder('preview');
+    await postOrder('apply');
+    setStatus('Applied.', 'success');
+    window.location.reload();
+  } catch (error) {
+    setStatus(error.message, 'error');
+    updateOrderButtons();
+  }
+}
+
+grid?.addEventListener('dragstart', (event) => {
+  const tile = event.target.closest('.page-tile');
+  if (!tile) return;
+  draggedTile = tile;
+  tile.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+});
+
+grid?.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  const target = event.target.closest('.page-tile');
+  if (!grid || !draggedTile || !target || target === draggedTile) return;
+  const rect = target.getBoundingClientRect();
+  const after = event.clientY > rect.top + rect.height / 2;
+  grid.insertBefore(draggedTile, after ? target.nextSibling : target);
+});
+
+grid?.addEventListener('drop', (event) => {
+  event.preventDefault();
+  setStatus('');
+  updateOrderButtons();
+});
+
+grid?.addEventListener('dragend', () => {
+  draggedTile?.classList.remove('dragging');
+  draggedTile = null;
+  updateOrderButtons();
+});
+
+undoOrder?.addEventListener('click', restoreOriginalOrder);
+applyOrder?.addEventListener('click', applyReorder);
 
 function applyFilters() {
   const active = [...document.querySelectorAll('[data-filter]:checked')].map((el) => el.dataset.filter);

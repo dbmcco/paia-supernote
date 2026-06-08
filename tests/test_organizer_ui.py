@@ -77,6 +77,27 @@ def test_render_index_marks_metadata_badges_per_page() -> None:
     assert 'src="/api/notebooks/LFW/pages/page-a/image?scale=0.25"' in html
 
 
+def test_render_index_includes_drag_apply_controls_and_contract() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert 'id="undo-order"' in html
+    assert 'id="apply-order"' in html
+    assert 'id="organizer-status"' in html
+    assert 'draggable="true"' in html
+    assert html.count('draggable="true"') == 2
+    assert "/reorder/preview" in html
+    assert "/reorder/apply" in html
+    assert "expected_revision" in html
+    assert "page_order" in html
+    assert "dragstart" in html
+    assert "drop" in html
+
+
 def test_render_index_escapes_notebook_and_page_values() -> None:
     organizer_ui = _ui_module()
     snapshot = _snapshot_payload()
