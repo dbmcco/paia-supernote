@@ -41,7 +41,7 @@ def render_index(*, notebooks: list[dict[str, Any]], snapshot: dict[str, Any]) -
     </header>
     <div id="organizer-status" class="status" role="status" aria-live="polite"></div>
     <main class="page-grid" data-notebook="{escape(notebook_name)}" data-revision="{escape(str(snapshot.get("revision") or ""))}">
-      {_render_pages(notebook_name, snapshot)}
+      {_render_pages(notebook_name, snapshot, notebooks)}
     </main>
   </section>
   <script>{_JS}</script>
@@ -61,7 +61,9 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
     return "\n".join(items)
 
 
-def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
+def _render_pages(
+    notebook_name: str, snapshot: dict[str, Any], notebooks: list[dict[str, Any]]
+) -> str:
     pages = snapshot.get("pages") or {}
     page_order = snapshot.get("page_order") or []
     revision = str(snapshot.get("revision") or "")
@@ -81,13 +83,14 @@ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
             keyword_count=keyword_count,
             link_count=link_count,
         )
+        move_menu = _render_move_menu(notebook_name, notebooks)
         image_src = (
             f"/api/notebooks/{quote(notebook_name)}/pages/{quote(str(page_id))}"
             f"/image?scale=0.25&amp;revision={quote(revision)}"
         )
         tiles.append(
             f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-position="{index + 1}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
-  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}</div>
+  <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}{move_menu}</div>
   <img src="{image_src}" alt="Page {page_number}" loading="lazy" decoding="async">
 </article>"""
         )
@@ -113,6 +116,30 @@ def _render_badges(
     return "".join(f'<span class="badge">{badge}</span>' for badge in badges)
 
 
+def _render_move_menu(current: str, notebooks: list[dict[str, Any]]) -> str:
+    targets = [
+        str(notebook.get("name") or "")
+        for notebook in notebooks
+        if str(notebook.get("name") or "") and str(notebook.get("name") or "") != current
+    ]
+    if not targets:
+        return ""
+    buttons = "".join(
+        (
+            '<button type="button" data-move-target="notebook" '
+            f'data-move-notebook="{escape(name)}">Move to {escape(name)}</button>'
+        )
+        for name in targets
+    )
+    return (
+        '<div class="move-menu">'
+        '<button class="move-button" type="button" '
+        'aria-label="Move page to another note" title="Move page to another note">Move</button>'
+        f'<div class="move-options" hidden>{buttons}</div>'
+        "</div>"
+    )
+
+
 _CSS = """
 :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 * { box-sizing: border-box; }
@@ -136,13 +163,18 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 .status.error { color: #9f2d20; }
 .status.success { color: #266947; }
 .page-grid { --tile-width: 220px; padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-width), 1fr)); gap: 14px; align-items: start; overflow: auto; }
-.page-tile { background: #ffffff; border: 1px solid #d6d9dd; border-radius: 8px; min-width: 0; overflow: hidden; }
+.page-tile { position: relative; background: #ffffff; border: 1px solid #d6d9dd; border-radius: 8px; min-width: 0; overflow: visible; }
 .page-tile.dragging { opacity: .55; border-color: #6b8fab; }
-.page-meta { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #e2e5e8; font-size: 13px; white-space: nowrap; }
+.page-meta { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #e2e5e8; font-size: 13px; white-space: nowrap; background: #ffffff; border-radius: 8px 8px 0 0; }
 .drag-handle { min-height: 24px; width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; color: #5c6874; background: #f8f9fa; border-color: #ccd3da; font-size: 11px; line-height: 1; }
 .drag-handle:active { cursor: grabbing; }
 .badge { border: 1px solid #bac4cc; border-radius: 999px; padding: 2px 6px; font-size: 11px; color: #43505c; }
-.page-tile img { display: block; width: 100%; aspect-ratio: 1404 / 1872; object-fit: contain; background: #f9fafb; }
+.move-menu { position: relative; margin-left: auto; }
+.move-button { min-height: 24px; padding: 0 8px; font-size: 12px; }
+.move-options { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; min-width: 180px; max-height: 260px; overflow: auto; padding: 5px; border: 1px solid #b8c0c9; border-radius: 6px; background: #ffffff; box-shadow: 0 8px 20px rgba(31, 41, 51, .16); }
+.move-options button { width: 100%; justify-content: flex-start; text-align: left; border: 0; border-radius: 4px; min-height: 30px; background: transparent; }
+.move-options button:hover { background: #eef5f8; }
+.page-tile img { display: block; width: 100%; aspect-ratio: 1404 / 1872; object-fit: contain; background: #f9fafb; border-radius: 0 0 8px 8px; }
 @media (max-width: 760px) {
   body { grid-template-columns: 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid #d6d9dd; }
@@ -343,7 +375,7 @@ async function postMove(pageId, targetNotebook) {
 async function movePageToNotebook(tile, targetNotebook) {
   if (!grid || !tile || movingPage) return;
   if (targetNotebook === grid.dataset.notebook) return;
-  if (dragStartedDirty) {
+  if (isDirty()) {
     setStatus('Apply or undo the current reorder before moving pages to another note.', 'error');
     return;
   }
@@ -366,6 +398,22 @@ async function movePageToNotebook(tile, targetNotebook) {
     clearDrag();
     updateOrderButtons();
   }
+}
+
+function closeMoveMenus(exceptMenu = null) {
+  document.querySelectorAll('.move-menu').forEach((menu) => {
+    if (menu === exceptMenu) return;
+    const options = menu.querySelector('.move-options');
+    if (options) options.hidden = true;
+  });
+}
+
+function toggleMoveMenu(menu) {
+  const options = menu?.querySelector('.move-options');
+  if (!options) return;
+  const willOpen = options.hidden;
+  closeMoveMenus(menu);
+  options.hidden = !willOpen;
 }
 
 grid?.addEventListener('dragstart', (event) => {
@@ -426,6 +474,29 @@ grid?.addEventListener('pointercancel', endPointerDrag);
 
 undoOrder?.addEventListener('click', restoreOriginalOrder);
 applyOrder?.addEventListener('click', applyReorder);
+
+grid?.addEventListener('click', async (event) => {
+  const moveButton = event.target.closest('.move-button');
+  if (moveButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleMoveMenu(moveButton.closest('.move-menu'));
+    return;
+  }
+
+  const target = event.target.closest('[data-move-target="notebook"]');
+  if (!target) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const tile = target.closest('.page-tile');
+  closeMoveMenus();
+  await movePageToNotebook(tile, target.dataset.moveNotebook);
+});
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.move-menu')) return;
+  closeMoveMenus();
+});
 
 document.querySelectorAll('[data-drop-target="notebook"]').forEach((target) => {
   target.addEventListener('dragenter', (event) => {

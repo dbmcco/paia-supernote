@@ -143,6 +143,53 @@ def test_render_index_includes_cross_note_move_drop_contract() -> None:
     assert "dragleave" in html
 
 
+def test_render_index_includes_per_card_move_menu_for_other_notes() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}, {"name": "Project Notes"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert html.count('class="move-menu"') == 2
+    assert html.count('class="move-button"') == 2
+    assert html.count('aria-label="Move page to another note"') == 2
+    assert html.count('<button type="button" data-move-target="notebook"') == 4
+    assert 'data-move-notebook="Quick"' in html
+    assert 'data-move-notebook="Project Notes"' in html
+    assert 'data-move-notebook="LFW"' not in html
+    assert '>Move to Quick<' in html
+    assert '>Move to Project Notes<' in html
+
+
+def test_render_index_move_menu_uses_existing_cross_note_move_flow() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert "closest('[data-move-target=\"notebook\"]')" in html
+    assert "movePageToNotebook(tile, target.dataset.moveNotebook)" in html
+    assert "closest('.page-tile')" in html
+    assert "event.stopPropagation()" in html
+    assert "toggleMoveMenu" in html
+    assert "closeMoveMenus" in html
+
+
+def test_render_index_cross_note_moves_block_any_unapplied_reorder() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert "if (isDirty())" in html
+    assert "Apply or undo the current reorder before moving pages to another note." in html
+
+
 def test_render_index_uses_deterministic_drag_slots_and_live_page_numbers() -> None:
     organizer_ui = _ui_module()
 
