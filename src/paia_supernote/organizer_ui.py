@@ -294,8 +294,8 @@ async function applyReorder() {
   try {
     await postOrder('preview');
     await postOrder('apply');
-    setStatus('Applied.', 'success');
-    window.location.reload();
+    setStatus('Applied. Refreshing...', 'success');
+    window.location.assign(`/organizer?notebook=${encodeURIComponent(grid.dataset.notebook)}`);
   } catch (error) {
     setStatus(error.message, 'error');
     updateOrderButtons();

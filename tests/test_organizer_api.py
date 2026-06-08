@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 
 from PIL import Image
@@ -252,7 +253,7 @@ async def test_preview_reorder_rejects_unsupported_link_metadata(
 
 
 @pytest.mark.asyncio
-async def test_apply_reorder_uploads_reordered_bytes_and_returns_snapshot(
+async def test_apply_reorder_uploads_reordered_bytes_without_second_download(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,8 +278,7 @@ async def test_apply_reorder_uploads_reordered_bytes_and_returns_snapshot(
     )
 
     assert result["ok"] is True
-    assert result["snapshot"]["notebook_name"] == "LFW"
-    assert result["snapshot"]["page_order"] == ["page-a", "page-b"]
+    assert result["revision"] == hashlib.sha256(b"reordered-bytes").hexdigest()
     assert uploader.uploaded[0][1] == "LFW.note"
     assert uploader.uploaded_bytes == [b"reordered-bytes"]
-    assert uploader.downloaded == ["LFW.note", "LFW.note"]
+    assert uploader.downloaded == ["LFW.note"]

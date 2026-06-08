@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -149,7 +150,7 @@ class OrganizerApi:
                 os.unlink(tmp_path)
         return {
             "ok": True,
-            "snapshot": await self.get_snapshot(notebook_name),
+            "revision": hashlib.sha256(reordered_bytes).hexdigest(),
         }
 
     async def _load_snapshot(self, notebook_name: str) -> NotebookSnapshot:

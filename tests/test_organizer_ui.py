@@ -95,6 +95,7 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
     assert "touch-action: none" in html
     assert "/reorder/preview" in html
     assert "/reorder/apply" in html
+    assert "Applied. Refreshing..." in html
     assert "expected_revision" in html
     assert "page_order" in html
     assert "dragstart" in html
