@@ -34,7 +34,7 @@ def render_index(*, notebooks: list[dict[str, Any]], snapshot: dict[str, Any]) -
     <header class="toolbar">
       <h1>{escape(notebook_name)}</h1>
       <div class="toolbar-actions">
-        <button type="button">Refresh</button>
+        <button id="refresh-note" type="button">Refresh</button>
         <button id="undo-order" type="button" disabled>Undo</button>
         <button id="apply-order" type="button" disabled>Apply</button>
         <label class="zoom">Zoom <input type="range" min="160" max="420" value="220"></label>
@@ -241,6 +241,7 @@ button:disabled { color: #8b949e; background: #f0f2f4; }
 _JS = """
 const grid = document.querySelector('.page-grid');
 const zoom = document.querySelector('.zoom input');
+const refreshNote = document.querySelector('#refresh-note');
 const undoOrder = document.querySelector('#undo-order');
 const applyOrder = document.querySelector('#apply-order');
 const statusEl = document.querySelector('#organizer-status');
@@ -283,6 +284,14 @@ function updateOrderButtons() {
   const dirty = isDirty();
   if (undoOrder) undoOrder.disabled = !dirty;
   if (applyOrder) applyOrder.disabled = !dirty || movingPage;
+}
+
+function refreshNotebook() {
+  if (!grid) return;
+  const url = new URL('/organizer', window.location.origin);
+  url.searchParams.set('notebook', grid.dataset.notebook || '');
+  url.searchParams.set('refresh_note', String(Date.now()));
+  window.location.assign(url.toString());
 }
 
 function renumberTiles() {
@@ -569,6 +578,7 @@ grid?.addEventListener('pointercancel', endPointerDrag);
 
 undoOrder?.addEventListener('click', restoreOriginalOrder);
 applyOrder?.addEventListener('click', applyReorder);
+refreshNote?.addEventListener('click', refreshNotebook);
 
 grid?.addEventListener('click', async (event) => {
   const moveButton = event.target.closest('.move-button');

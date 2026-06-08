@@ -124,6 +124,21 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
     assert "drop" in html
 
 
+def test_render_index_refresh_button_reloads_current_notebook() -> None:
+    organizer_ui = _ui_module()
+
+    html = organizer_ui.render_index(
+        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
+        snapshot=_snapshot_payload(),
+    )
+
+    assert 'id="refresh-note"' in html
+    assert "function refreshNotebook" in html
+    assert "refresh_note" in html
+    assert "window.location.assign" in html
+    assert "grid.dataset.notebook" in html
+
+
 def test_render_index_includes_cross_note_move_drop_contract() -> None:
     organizer_ui = _ui_module()
 
