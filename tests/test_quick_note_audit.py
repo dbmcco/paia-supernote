@@ -1,10 +1,15 @@
+import json
 from pathlib import Path
 
 from paia_supernote.page_state import PageStateStore
 from paia_supernote.quick_note_audit import (
+    QuickAuditDecision,
     QuickAuditPage,
+    QuickAuditReport,
     QuickAuditTaxonomy,
     classify_quick_page,
+    report_to_json,
+    report_to_markdown,
 )
 
 
@@ -85,3 +90,70 @@ def test_classify_quick_page_marks_short_scraps_for_review() -> None:
     assert decision.action == "needs_review"
     assert decision.target_notebook is None
     assert decision.confidence < 0.5
+
+
+def test_report_to_json_contains_reviewable_decisions() -> None:
+    report = QuickAuditReport(
+        source_notebook="Quick",
+        generated_at="2026-06-10T12:00:00+00:00",
+        decisions=[
+            QuickAuditDecision(
+                source_notebook="Quick",
+                page=47,
+                source_revision="rev",
+                action="move",
+                target_notebook="PAIA",
+                tags=["domain/paia", "system/workgraph"],
+                links=["Workgraph"],
+                confidence=0.85,
+                reason="Matched domain signals: workgraph.",
+                excerpt="Speedrift harness",
+            )
+        ],
+    )
+
+    payload = json.loads(report_to_json(report))
+
+    assert payload["source_notebook"] == "Quick"
+    assert payload["decisions"][0]["target_notebook"] == "PAIA"
+    assert payload["decisions"][0]["tags"] == ["domain/paia", "system/workgraph"]
+
+
+def test_report_to_markdown_groups_move_and_review_items() -> None:
+    report = QuickAuditReport(
+        source_notebook="Quick",
+        generated_at="2026-06-10T12:00:00+00:00",
+        decisions=[
+            QuickAuditDecision(
+                source_notebook="Quick",
+                page=47,
+                source_revision="rev",
+                action="move",
+                target_notebook="PAIA",
+                tags=["domain/paia"],
+                links=["Workgraph"],
+                confidence=0.85,
+                reason="Matched domain signals: workgraph.",
+                excerpt="Speedrift harness",
+            ),
+            QuickAuditDecision(
+                source_notebook="Quick",
+                page=56,
+                source_revision="rev",
+                action="needs_review",
+                target_notebook=None,
+                tags=[],
+                links=[],
+                confidence=0.2,
+                reason="No strong domain signal was found in OCR text.",
+                excerpt="F# B E D",
+            ),
+        ],
+    )
+
+    markdown = report_to_markdown(report)
+
+    assert "# Quick Note Audit" in markdown
+    assert "| 47 | move | PAIA | 0.85 |" in markdown
+    assert "| 56 | needs_review |  | 0.20 |" in markdown
+    assert "Matched domain signals: workgraph." in markdown

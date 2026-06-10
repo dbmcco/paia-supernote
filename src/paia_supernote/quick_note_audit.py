@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -263,3 +264,45 @@ def _links_for_tags(tags: set[str]) -> list[str]:
     if "system/agents" in tags:
         links.append("Agents")
     return links
+
+
+def report_to_json(report: QuickAuditReport) -> str:
+    return json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n"
+
+
+def report_to_markdown(report: QuickAuditReport) -> str:
+    lines = [
+        "# Quick Note Audit",
+        "",
+        f"- Source notebook: `{report.source_notebook}`",
+        f"- Generated at: `{report.generated_at}`",
+        f"- Page count: `{len(report.decisions)}`",
+        "",
+        "## Decisions",
+        "",
+        "| Page | Action | Target | Confidence | Tags | Links | Excerpt | Reason |",
+        "|---:|---|---|---:|---|---|---|---|",
+    ]
+    for decision in report.decisions:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(decision.page),
+                    _md_cell(decision.action),
+                    _md_cell(decision.target_notebook or ""),
+                    f"{decision.confidence:.2f}",
+                    _md_cell(", ".join(decision.tags)),
+                    _md_cell(", ".join(decision.links)),
+                    _md_cell(decision.excerpt),
+                    _md_cell(decision.reason),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _md_cell(value: str) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ").strip()
