@@ -7,6 +7,7 @@ from paia_supernote.quick_note_audit import (
     QuickAuditPage,
     QuickAuditReport,
     QuickAuditTaxonomy,
+    QuickNoteAuditService,
     classify_quick_page,
     report_to_json,
     report_to_markdown,
@@ -157,3 +158,16 @@ def test_report_to_markdown_groups_move_and_review_items() -> None:
     assert "| 47 | move | PAIA | 0.85 |" in markdown
     assert "| 56 | needs_review |  | 0.20 |" in markdown
     assert "Matched domain signals: workgraph." in markdown
+
+
+def test_quick_note_audit_service_reads_page_state(tmp_path: Path) -> None:
+    store = PageStateStore(tmp_path / "state.db")
+    store.init_schema()
+    store.upsert_ocr_page("Quick", 0, "rev-0", "work graph cleanup", "test-model")
+    store.upsert_ocr_page("Quick", 1, "rev-1", "Projects/focus to define", "test-model")
+
+    report = QuickNoteAuditService(page_state_store=store).run()
+
+    assert report.source_notebook == "Quick"
+    assert [decision.page for decision in report.decisions] == [0, 1]
+    assert [decision.action for decision in report.decisions] == ["move", "move"]

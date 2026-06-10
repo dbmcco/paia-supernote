@@ -149,7 +149,7 @@ def classify_quick_page(
 
     target, score = max(target_scores.items(), key=lambda item: item[1])
     word_count = len(re.findall(r"[a-z0-9]+", text))
-    if score == 0 or word_count < 4:
+    if score == 0 or word_count < 3:
         return _decision(
             page=page,
             action="needs_review",
