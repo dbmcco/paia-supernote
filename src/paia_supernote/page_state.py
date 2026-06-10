@@ -120,6 +120,38 @@ class PageStateStore:
             last_error_stage=last_error_stage_,
         )
 
+    def list_pages(self, notebook: str) -> list[PageState]:
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT notebook, page, source_revision, raw_text, ocr_model,
+                       dirty_for_enrichment, last_enriched_revision,
+                       last_folio_object_id, retry_count, next_retry_at,
+                       last_error, last_error_stage
+                FROM page_state
+                WHERE notebook = ?
+                ORDER BY page ASC
+                """,
+                (notebook,),
+            ).fetchall()
+        return [
+            PageState(
+                notebook=row[0],
+                page=row[1],
+                source_revision=row[2],
+                raw_text=row[3],
+                ocr_model=row[4],
+                dirty_for_enrichment=bool(row[5]),
+                last_enriched_revision=row[6],
+                last_folio_object_id=row[7],
+                retry_count=row[8],
+                next_retry_at=row[9],
+                last_error=row[10],
+                last_error_stage=row[11],
+            )
+            for row in rows
+        ]
+
     def next_dirty_page(self) -> PageState | None:
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self._db_path) as conn:
