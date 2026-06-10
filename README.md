@@ -170,6 +170,33 @@ header = detector.detect_header(page_text)
 # header.tags, header.title, header.bundle_index, etc.
 ```
 
+### Quick Note Reorganization Audit
+
+Generate a read-only review ledger for `Quick.note` before moving any pages:
+
+```bash
+uv run python scripts/quick_note_audit.py \
+  --notebook Quick \
+  --format markdown \
+  --output /tmp/quick-note-audit.md
+```
+
+The audit reads OCR state from `~/.paia/supernote/supernote-state.db`, classifies
+pages into proposed destination notebooks, and writes a Markdown or JSON report.
+It does not mutate Supernote notebooks.
+
+Native Supernote links for the generated `Quick Index` page are gated by a
+separate probe:
+
+```bash
+uv run python scripts/supernote_link_probe.py
+```
+
+The probe fails closed until disposable fixture notebooks prove that generated
+cross-notebook links survive upload, device sync, tap behavior, and round-trip
+download. Real `Quick.note` index writes must not run while the probe reports
+`"real_note_writes_allowed": false`.
+
 ### File Watcher (Local Sync)
 
 ```python
