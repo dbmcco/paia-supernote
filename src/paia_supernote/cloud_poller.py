@@ -15,6 +15,10 @@ log = structlog.get_logger(__name__)
 # Type alias: async callback receives (notebook_name, note_bytes, update_time)
 NoteChangedCallback = Callable[[str, bytes, "int | None"], Awaitable[None]]
 
+# Type alias: async callback fired only on poll-health transitions.
+# Receives (healthy, detail) where detail carries reason/status for monitoring.
+PollHealthCallback = Callable[[bool, Dict[str, object]], Awaitable[None]]
+
 
 class CloudPoller:
     """Polls Supernote Cloud for changed .note files.
@@ -37,6 +41,7 @@ class CloudPoller:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         watched_notebooks: Iterable[str] | None = None,
         process_existing_on_start: bool = True,
+        on_poll_health: PollHealthCallback | None = None,
     ) -> None:
         """
         Args:
@@ -45,11 +50,17 @@ class CloudPoller:
             poll_interval: How often to poll in seconds (default 60).
             watched_notebooks: Optional notebook stems to watch.
             process_existing_on_start: Whether existing files should fire on first poll.
+            on_poll_health: Async callback fired only when poll health changes
+                (healthy<->degraded), so a persistent auth failure surfaces once
+                rather than flooding the bus. Receives (healthy, detail).
         """
         self._uploader = uploader
         self._callback = on_note_changed
         self._poll_interval = poll_interval
         self._process_existing_on_start = process_existing_on_start
+        self._on_poll_health = on_poll_health
+        # Start healthy; the first auth failure transitions to degraded and fires.
+        self._poll_healthy = True
         self._watched_notebooks = {
             str(name).strip()
             for name in (watched_notebooks or self.WATCHED_NOTEBOOKS)
@@ -175,8 +186,39 @@ class CloudPoller:
                 status=result["status"],
                 hint="Run 'paia-supernote login' to re-authenticate",
             )
+            await self._set_poll_health(
+                False, reason="cloud_session_expired", status=result["status"]
+            )
             return []
         if result["status"] != 200 or not isinstance(result["body"], dict):
             log.warning("cloud_list_failed", status=result["status"])
+            await self._set_poll_health(
+                False, reason="cloud_list_failed", status=result["status"]
+            )
             return []
+        await self._set_poll_health(True, reason=None, status=result["status"])
         return result["body"].get("userFileVOList", [])
+
+    async def _set_poll_health(
+        self, healthy: bool, *, reason: str | None, status: int | None
+    ) -> None:
+        """Fire the health callback only when poll health changes state.
+
+        Throttles monitoring to transitions so a persistent 403 surfaces once
+        (degraded) and once again on recovery — never per-poll.
+        """
+        if healthy == self._poll_healthy:
+            return
+        self._poll_healthy = healthy
+        log.info("cloud_poll_health_changed", healthy=healthy, reason=reason)
+        if self._on_poll_health is None:
+            return
+        detail: Dict[str, object] = {
+            "reason": reason,
+            "status": status,
+            "notebooks": sorted(self._watched_notebooks),
+        }
+        try:
+            await self._on_poll_health(healthy, detail)
+        except Exception as exc:  # monitoring must never break the poll loop
+            log.warning("cloud_poll_health_callback_error", error=str(exc))

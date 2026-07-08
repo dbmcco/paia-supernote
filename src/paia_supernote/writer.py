@@ -32,6 +32,11 @@ class SupernoteWriter:
     DEVICE_WIDTH = 1404
     DEVICE_HEIGHT = 1872
     DEVICE_DPI = 226
+    PAGE_STYLE = "style_white"
+
+    MANTA_WIDTH = 1920
+    MANTA_HEIGHT = 2560
+    MANTA_PAGE_STYLE = "style_white_a5x2"
 
     # Font size constants (calibrated from device feedback 2026-04-14: 36 was too small)
     BODY_FONT_SIZE = 52
@@ -41,10 +46,36 @@ class SupernoteWriter:
     MARGIN = 80
     LINE_SPACING = 16
 
+    def __init__(
+        self,
+        *,
+        device_width: int | None = None,
+        device_height: int | None = None,
+        page_style: str | None = None,
+    ) -> None:
+        self.device_width = device_width or self.DEVICE_WIDTH
+        self.device_height = device_height or self.DEVICE_HEIGHT
+        self.page_style = page_style or self.PAGE_STYLE
+
+    def for_notebook(self, notebook) -> "SupernoteWriter":
+        """Return a writer configured for the target notebook canvas."""
+        width = notebook.get_width()
+        height = notebook.get_height()
+        page_style = (
+            self.MANTA_PAGE_STYLE
+            if (width, height) == (self.MANTA_WIDTH, self.MANTA_HEIGHT)
+            else self.PAGE_STYLE
+        )
+        return type(self)(
+            device_width=width,
+            device_height=height,
+            page_style=page_style,
+        )
+
     def paginate_content(self, agent: str, content: str) -> list[str]:
         """Split body content into page-sized chunks without dropping text."""
         draw = ImageDraw.Draw(
-            Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
+            Image.new("L", (self.device_width, self.device_height), color=255)
         )
         body_font = self._load_font(agent, size=self.BODY_FONT_SIZE)
         current_lines: list[str] = []
@@ -76,7 +107,7 @@ class SupernoteWriter:
         - Body text in agent's assigned font
         - Agent signature bottom-left (~36px)
         """
-        img = Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
+        img = Image.new("L", (self.device_width, self.device_height), color=255)
         draw = ImageDraw.Draw(img)
 
         body_font = self._load_font(agent, size=self.BODY_FONT_SIZE)
@@ -87,7 +118,7 @@ class SupernoteWriter:
         date_bbox = draw.textbbox((0, 0), date_str, font=small_font)
         date_w = date_bbox[2] - date_bbox[0]
         draw.text(
-            (self.DEVICE_WIDTH - self.MARGIN - date_w, self.MARGIN),
+            (self.device_width - self.MARGIN - date_w, self.MARGIN),
             date_str,
             fill=0,
             font=small_font,
@@ -106,7 +137,7 @@ class SupernoteWriter:
         sig_font = self._load_font(None, size=self.SIGNATURE_FONT_SIZE)
         sig = f"— {agent}"
         draw.text(
-            (self.MARGIN, self.DEVICE_HEIGHT - self.MARGIN - 30),
+            (self.MARGIN, self.device_height - self.MARGIN - 30),
             sig,
             fill=0,
             font=sig_font,
@@ -168,7 +199,7 @@ class SupernoteWriter:
         )
 
         page_info = {
-            "PAGESTYLE": "style_white",
+            "PAGESTYLE": self.page_style,
             "PAGESTYLEMD5": "0",
             "LAYERINFO": layer_info,
             "LAYERSEQ": "MAINLAYER,BGLAYER",
@@ -242,7 +273,7 @@ class SupernoteWriter:
         - Tasks as checkbox list: □ Title  [id]  or  ☑ Title  [id]
         - Overflow indicated by "+ N more tasks" at bottom
         """
-        img = Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
+        img = Image.new("L", (self.device_width, self.device_height), color=255)
         draw = ImageDraw.Draw(img)
 
         header_font = self._load_font(None, size=self.TASKS_HEADER_SIZE)
@@ -258,14 +289,14 @@ class SupernoteWriter:
         header_h = header_bbox[3] - header_bbox[1]
         line_y = self.MARGIN + header_h + 16
         draw.line(
-            [(self.MARGIN, line_y), (self.DEVICE_WIDTH - self.MARGIN, line_y)],
+            [(self.MARGIN, line_y), (self.device_width - self.MARGIN, line_y)],
             fill=0,
             width=2,
         )
 
         y = line_y + 24
-        max_text_width = self.DEVICE_WIDTH - 2 * self.MARGIN - 160
-        bottom_limit = self.DEVICE_HEIGHT - self.MARGIN - 60
+        max_text_width = self.device_width - 2 * self.MARGIN - 160
+        bottom_limit = self.device_height - self.MARGIN - 60
         rendered = 0
 
         for task in tasks:
@@ -295,7 +326,7 @@ class SupernoteWriter:
             if task_id:
                 id_text = f"[{task_id[:12]}]"
                 id_bbox = draw.textbbox((0, 0), id_text, font=id_font)
-                id_x = self.DEVICE_WIDTH - self.MARGIN - (id_bbox[2] - id_bbox[0])
+                id_x = self.device_width - self.MARGIN - (id_bbox[2] - id_bbox[0])
                 id_y = y + (self.TASKS_BODY_SIZE - self.TASKS_ID_SIZE) // 2
                 draw.text((id_x, id_y), id_text, fill=120, font=id_font)
 
@@ -389,7 +420,7 @@ class SupernoteWriter:
         self, draw: ImageDraw.ImageDraw, content: str, body_font
     ) -> list[str]:
         """Return wrapped body lines using the same layout rules as page rendering."""
-        max_width = self.DEVICE_WIDTH - 2 * self.MARGIN
+        max_width = self.device_width - 2 * self.MARGIN
         lines: list[str] = []
         for line in content.split("\n"):
             lines.extend(self._wrap_text(draw, line, body_font, max_width))
@@ -406,7 +437,7 @@ class SupernoteWriter:
 
     def _body_bottom_limit(self) -> int:
         """Return the exclusive lower bound for body text rendering."""
-        return self.DEVICE_HEIGHT - self.MARGIN - 60
+        return self.device_height - self.MARGIN - 60
 
     def append_rle_page(self, notebook_bytes: bytes, rle_content: bytes) -> bytes:
         """Append a new page with RLE content to an existing notebook."""

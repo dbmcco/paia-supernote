@@ -200,6 +200,48 @@ class EventsClient:
             occurred_at=datetime.now(timezone.utc),
         )
 
+    async def publish_feedback_ingest_status(
+        self,
+        *,
+        healthy: bool,
+        reason: str | None = None,
+        status: int | None = None,
+        notebooks: list[str] | None = None,
+    ) -> None:
+        """Publish Walk/feedback ingestion health so failures are visible.
+
+        Emits ``supernote.feedback_ingest.failed`` when the cloud read-poll can
+        no longer fetch notes (e.g. an expired session returning 401/403), and
+        ``supernote.feedback_ingest.recovered`` when polling resumes. Intended
+        for transition events only — the caller throttles to state changes so a
+        persistent 403 does not flood the bus.
+        """
+        event_type = (
+            "supernote.feedback_ingest.recovered"
+            if healthy
+            else "supernote.feedback_ingest.failed"
+        )
+        # Collapse a persistent failure (e.g. across restarts) into one alarm,
+        # but never suppress a legitimate recovery — those carry a unique key.
+        dedupe_key = (
+            f"supernote.feedback_ingest:recovered:{uuid.uuid4()}"
+            if healthy
+            else f"supernote.feedback_ingest:failed:{reason or ''}:{status or ''}"
+        )
+        await self._publish(
+            event_type=event_type,
+            payload={
+                "schema_version": "supernote-feedback-ingest-v1",
+                "healthy": healthy,
+                "reason": reason,
+                "status": status,
+                "notebooks": notebooks or [],
+                "surface": "daily_walk",
+            },
+            dedupe_key=dedupe_key,
+            occurred_at=datetime.now(timezone.utc),
+        )
+
     async def publish_write_completed(
         self,
         *,

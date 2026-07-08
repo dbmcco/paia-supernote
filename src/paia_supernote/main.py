@@ -271,6 +271,7 @@ class SupernoteService:
             poll_interval=self.config["poll_interval"],
             watched_notebooks=_watched_notebooks(self.config),
             process_existing_on_start=False,
+            on_poll_health=self._on_poll_health,
         )
         self.tasks_sync = TasksSync(
             uploader=self.uploader,
@@ -416,6 +417,22 @@ class SupernoteService:
         """Handle change events from the cloud poller."""
         log.info("note_changed", notebook=notebook_name, size=len(note_bytes))
         await self._process_file_change(notebook_name, note_bytes)
+
+    async def _on_poll_health(
+        self, healthy: bool, detail: dict[str, object]
+    ) -> None:
+        """Surface cloud read-poll health so Walk feedback ingest failures are visible.
+
+        A 401/403 leaves the poller fetching an empty list silently; this emits a
+        monitoring event (failed/recovered) on each transition so the outage is
+        observable rather than buried in logs.
+        """
+        await self.events.publish_feedback_ingest_status(
+            healthy=healthy,
+            reason=detail.get("reason"),  # type: ignore[arg-type]
+            status=detail.get("status"),  # type: ignore[arg-type]
+            notebooks=detail.get("notebooks"),  # type: ignore[arg-type]
+        )
 
     async def _process_file_change(self, notebook_name: str, note_bytes: bytes) -> None:
         """Process a changed .note file through the read pipeline."""

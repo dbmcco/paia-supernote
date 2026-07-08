@@ -1,0 +1,113 @@
+# ABOUTME: Tests CloudPoller poll-health transitions that surface silent 403s.
+# ABOUTME: A persistent auth failure must fire monitoring once, then recover once.
+
+from __future__ import annotations
+
+import pytest
+
+from paia_supernote.cloud_poller import CloudPoller
+
+
+class FakeUploader:
+    """Minimal uploader stub: returns a scripted status from each list query."""
+
+    NOTE_FOLDER_ID = "folder-1"
+
+    def __init__(self, statuses: list[int]) -> None:
+        self._statuses = list(statuses)
+        self.calls = 0
+
+    async def _api_call(self, endpoint: str, body: dict) -> dict:
+        self.calls += 1
+        status = self._statuses[min(self.calls - 1, len(self._statuses) - 1)]
+        body_out: dict | str
+        body_out = {"userFileVOList": []} if status == 200 else "error"
+        return {"status": status, "body": body_out}
+
+
+async def _noop_changed(notebook: str, note_bytes: bytes, update_time) -> None:
+    return None
+
+
+def _make_poller(statuses: list[int]):
+    transitions: list[tuple[bool, dict]] = []
+
+    async def on_health(healthy: bool, detail: dict) -> None:
+        transitions.append((healthy, detail))
+
+    poller = CloudPoller(
+        uploader=FakeUploader(statuses),
+        on_note_changed=_noop_changed,
+        on_poll_health=on_health,
+    )
+    return poller, transitions
+
+
+class TestPollHealthTransitions:
+    @pytest.mark.asyncio
+    async def test_first_403_fires_degraded_once(self) -> None:
+        poller, transitions = _make_poller([403])
+
+        result = await poller._list_notes()
+
+        assert result == []  # silent empty list — the original symptom
+        assert len(transitions) == 1
+        healthy, detail = transitions[0]
+        assert healthy is False
+        assert detail["reason"] == "cloud_session_expired"
+        assert detail["status"] == 403
+
+    @pytest.mark.asyncio
+    async def test_persistent_403_fires_only_once(self) -> None:
+        poller, transitions = _make_poller([403, 403, 403])
+
+        for _ in range(3):
+            await poller._list_notes()
+
+        # Throttled to the single healthy->degraded transition, not per-poll.
+        assert len(transitions) == 1
+        assert transitions[0][0] is False
+
+    @pytest.mark.asyncio
+    async def test_recovery_after_failure_fires_recovered(self) -> None:
+        poller, transitions = _make_poller([403, 200])
+
+        await poller._list_notes()
+        await poller._list_notes()
+
+        assert [t[0] for t in transitions] == [False, True]
+
+    @pytest.mark.asyncio
+    async def test_healthy_polls_never_fire(self) -> None:
+        poller, transitions = _make_poller([200, 200])
+
+        await poller._list_notes()
+        await poller._list_notes()
+
+        assert transitions == []
+
+    @pytest.mark.asyncio
+    async def test_non_auth_list_failure_also_degrades(self) -> None:
+        poller, transitions = _make_poller([500])
+
+        await poller._list_notes()
+
+        assert len(transitions) == 1
+        healthy, detail = transitions[0]
+        assert healthy is False
+        assert detail["reason"] == "cloud_list_failed"
+        assert detail["status"] == 500
+
+    @pytest.mark.asyncio
+    async def test_callback_error_does_not_break_poll(self) -> None:
+        async def boom(healthy: bool, detail: dict) -> None:
+            raise RuntimeError("monitoring sink down")
+
+        poller = CloudPoller(
+            uploader=FakeUploader([403]),
+            on_note_changed=_noop_changed,
+            on_poll_health=boom,
+        )
+
+        # Must swallow the callback error and still return the empty list.
+        assert await poller._list_notes() == []

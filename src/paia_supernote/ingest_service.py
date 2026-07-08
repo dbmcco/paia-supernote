@@ -126,6 +126,21 @@ class IngestService:
                     text=result.text,
                 )
 
+    async def _on_poll_health(
+        self, healthy: bool, detail: dict[str, Any]
+    ) -> None:
+        """Emit a monitoring event when cloud read-poll health changes.
+
+        Makes silent 401/403 feedback-ingest outages observable instead of
+        leaving them buried in poller log warnings.
+        """
+        await self.events.publish_feedback_ingest_status(
+            healthy=healthy,
+            reason=detail.get("reason"),
+            status=detail.get("status"),
+            notebooks=detail.get("notebooks"),
+        )
+
     async def start(self) -> None:
         log.info("ingest_service_starting")
         await self.events.start()
@@ -176,6 +191,7 @@ class IngestService:
             poll_interval=self.config["poll_interval"],
             watched_notebooks=self._watched_notebook_keys,
             process_existing_on_start=False,
+            on_poll_health=self._on_poll_health,
         )
         self._uploader = uploader
         self._cloud_poller = cloud_poller

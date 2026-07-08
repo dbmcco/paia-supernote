@@ -22,18 +22,21 @@ def replace_notebook_pages(base_bytes: bytes, *, writer, pages: list[NotebookPag
     if not pages:
         raise ValueError("pages must not be empty")
 
-    page_rles = [
-        writer.render_page(spec.agent, chunk)
-        for spec in pages
-        for chunk in writer.paginate_content(spec.agent, spec.content)
-    ]
-
     fd, path = tempfile.mkstemp(suffix=".note")
     try:
         os.write(fd, base_bytes)
         os.close(fd)
         notebook = sn_parser.load_notebook(path)
-        fresh_pages = [writer.build_page(rle) for rle in page_rles]
+        if notebook.metadata.signature != sn_parser.SupernoteXParser.SN_SIGNATURES[-1]:
+            notebook.metadata.signature = sn_parser.SupernoteXParser.SN_SIGNATURES[-1]
+            notebook.signature = notebook.metadata.signature
+        target_writer = writer.for_notebook(notebook) if hasattr(writer, "for_notebook") else writer
+        page_rles = [
+            target_writer.render_page(spec.agent, chunk)
+            for spec in pages
+            for chunk in target_writer.paginate_content(spec.agent, spec.content)
+        ]
+        fresh_pages = [target_writer.build_page(rle) for rle in page_rles]
         notebook.pages = fresh_pages
         notebook.metadata.pages = [page.metadata for page in fresh_pages]
         rebuilt = sn_manip.reconstruct(notebook)

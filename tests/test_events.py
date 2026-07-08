@@ -188,6 +188,53 @@ class TestEventPublishing:
             assert body["payload"]["error"] == "upload_failed"
 
     @pytest.mark.asyncio
+    async def test_publish_feedback_ingest_failed(self, client: EventsClient) -> None:
+        with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
+            mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await client.publish_feedback_ingest_status(
+                healthy=False,
+                reason="cloud_session_expired",
+                status=403,
+                notebooks=["Walk", "tasks"],
+            )
+
+            body = mock_http.post.call_args[1]["json"]
+            assert body["event_type"] == "supernote.feedback_ingest.failed"
+            assert body["payload"]["healthy"] is False
+            assert body["payload"]["reason"] == "cloud_session_expired"
+            assert body["payload"]["status"] == 403
+            assert body["payload"]["notebooks"] == ["Walk", "tasks"]
+            assert body["payload"]["surface"] == "daily_walk"
+            # Persistent failures collapse to one alarm via a stable dedupe key.
+            assert body["dedupe_key"] == (
+                "supernote.feedback_ingest:failed:cloud_session_expired:403"
+            )
+
+    @pytest.mark.asyncio
+    async def test_publish_feedback_ingest_recovered(
+        self, client: EventsClient
+    ) -> None:
+        with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:
+            mock_http = AsyncMock()
+            mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await client.publish_feedback_ingest_status(healthy=True, status=200)
+
+            body = mock_http.post.call_args[1]["json"]
+            assert body["event_type"] == "supernote.feedback_ingest.recovered"
+            assert body["payload"]["healthy"] is True
+            # Recoveries carry a unique key so a later recovery is never suppressed.
+            assert body["dedupe_key"].startswith(
+                "supernote.feedback_ingest:recovered:"
+            )
+
+    @pytest.mark.asyncio
     async def test_publish_survives_http_error(self, client: EventsClient) -> None:
         """Publish failure is logged but does not raise."""
         with patch("paia_supernote.events.httpx.AsyncClient") as mock_cls:

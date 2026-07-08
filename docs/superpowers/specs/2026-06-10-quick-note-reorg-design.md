@@ -12,6 +12,24 @@ Folio is the semantic layer. It carries OCR text, tags, backlinks, cross-domain 
 
 The filing ledger is the control layer. It records source page, destination, confidence, model evidence, review status, and completed operations.
 
+Workboard is the active handoff layer. When a capture, daily note, or agent
+review turns into work for another agent, the handoff belongs on the Workboard
+task log rather than being buried in generated Supernote prose. The handoff
+packet should include:
+
+- owner/status: who is taking it and whether it is active, waiting, or queued
+- why now: meeting, deadline, pressure, or decision forcing the work
+- source anchors: email ids, Folio note ids, file paths, calendar events,
+  transcript ids, Workboard tasks, Linear issues, or repo paths
+- early findings: what has already been checked or ruled out
+- next decision: the exact question or artifact the agent should produce
+- boundary: what not to do and what still needs Braydon approval
+
+Generated Walk.note or daily pages may show a compact handoff card when it helps
+Braydon orient the day. They should not dump full task logs. A good daily card
+names the task, owner, why it matters today, the next decision, and when
+Braydon should look again.
+
 ## Notebook Roles
 
 `Quick.note` is an inbox, not an archive. It should keep:
@@ -22,7 +40,9 @@ The filing ledger is the control layer. It records source page, destination, con
 
 Primary destination notebooks:
 
-- `Mgmt.note`: active work state, current priorities, stuck points, delegation, meeting prep, and operating cadence
+- `Mgmt.note`: active work state, current priorities, stuck points, delegation,
+  meeting prep, operating cadence, and concise agent-handoff cards when they
+  affect the shape of the day
 - `PAIA.note`: PAIA system design, agents, Supernote, Folio, workgraph, model-mediated systems, and related product/system design
 - `LFW.note`: LFW client, product, BD, legal, and commercial work
 - `Synth.note`: Synth/Synthera thinking
