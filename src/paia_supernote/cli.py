@@ -46,6 +46,12 @@ from .uploader import SupernoteUploader, UploadAuthError
 from .writer import SupernoteWriter
 
 BACKUPS_ROOT = Path("~/.paia/supernote/backups").expanduser()
+DEFAULT_RENDER_DIR = Path("/tmp")
+
+
+def _normalize_notebook(name: str) -> str:
+    """Strip a trailing .note so 'Quick.note' and 'Quick' name the same notebook."""
+    return name[:-5] if name.lower().endswith(".note") else name
 
 
 @dataclass
@@ -181,7 +187,7 @@ async def cmd_read(
         results = await reader.read_pages(source_bytes, notebook, pages=pages)
     else:
         results = await reader.read_all_pages(source_bytes, notebook)
-    out_dir = Path(render_dir or tempfile.gettempdir())
+    out_dir = Path(render_dir) if render_dir else DEFAULT_RENDER_DIR
     rows: list[dict] = []
     for result in results:
         row = {"page": int(result.page_num), "text": str(result.text)}
@@ -504,9 +510,26 @@ def _jsonable(obj: Any) -> Any:
     return obj
 
 
+def _format_read(rows: list[dict]) -> str:
+    parts = []
+    for r in rows:
+        chunk = f"[page {r['page']}]"
+        if r.get("image"):
+            chunk += f"\n(image: {r['image']})"
+        chunk += f"\n{r['text']}"
+        parts.append(chunk)
+    return "\n\n".join(parts) or "(empty)"
+
+
 async def _run_command(
     args: argparse.Namespace, config: CliConfig, uploader: Any
 ) -> None:
+    # Accept both 'Quick' and 'Quick.note'; verbs append '.note' internally.
+    if getattr(args, "notebook", None):
+        args.notebook = _normalize_notebook(args.notebook)
+    if getattr(args, "to", None):
+        args.to = _normalize_notebook(args.to)
+
     def emit(payload: Any, text: str) -> None:
         if args.json:
             print(json.dumps(_jsonable(payload), default=str, indent=2))
@@ -529,10 +552,7 @@ async def _run_command(
             pages=_parse_pages(args.pages),
             render=args.render,
         )
-        emit(
-            rows,
-            "\n\n".join(f"[page {r['page']}]\n{r['text']}" for r in rows) or "(empty)",
-        )
+        emit(rows, _format_read(rows))
     elif args.command == "append":
         text = _read_append_text(args)
         result = await cmd_append(

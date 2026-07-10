@@ -40,7 +40,7 @@ def mock_session_file(tmp_path):
             {
                 "name": "session_cookie",
                 "value": "abc123",
-                "domain": "cloud.supernote.com"
+                "domain": "cloud.supernote.com",
             }
         ]
     }
@@ -76,7 +76,7 @@ class TestSupernoteUploader:
     @pytest.mark.asyncio
     async def test_upload_to_s3_raises_on_missing_file(self, uploader):
         """Test that _upload_to_s3 raises FileNotFoundError for missing file."""
-        upload_info = {'uploadUrl': 'https://s3.example.com/bucket/key'}
+        upload_info = {"uploadUrl": "https://s3.example.com/bucket/key"}
         with pytest.raises(FileNotFoundError):
             await uploader._upload_to_s3("/path/to/nonexistent/file", upload_info)
 
@@ -92,15 +92,32 @@ class TestSupernoteUploader:
         """Test that upload_notebook calls the three-step upload flow."""
         uploader.page = Mock()
 
-        with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock) as mock_auth, \
-             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]), \
-             patch.object(uploader, '_find_blocking_sibling_names', new_callable=AsyncMock, return_value=[]) as mock_siblings, \
-             patch.object(uploader, '_initiate_upload', new_callable=AsyncMock) as mock_apply, \
-             patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock) as mock_s3, \
-             patch.object(uploader, '_finish_upload', new_callable=AsyncMock) as mock_finish, \
-             patch.object(uploader, '_wait_for_stable_single_target', new_callable=AsyncMock) as mock_verify:
+        with (
+            patch.object(
+                uploader, "_ensure_authenticated", new_callable=AsyncMock
+            ) as mock_auth,
+            patch.object(
+                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(
+                uploader,
+                "_find_blocking_sibling_names",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_siblings,
+            patch.object(
+                uploader, "_initiate_upload", new_callable=AsyncMock
+            ) as mock_apply,
+            patch.object(uploader, "_upload_to_s3", new_callable=AsyncMock) as mock_s3,
+            patch.object(
+                uploader, "_finish_upload", new_callable=AsyncMock
+            ) as mock_finish,
+            patch.object(
+                uploader, "_wait_for_stable_single_target", new_callable=AsyncMock
+            ) as mock_verify,
+        ):
 
-            mock_apply.return_value = {'uploadUrl': 'https://s3.example.com/key'}
+            mock_apply.return_value = {"uploadUrl": "https://s3.example.com/key"}
 
             result = await uploader.upload_notebook("/path/to/test.note", "Quick.note")
             assert result is True
@@ -118,16 +135,22 @@ class TestSupernoteUploader:
         """Existing conflict/numbered siblings must be cleaned before upload."""
         uploader.page = Mock()
 
-        with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock), \
-             patch.object(
-                 uploader,
-                 '_find_blocking_sibling_names',
-                 new_callable=AsyncMock,
-                 return_value=["Quick_CONFLICT_20260507154554506.note", "Quick(1).note"],
-             ), \
-             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock) as mock_find:
+        with (
+            patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
+            patch.object(
+                uploader,
+                "_find_blocking_sibling_names",
+                new_callable=AsyncMock,
+                return_value=["Quick_CONFLICT_20260507154554506.note", "Quick(1).note"],
+            ),
+            patch.object(
+                uploader, "_find_file_ids", new_callable=AsyncMock
+            ) as mock_find,
+        ):
 
-            with pytest.raises(SupernoteUploadConflictError, match="blocking cloud copies"):
+            with pytest.raises(
+                SupernoteUploadConflictError, match="blocking cloud copies"
+            ):
                 await uploader.upload_notebook(mock_note_file, "Quick.note")
 
             mock_find.assert_not_awaited()
@@ -181,7 +204,7 @@ class TestSupernoteUploader:
         # Patch the session file path to use our mock
         uploader.SESSION_FILE = mock_session_file
 
-        with patch('paia_supernote.uploader.async_playwright') as mock_pw:
+        with patch("paia_supernote.uploader.async_playwright") as mock_pw:
             mock_pw.return_value.start = AsyncMock(return_value=mock_playwright)
             mock_playwright.chromium.launch = AsyncMock(return_value=mock_browser)
 
@@ -206,19 +229,30 @@ class TestSupernoteUploader:
         uploader.page = Mock()
 
         # Mock the network calls to return expected data
-        with patch.object(uploader, '_ensure_authenticated') as mock_auth, \
-             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]), \
-             patch.object(uploader, '_find_blocking_sibling_names', new_callable=AsyncMock, return_value=[]), \
-             patch.object(uploader, '_initiate_upload') as mock_apply, \
-             patch.object(uploader, '_upload_to_s3') as mock_s3, \
-             patch.object(uploader, '_finish_upload') as mock_finish, \
-             patch.object(uploader, '_wait_for_stable_single_target', new_callable=AsyncMock):
+        with (
+            patch.object(uploader, "_ensure_authenticated") as mock_auth,
+            patch.object(
+                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(
+                uploader,
+                "_find_blocking_sibling_names",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(uploader, "_initiate_upload") as mock_apply,
+            patch.object(uploader, "_upload_to_s3") as mock_s3,
+            patch.object(uploader, "_finish_upload") as mock_finish,
+            patch.object(
+                uploader, "_wait_for_stable_single_target", new_callable=AsyncMock
+            ),
+        ):
 
             mock_auth.return_value = None
             mock_apply.return_value = {
-                'uploadUrl': 'https://s3.amazonaws.com/bucket/key',
-                'uploadId': 'abc123',
-                'headers': {'Authorization': 'AWS4-HMAC-SHA256 ...'}
+                "uploadUrl": "https://s3.amazonaws.com/bucket/key",
+                "uploadId": "abc123",
+                "headers": {"Authorization": "AWS4-HMAC-SHA256 ..."},
             }
             mock_s3.return_value = None
             mock_finish.return_value = None
@@ -242,85 +276,83 @@ class TestSupernoteUploader:
         assert computed_md5 == expected_md5
 
     @pytest.mark.asyncio
-    async def test_ensure_authenticated_checks_login_state(self, uploader):
-        """Test that _ensure_authenticated detects login redirect and triggers reauth."""
-        mock_page = Mock()
-        mock_response = Mock()
-        mock_response.status = 200
-        mock_page.goto = AsyncMock(return_value=mock_response)
-        mock_page.url = "https://cloud.supernote.com/login"
-        uploader.page = mock_page
+    async def test_ensure_authenticated_skips_reauth_when_api_probe_succeeds(
+        self, uploader
+    ):
+        """A live session returns from the file-list probe; no re-auth needed."""
+        uploader.page = Mock()
 
-        with patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth:
+        with (
+            patch.object(
+                uploader, "_list_note_files", new_callable=AsyncMock
+            ) as mock_list,
+            patch.object(
+                uploader, "_interactive_reauth", new_callable=AsyncMock
+            ) as mock_reauth,
+        ):
+            mock_list.return_value = []
             await uploader._ensure_authenticated()
-
-            # Should have navigated to check auth state
-            mock_page.goto.assert_called_once()
-            # Should have triggered reauth because URL contains /login
-            mock_reauth.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_ensure_authenticated_skips_reauth_when_logged_in(self, uploader):
-        """Test that _ensure_authenticated does not reauth when already logged in."""
-        mock_page = Mock()
-        mock_response = Mock()
-        mock_response.status = 200
-        mock_page.goto = AsyncMock(return_value=mock_response)
-        mock_page.url = "https://cloud.supernote.com/files"
-        uploader.page = mock_page
-
-        with patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth:
-            await uploader._ensure_authenticated()
+            mock_list.assert_called_once()
             mock_reauth.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_ensure_authenticated_reauths_on_401_response(self, uploader):
-        """Test that _ensure_authenticated triggers reauth on 401 from navigation."""
-        mock_page = Mock()
-        mock_response = Mock()
-        mock_response.status = 401
-        mock_page.goto = AsyncMock(return_value=mock_response)
-        mock_page.url = "https://cloud.supernote.com"
-        uploader.page = mock_page
+    async def test_ensure_authenticated_reauths_when_api_probe_is_unauthorized(
+        self, uploader
+    ):
+        """A dead session (403 from the file-list probe) triggers re-auth."""
+        uploader.page = Mock()
 
-        with patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth:
+        with (
+            patch.object(
+                uploader, "_list_note_files", new_callable=AsyncMock
+            ) as mock_list,
+            patch.object(
+                uploader, "_interactive_reauth", new_callable=AsyncMock
+            ) as mock_reauth,
+        ):
+            mock_list.side_effect = UploadAuthError("list/query returned 403")
             await uploader._ensure_authenticated()
+            mock_list.assert_called_once()
             mock_reauth.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_initiate_upload_posts_to_apply_endpoint(self, uploader, mock_note_file):
+    async def test_initiate_upload_posts_to_apply_endpoint(
+        self, uploader, mock_note_file
+    ):
         """Test that _initiate_upload makes POST request to upload/apply endpoint."""
         mock_page = Mock()
 
         # Real API returns: url, s3Authorization, xamzDate, fileServer
         api_body = {
-            'success': True,
-            'url': 'https://s3.amazonaws.com/bucket/key.note',
-            's3Authorization': 'AWS4-HMAC-SHA256 Credential=...',
-            'xamzDate': '20260414T200355Z',
-            'fileServer': '2',
-            'innerName': None,
+            "success": True,
+            "url": "https://s3.amazonaws.com/bucket/key.note",
+            "s3Authorization": "AWS4-HMAC-SHA256 Credential=...",
+            "xamzDate": "20260414T200355Z",
+            "fileServer": "2",
+            "innerName": None,
         }
-        mock_page.evaluate = AsyncMock(return_value={'status': 200, 'body': api_body})
+        mock_page.evaluate = AsyncMock(return_value={"status": 200, "body": api_body})
         uploader.page = mock_page
 
         result = await uploader._initiate_upload(mock_note_file, "Quick.note")
 
-        assert result['url'] == api_body['url']
-        assert result['s3Authorization'] == api_body['s3Authorization']
+        assert result["url"] == api_body["url"]
+        assert result["s3Authorization"] == api_body["s3Authorization"]
         mock_page.evaluate.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_upload_to_s3_puts_file_to_presigned_url(self, uploader, mock_note_file):
+    async def test_upload_to_s3_puts_file_to_presigned_url(
+        self, uploader, mock_note_file
+    ):
         """Test that _upload_to_s3 uploads file to S3 presigned URL."""
         # Real API: url = presigned S3 URL, s3Authorization + xamzDate are headers
         upload_info = {
-            'url': 'https://s3.amazonaws.com/bucket/key.note',
-            's3Authorization': 'AWS4-HMAC-SHA256 Credential=...',
-            'xamzDate': '20260414T200355Z',
+            "url": "https://s3.amazonaws.com/bucket/key.note",
+            "s3Authorization": "AWS4-HMAC-SHA256 Credential=...",
+            "xamzDate": "20260414T200355Z",
         }
 
-        with patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
+        with patch("paia_supernote.uploader.httpx.AsyncClient") as mock_client_class:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.raise_for_status = Mock()
@@ -336,24 +368,29 @@ class TestSupernoteUploader:
 
             mock_client.put.assert_called_once()
             call_args = mock_client.put.call_args
-            assert call_args[0][0] == upload_info['url']
-            assert 'content' in call_args[1]
-            assert 'x-amz-content-sha256' in call_args[1]['headers']
-            assert call_args[1]['headers']['Authorization'] == upload_info['s3Authorization']
+            assert call_args[0][0] == upload_info["url"]
+            assert "content" in call_args[1]
+            assert "x-amz-content-sha256" in call_args[1]["headers"]
+            assert (
+                call_args[1]["headers"]["Authorization"]
+                == upload_info["s3Authorization"]
+            )
 
     @pytest.mark.asyncio
-    async def test_finish_upload_posts_to_finish_endpoint(self, uploader, mock_note_file):
+    async def test_finish_upload_posts_to_finish_endpoint(
+        self, uploader, mock_note_file
+    ):
         """Test that _finish_upload makes POST request to upload/finish endpoint."""
         mock_page = Mock()
         upload_info = {
-            'url': 'https://s3.amazonaws.com/key.note',
-            'fileServer': '2',
-            'innerName': None,
+            "url": "https://s3.amazonaws.com/key.note",
+            "fileServer": "2",
+            "innerName": None,
         }
 
         # evaluate is called by _api_call inside _finish_upload
         mock_page.evaluate = AsyncMock(
-            return_value={'status': 200, 'body': {'success': True}}
+            return_value={"status": 200, "body": {"success": True}}
         )
         uploader.page = mock_page
 
@@ -363,7 +400,7 @@ class TestSupernoteUploader:
         # The JS string passed to evaluate should reference /api/file/upload/finish
         call_args = mock_page.evaluate.call_args
         js_or_args = str(call_args)
-        assert '/api/file/upload/finish' in js_or_args
+        assert "/api/file/upload/finish" in js_or_args
 
     @pytest.mark.asyncio
     async def test_reauth_triggered_on_401_from_apply(self, uploader, mock_note_file):
@@ -372,7 +409,7 @@ class TestSupernoteUploader:
 
         # First call to _initiate_upload raises UploadAuthError (401)
         # Second call succeeds after re-auth
-        upload_info = {'uploadUrl': 'https://s3.example.com/key', 'headers': {}}
+        upload_info = {"uploadUrl": "https://s3.example.com/key", "headers": {}}
 
         call_count = 0
 
@@ -383,14 +420,29 @@ class TestSupernoteUploader:
                 raise UploadAuthError("Upload apply returned 401")
             return upload_info
 
-        with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock), \
-             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]), \
-             patch.object(uploader, '_find_blocking_sibling_names', new_callable=AsyncMock, return_value=[]), \
-             patch.object(uploader, '_initiate_upload', side_effect=mock_initiate) as mock_apply, \
-             patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth, \
-             patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock), \
-             patch.object(uploader, '_finish_upload', new_callable=AsyncMock), \
-             patch.object(uploader, '_wait_for_stable_single_target', new_callable=AsyncMock):
+        with (
+            patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
+            patch.object(
+                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(
+                uploader,
+                "_find_blocking_sibling_names",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                uploader, "_initiate_upload", side_effect=mock_initiate
+            ) as mock_apply,
+            patch.object(
+                uploader, "_interactive_reauth", new_callable=AsyncMock
+            ) as mock_reauth,
+            patch.object(uploader, "_upload_to_s3", new_callable=AsyncMock),
+            patch.object(uploader, "_finish_upload", new_callable=AsyncMock),
+            patch.object(
+                uploader, "_wait_for_stable_single_target", new_callable=AsyncMock
+            ),
+        ):
 
             result = await uploader.upload_notebook(mock_note_file, "Quick.note")
 
@@ -401,20 +453,24 @@ class TestSupernoteUploader:
             assert mock_apply.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_initiate_upload_raises_upload_auth_error_on_401(self, uploader, mock_note_file):
+    async def test_initiate_upload_raises_upload_auth_error_on_401(
+        self, uploader, mock_note_file
+    ):
         """Test that _initiate_upload raises UploadAuthError on 401 response."""
         mock_page = Mock()
-        mock_page.evaluate = AsyncMock(return_value={'status': 401, 'body': None})
+        mock_page.evaluate = AsyncMock(return_value={"status": 401, "body": None})
         uploader.page = mock_page
 
         with pytest.raises(UploadAuthError, match="401"):
             await uploader._initiate_upload(mock_note_file, "Quick.note")
 
     @pytest.mark.asyncio
-    async def test_initiate_upload_raises_upload_auth_error_on_403(self, uploader, mock_note_file):
+    async def test_initiate_upload_raises_upload_auth_error_on_403(
+        self, uploader, mock_note_file
+    ):
         """Test that _initiate_upload raises UploadAuthError on 403 response."""
         mock_page = Mock()
-        mock_page.evaluate = AsyncMock(return_value={'status': 403, 'body': None})
+        mock_page.evaluate = AsyncMock(return_value={"status": 403, "body": None})
         mock_page.goto = AsyncMock()
         uploader.page = mock_page
 
@@ -430,9 +486,11 @@ class TestSupernoteUploader:
 
     @pytest.mark.asyncio
     async def test_download_notebook_raises_if_file_not_found(self, uploader):
-        """Test that download_notebook raises RuntimeError when file is not in Note folder."""
+        """download_notebook raises when the file is not in the Note folder."""
         uploader.page = Mock()
-        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]):
+        with patch.object(
+            uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+        ):
             with pytest.raises(RuntimeError, match="not found"):
                 await uploader.download_notebook("NoSuchFile.note")
 
@@ -450,16 +508,18 @@ class TestSupernoteUploader:
             return_value={"status": 200, "body": {"url": presigned_url}}
         )
 
-        with patch.object(
-            uploader,
-            "_find_file_ids",
-            new_callable=AsyncMock,
-            side_effect=[UploadAuthError("list/query returned 403"), [file_id]],
-        ) as mock_find, \
+        with (
+            patch.object(
+                uploader,
+                "_find_file_ids",
+                new_callable=AsyncMock,
+                side_effect=[UploadAuthError("list/query returned 403"), [file_id]],
+            ) as mock_find,
             patch.object(
                 uploader, "_restart_browser_session", new_callable=AsyncMock
-            ) as mock_restart, \
-            patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
+            ) as mock_restart,
+            patch("paia_supernote.uploader.httpx.AsyncClient") as mock_client_class,
+        ):
 
             mock_response = Mock()
             mock_response.content = expected_bytes
@@ -478,7 +538,9 @@ class TestSupernoteUploader:
         mock_restart.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_download_notebook_fetches_presigned_url_and_downloads(self, uploader):
+    async def test_download_notebook_fetches_presigned_url_and_downloads(
+        self, uploader
+    ):
         """Test that download_notebook calls download/url API then GETs from S3."""
         mock_page = Mock()
         file_id = "123456789"
@@ -486,13 +548,19 @@ class TestSupernoteUploader:
         expected_bytes = b"fake note content"
 
         mock_page.evaluate = AsyncMock(
-            return_value={'status': 200, 'body': {'url': presigned_url}}
+            return_value={"status": 200, "body": {"url": presigned_url}}
         )
         uploader.page = mock_page
 
-        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
-                          return_value=[file_id]), \
-             patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
+        with (
+            patch.object(
+                uploader,
+                "_find_file_ids",
+                new_callable=AsyncMock,
+                return_value=[file_id],
+            ),
+            patch("paia_supernote.uploader.httpx.AsyncClient") as mock_client_class,
+        ):
 
             mock_response = Mock()
             mock_response.content = expected_bytes
@@ -514,31 +582,38 @@ class TestSupernoteUploader:
         """Test that download_notebook raises RuntimeError when API returns no URL."""
         mock_page = Mock()
         mock_page.evaluate = AsyncMock(
-            return_value={'status': 200, 'body': {'success': True}}  # no 'url' key
+            return_value={"status": 200, "body": {"success": True}}  # no 'url' key
         )
         uploader.page = mock_page
 
-        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
-                          return_value=["some-id"]):
+        with patch.object(
+            uploader, "_find_file_ids", new_callable=AsyncMock, return_value=["some-id"]
+        ):
             with pytest.raises(RuntimeError, match="No URL"):
                 await uploader.download_notebook("Quick.note")
 
     @pytest.mark.asyncio
     async def test_api_call_recovers_when_page_target_is_closed(self, uploader):
-        """_api_call should restart the browser session once when Playwright target is closed."""
+        """_api_call restarts the session once when the Playwright target is closed."""
         dead_page = Mock()
         dead_page.evaluate = AsyncMock(
-            side_effect=RuntimeError("Page.evaluate: Target page, context or browser has been closed")
+            side_effect=RuntimeError(
+                "Page.evaluate: Target page, context or browser has been closed"
+            )
         )
         live_page = Mock()
-        live_page.evaluate = AsyncMock(return_value={"status": 200, "body": {"success": True}})
+        live_page.evaluate = AsyncMock(
+            return_value={"status": 200, "body": {"success": True}}
+        )
         uploader.page = dead_page
 
         async def fake_start() -> None:
             uploader.page = live_page
 
-        with patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop, \
-             patch.object(uploader, "start", side_effect=fake_start) as mock_start:
+        with (
+            patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop,
+            patch.object(uploader, "start", side_effect=fake_start) as mock_start,
+        ):
             result = await uploader._api_call("/api/file/list/query", {"pageNo": 1})
 
         assert result == {"status": 200, "body": {"success": True}}
@@ -548,50 +623,59 @@ class TestSupernoteUploader:
         live_page.evaluate.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_ensure_authenticated_recovers_when_page_target_is_closed(self, uploader):
-        """_ensure_authenticated should restart the browser session once when page navigation fails."""
-        dead_page = Mock()
-        dead_page.goto = AsyncMock(
-            side_effect=RuntimeError("Page.goto: Target page, context or browser has been closed")
+    async def test_ensure_authenticated_recovers_when_page_target_is_closed(
+        self, uploader
+    ):
+        """Restart the session once when the API probe hits a closed page target."""
+        closed_err = RuntimeError(
+            "Page.evaluate: Target page, context or browser has been closed"
         )
+        dead_page = Mock()
+        dead_page.evaluate = AsyncMock(side_effect=closed_err)
         live_page = Mock()
-        live_response = Mock()
-        live_response.status = 200
-        live_page.goto = AsyncMock(return_value=live_response)
-        live_page.url = "https://cloud.supernote.com/files"
+        live_page.evaluate = AsyncMock(
+            return_value={"status": 200, "body": {"userFileVOList": []}}
+        )
         uploader.page = dead_page
 
         async def fake_start() -> None:
             uploader.page = live_page
 
-        with patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop, \
-             patch.object(uploader, "start", side_effect=fake_start) as mock_start, \
-             patch.object(uploader, "_interactive_reauth", new_callable=AsyncMock) as mock_reauth:
+        with (
+            patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop,
+            patch.object(uploader, "start", side_effect=fake_start) as mock_start,
+            patch.object(
+                uploader, "_interactive_reauth", new_callable=AsyncMock
+            ) as mock_reauth,
+        ):
             await uploader._ensure_authenticated()
 
         mock_stop.assert_awaited_once()
         mock_start.assert_awaited_once()
         mock_reauth.assert_not_called()
-        dead_page.goto.assert_awaited_once()
-        live_page.goto.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_api_call_refreshes_csrf_token_and_retries_once(self, uploader):
         """_api_call should refresh the XSRF token and retry once on CSRF expiry."""
         mock_page = Mock()
-        mock_page.evaluate = AsyncMock(side_effect=[
-            {
-                "status": 403,
-                "body": '{"error":"CSRF token validation failed","code":"CSRF_TOKEN_EXPIRED"}',
-            },
-            {
-                "status": 200,
-                "body": {"success": True},
-            },
-        ])
+        mock_page.evaluate = AsyncMock(
+            side_effect=[
+                {
+                    "status": 403,
+                    "body": '{"error":"CSRF token validation failed",'
+                    '"code":"CSRF_TOKEN_EXPIRED"}',
+                },
+                {
+                    "status": 200,
+                    "body": {"success": True},
+                },
+            ]
+        )
         uploader.page = mock_page
 
-        with patch.object(uploader, "_refresh_csrf_token", new_callable=AsyncMock) as mock_refresh:
+        with patch.object(
+            uploader, "_refresh_csrf_token", new_callable=AsyncMock
+        ) as mock_refresh:
             result = await uploader._api_call("/api/file/list/query", {"pageNo": 1})
 
         assert result == {"status": 200, "body": {"success": True}}
@@ -628,7 +712,7 @@ class TestSupernoteUploader:
 
     @pytest.mark.asyncio
     async def test_refresh_csrf_token_uses_cloud_home_route(self, uploader):
-        """Refreshing auth should land on the Cloud app route that sets usable CSRF state."""
+        """Refreshing auth lands on the Cloud route that sets usable CSRF state."""
         mock_page = Mock()
         mock_page.goto = AsyncMock()
         uploader.page = mock_page

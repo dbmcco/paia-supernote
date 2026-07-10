@@ -6,19 +6,26 @@ are mocked; formatting is asserted on its human-readable output.
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import paia_supernote.cli as cli
 from paia_supernote.cli import (
+    DEFAULT_RENDER_DIR,
     CliConfig,
+    _format_read,
+    _normalize_notebook,
     _parse_pages,
     auth_recovery_message,
     cmd_append,
     cmd_ls,
     cmd_move,
     cmd_plan,
+    cmd_read,
     format_move_result,
     format_plan,
     main,
@@ -280,3 +287,72 @@ def test_parse_pages_handles_ranges_and_lists() -> None:
 def test_parse_pages_rejects_garbage_with_friendly_error() -> None:
     with pytest.raises(SystemExit, match="invalid --pages"):
         _parse_pages("abc")
+
+
+def test_normalize_notebook_strips_dot_note_suffix() -> None:
+    assert _normalize_notebook("Quick.note") == "Quick"
+    assert _normalize_notebook("Quick") == "Quick"
+    assert _normalize_notebook("quick.NOTE") == "quick"  # case-insensitive
+    assert _normalize_notebook("Home planning.note") == "Home planning"
+    # a name that merely contains 'note' is left untouched
+    assert _normalize_notebook("Notes") == "Notes"
+
+
+def test_default_render_dir_matches_help_text() -> None:
+    assert DEFAULT_RENDER_DIR == Path("/tmp")
+
+
+def test_format_read_includes_image_path_when_present() -> None:
+    rows = [{"page": 5, "text": "hello", "image": "/tmp/Quick-page-5.png"}]
+    out = _format_read(rows)
+    assert "[page 5]" in out
+    assert "hello" in out
+    assert "(image: /tmp/Quick-page-5.png)" in out
+
+
+def test_format_read_omits_image_line_when_absent() -> None:
+    rows = [{"page": 5, "text": "hello"}]
+    assert "(image:" not in _format_read(rows)
+
+
+@pytest.mark.asyncio
+async def test_cmd_read_render_writes_png_and_reports_path(tmp_path: Path) -> None:
+    uploader = AsyncMock()
+    uploader.download_notebook.return_value = b"note"
+    config = _config(tmp_path)
+    fake_image = MagicMock()
+    config.reader.read_pages = AsyncMock(
+        return_value=[
+            SimpleNamespace(page_num=5, text="hello world", page_image=fake_image)
+        ]
+    )
+
+    rows = await cmd_read(
+        config, uploader, "Quick", pages=[5], render=True, render_dir=str(tmp_path)
+    )
+
+    expected = str(tmp_path / "Quick-page-5.png")
+    assert rows[0]["image"] == expected
+    fake_image.save.assert_called_once_with(expected)
+
+
+@pytest.mark.asyncio
+async def test_run_command_normalizes_notebook_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    uploader = AsyncMock()
+    captured: dict = {}
+
+    async def fake_show(cfg, up, notebook, *, pages=None):
+        captured["notebook"] = notebook
+        return []
+
+    monkeypatch.setattr(cli, "cmd_show", fake_show)
+    args = argparse.Namespace(
+        command="show", notebook="Quick.note", pages=None, json=False, quiet=True
+    )
+
+    await cli._run_command(args, config, uploader)
+
+    assert captured["notebook"] == "Quick"  # .note stripped -> no double-suffix
