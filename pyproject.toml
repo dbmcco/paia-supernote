@@ -43,6 +43,7 @@ where = ["src"]
 [project.scripts]
 paia-supernote = "paia_supernote.main:main"
 paia-supernote-board = "paia_supernote.user_board:cli"
+supernote = "paia_supernote.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

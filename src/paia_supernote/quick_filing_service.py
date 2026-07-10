@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import supernotelib.parser as sn_parser
 
@@ -30,6 +30,7 @@ class QuickFilingService:
         allowed_source_notebooks: set[str] | None = None,
         reader: Any | None = None,
         star_detector: StarDetector | None = None,
+        verify_before_upload: Callable[[str, bytes], Any] | None = None,
     ) -> None:
         self.uploader = uploader
         self.ledger = FilingLedger(ledger_db_path)
@@ -39,6 +40,7 @@ class QuickFilingService:
         self.allowed_source_notebooks = allowed_source_notebooks
         self.reader = reader or SupernoteReader()
         self.star_detector = star_detector or StarDetector()
+        self.verify_before_upload = verify_before_upload
 
     def _validate_scope(self) -> None:
         if self.allowed_source_notebooks is None:
@@ -66,7 +68,9 @@ class QuickFilingService:
                 page_image=getattr(result, "page_image", None),
                 transcription=str(result.text),
                 source_notebook=self.source_notebook,
-                destination_notebooks=list(dict.fromkeys(self.destination_map.values())),
+                destination_notebooks=list(
+                    dict.fromkeys(self.destination_map.values())
+                ),
             )
             candidates.append(
                 route_page_from_decision(
@@ -105,22 +109,38 @@ class QuickFilingService:
                 os.unlink(path)
         return self.star_detector.starred_pages_from_metadata(metadata)
 
-    async def run_once(self, *, source_bytes: bytes | None = None) -> dict[str, Any]:
-        self._validate_scope()
-        self.ledger.init_schema()
-        if source_bytes is None:
-            source_bytes = await self.uploader.download_notebook(
-                f"{self.source_notebook}.note"
-            )
-        candidates = await self._detect_candidates(source_bytes)
-        operations = [self._record_candidate(candidate) for candidate in candidates]
-        if self.dry_run:
-            return _result(dry_run=True, candidates=candidates, operations=operations)
+    async def detect_and_record(
+        self, source_bytes: bytes
+    ) -> list[tuple[FilingCandidate, FilingOperation]]:
+        """Detect filing candidates and persist them to the ledger as 'detected'.
 
+        Read + model path only; performs no cloud writes. Returns
+        (candidate, operation) pairs the caller can hand to apply_moves.
+        """
+        self.ledger.init_schema()
+        candidates = await self._detect_candidates(source_bytes)
+        return [
+            (candidate, self._record_candidate(candidate)) for candidate in candidates
+        ]
+
+    async def apply_moves(
+        self,
+        pairs: list[tuple[FilingCandidate, FilingOperation]],
+        source_bytes: bytes,
+    ) -> int:
+        """Execute the operational move for ready pairs: write targets first, then
+        remove the moved pages from the source in a single upload, advancing the
+        ledger at each boundary. When ``verify_before_upload`` is set it is invoked
+        with ``(notebook_name, bytes)`` immediately before every upload; raising
+        from it aborts that upload and leaves the ledger in its honest partial
+        state so the next run resumes rather than double-applying.
+
+        Returns the number of completed operations.
+        """
         completed = 0
         ready_pairs = [
             (candidate, operation)
-            for candidate, operation in zip(candidates, operations, strict=True)
+            for candidate, operation in pairs
             if candidate.status == "ready" and candidate.target_notebook is not None
         ]
         source_cleanup_pairs: list[tuple[FilingCandidate, FilingOperation]] = []
@@ -149,13 +169,12 @@ class QuickFilingService:
                     for page in candidate.source_pages
                 }
             )
+            source_name = f"{self.source_notebook}.note"
             try:
                 updated_source = remove_pages(source_bytes, pages=moved_pages)
-                await _upload_bytes(
-                    self.uploader,
-                    updated_source,
-                    f"{self.source_notebook}.note",
-                )
+                if self.verify_before_upload:
+                    self.verify_before_upload(source_name, updated_source)
+                await _upload_bytes(self.uploader, updated_source, source_name)
             except Exception as exc:
                 for _candidate, operation in source_cleanup_pairs:
                     self.ledger.mark_target_written_source_pending(
@@ -173,6 +192,21 @@ class QuickFilingService:
                 )
                 self.ledger.mark_completed(operation.operation_id)
                 completed += 1
+        return completed
+
+    async def run_once(self, *, source_bytes: bytes | None = None) -> dict[str, Any]:
+        self._validate_scope()
+        self.ledger.init_schema()
+        if source_bytes is None:
+            source_bytes = await self.uploader.download_notebook(
+                f"{self.source_notebook}.note"
+            )
+        pairs = await self.detect_and_record(source_bytes)
+        candidates = [candidate for candidate, _operation in pairs]
+        operations = [operation for _candidate, operation in pairs]
+        if self.dry_run:
+            return _result(dry_run=True, candidates=candidates, operations=operations)
+        completed = await self.apply_moves(pairs, source_bytes)
         return {
             **_result(dry_run=False, candidates=candidates, operations=operations),
             "completed_count": completed,
@@ -215,6 +249,8 @@ class QuickFilingService:
             target_bytes,
             source_pages=candidate.source_pages,
         )
+        if self.verify_before_upload:
+            self.verify_before_upload(target_name, updated_target)
         await _upload_bytes(self.uploader, updated_target, target_name)
         self.ledger.mark_target_written(
             operation.operation_id,
