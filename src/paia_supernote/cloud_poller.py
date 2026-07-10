@@ -171,20 +171,26 @@ class CloudPoller:
                 log.warning("cloud_download_error", name=name, error=str(exc))
 
     async def _list_notes(self) -> list:
-        """Fetch the Note folder listing from Supernote Cloud."""
-        result = await self._uploader._api_call("/api/file/list/query", {
-            "directoryId": self._uploader.NOTE_FOLDER_ID,
-            "pageNo": 1,
-            "pageSize": 200,
-            "order": "time",
-            "sequence": "desc",
-            "filterType": 0,
-        })
+        """Fetch the Note folder listing from Supernote Cloud.
+
+        On a 401/403 we attempt a silent re-auth once (which auto-logs in when
+        SN_PHONE/SN_PASSWORD are set), then retry the listing. This lets the
+        daemon recover from session expiry without a human running `login`.
+        """
+        result = await self._fetch_note_listing()
+        if result["status"] in (401, 403):
+            try:
+                await self._uploader._ensure_authenticated()
+                result = await self._fetch_note_listing()
+            except Exception as exc:
+                log.warning("cloud_auto_reauth_failed", error=str(exc))
+
         if result["status"] in (401, 403):
             log.warning(
                 "cloud_session_expired",
                 status=result["status"],
-                hint="Run 'paia-supernote login' to re-authenticate",
+                hint="Set SN_PHONE/SN_PASSWORD to enable auto-relogin, "
+                "or run 'supernote auth login'.",
             )
             await self._set_poll_health(
                 False, reason="cloud_session_expired", status=result["status"]
@@ -198,6 +204,20 @@ class CloudPoller:
             return []
         await self._set_poll_health(True, reason=None, status=result["status"])
         return result["body"].get("userFileVOList", [])
+
+    async def _fetch_note_listing(self) -> dict:
+        """Single authenticated Note-folder list query (raw API result)."""
+        return await self._uploader._api_call(
+            "/api/file/list/query",
+            {
+                "directoryId": self._uploader.NOTE_FOLDER_ID,
+                "pageNo": 1,
+                "pageSize": 200,
+                "order": "time",
+                "sequence": "desc",
+                "filterType": 0,
+            },
+        )
 
     async def _set_poll_health(
         self, healthy: bool, *, reason: str | None, status: int | None

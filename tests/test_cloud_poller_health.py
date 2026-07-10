@@ -24,6 +24,24 @@ class FakeUploader:
         body_out = {"userFileVOList": []} if status == 200 else "error"
         return {"status": status, "body": body_out}
 
+    async def _ensure_authenticated(self) -> None:
+        """Base stub has no auto-login, so reauth always fails."""
+        raise NotImplementedError("no auto-login on the base stub")
+
+
+class ReauthFakeUploader(FakeUploader):
+    """Uploader stub whose _ensure_authenticated can succeed (env auto-login)."""
+
+    def __init__(self, statuses: list[int], *, ensure_succeeds: bool = True) -> None:
+        super().__init__(statuses)
+        self.ensure_succeeds = ensure_succeeds
+        self.ensure_calls = 0
+
+    async def _ensure_authenticated(self) -> None:
+        self.ensure_calls += 1
+        if not self.ensure_succeeds:
+            raise RuntimeError("login failed")
+
 
 async def _noop_changed(notebook: str, note_bytes: bytes, update_time) -> None:
     return None
@@ -111,3 +129,58 @@ class TestPollHealthTransitions:
 
         # Must swallow the callback error and still return the empty list.
         assert await poller._list_notes() == []
+
+
+class TestAutoReauthSelfHeal:
+    """On a 401/403 the poller attempts a silent re-auth, then retries once."""
+
+    @pytest.mark.asyncio
+    async def test_reauths_and_retries_on_403(self) -> None:
+        uploader = ReauthFakeUploader([403, 200])
+        poller = CloudPoller(
+            uploader=uploader,
+            on_note_changed=_noop_changed,
+            on_poll_health=None,
+        )
+
+        result = await poller._list_notes()
+
+        assert result == []
+        assert uploader.ensure_calls == 1  # attempted silent re-auth
+        assert uploader.calls == 2  # initial 403, then successful retry
+
+    @pytest.mark.asyncio
+    async def test_degrades_when_reauth_fails(self) -> None:
+        transitions: list[tuple[bool, dict]] = []
+
+        async def on_health(healthy: bool, detail: dict) -> None:
+            transitions.append((healthy, detail))
+
+        uploader = ReauthFakeUploader([403], ensure_succeeds=False)
+        poller = CloudPoller(
+            uploader=uploader,
+            on_note_changed=_noop_changed,
+            on_poll_health=on_health,
+        )
+
+        result = await poller._list_notes()
+
+        assert result == []
+        assert uploader.ensure_calls == 1
+        assert len(transitions) == 1
+        assert transitions[0][0] is False
+        assert transitions[0][1]["reason"] == "cloud_session_expired"
+
+    @pytest.mark.asyncio
+    async def test_does_not_reauth_on_non_auth_failure(self) -> None:
+        uploader = ReauthFakeUploader([500])
+        poller = CloudPoller(
+            uploader=uploader,
+            on_note_changed=_noop_changed,
+            on_poll_health=None,
+        )
+
+        await poller._list_notes()
+
+        # A 500 is not an auth problem; no re-auth attempt is made.
+        assert uploader.ensure_calls == 0

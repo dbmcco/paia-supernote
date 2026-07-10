@@ -15,6 +15,7 @@ directoryId = NOTE_FOLDER_ID.  Files sync at SYNC_BASE on Mac.
 import asyncio
 import fcntl
 import hashlib
+import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,7 +23,18 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    async_playwright,
+)
+from playwright.async_api import (
+    Error as PlaywrightError,
+)
+from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 
 class UploadAuthError(Exception):
@@ -170,6 +182,7 @@ class SupernoteUploader:
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
 
+        await self._ensure_authenticated()
         try:
             file_ids = await self._find_file_ids(target_name)
         except UploadAuthError:
@@ -281,24 +294,98 @@ class SupernoteUploader:
                 await self._list_note_files()
             except UploadAuthError:
                 await self._interactive_reauth()
+            except PlaywrightError:
+                # The SPA was still settling (e.g. an unauthenticated session
+                # redirecting home -> login aborted the probe fetch). A
+                # controlled re-auth lands us on a known-good, settled page.
+                await self._interactive_reauth()
 
         await self._retry_on_closed_target(do_check)
 
     async def _refresh_csrf_token(self) -> None:
-        """Reload the cloud app route so the browser session gets a fresh XSRF token."""
+        """Reload the cloud app route so the browser session gets a fresh XSRF token.
+
+        Uses ``domcontentloaded`` (not ``networkidle``) so the SPA's long-lived
+        connections never stall the wait, then best-effort waits for the
+        XSRF-TOKEN cookie. If the cookie never appears (e.g. an expired session),
+        the API probe will return 401/403 and trigger re-auth.
+        """
 
         async def do_refresh() -> None:
             if not self.page:
                 raise RuntimeError("Browser not started")
-            await self.page.goto(self.CLOUD_HOME_URL, wait_until="networkidle")
+            await self.page.goto(self.CLOUD_HOME_URL, wait_until="domcontentloaded")
+            try:
+                await self.page.wait_for_function(
+                    "() => document.cookie.split(';').some("
+                    "c => c.trim().startsWith('XSRF-TOKEN='))",
+                    timeout=10_000,
+                )
+            except PlaywrightTimeoutError:
+                pass  # no XSRF yet; the API probe + reauth handle it
 
         await self._retry_on_closed_target(do_refresh)
 
     async def _interactive_reauth(self) -> None:
-        """Open login page and wait for user to complete authentication."""
+        """Re-authenticate with Supernote Cloud, silently when credentials exist.
+
+        If SN_PHONE and SN_PASSWORD are present in the environment, the login
+        form is filled and submitted programmatically (works headless, no human).
+        Otherwise the login page is opened in a visible browser and we wait for a
+        person to complete the login.
+
+        A login that does not complete in time raises UploadAuthError with an
+        actionable message rather than a raw Playwright timeout.
+        """
         if not self.page:
             raise RuntimeError("Browser not started")
 
+        phone = os.environ.get("SN_PHONE")
+        password = os.environ.get("SN_PASSWORD")
+        try:
+            if phone and password:
+                await self._login_programmatically(phone, password)
+            else:
+                await self._wait_for_human_login()
+        except PlaywrightTimeoutError as exc:
+            raise UploadAuthError(
+                "Supernote Cloud login did not complete in time. "
+                "If SN_PHONE/SN_PASSWORD are set, verify the credentials and that "
+                "the cloud login form has not changed."
+            ) from exc
+        await self._persist_session()
+
+    async def _login_programmatically(self, phone: str, password: str) -> None:
+        """Fill and submit the Supernote Cloud login form using env credentials.
+
+        The login page is an Element-UI SPA. We fill the phone + password fields,
+        tick the agreement checkbox if it is not already ticked, click Login, then
+        wait for the hash router to leave /login (which only happens on success).
+        """
+        if not self.page:
+            raise RuntimeError("Browser not started")
+        await self.page.goto(f"{self.CLOUD_URL}/#/login")
+        await self.page.wait_for_selector("input[type='text']", timeout=20_000)
+        await self.page.fill("input[type='text']", phone)
+        await self.page.fill("input[type='password']", password)
+        # Agreement checkbox: check it only if it is not already checked.
+        checkbox = await self.page.query_selector(".el-checkbox")
+        if checkbox is not None:
+            classes = await checkbox.get_attribute("class") or ""
+            if "is-checked" not in classes:
+                await checkbox.click()
+        # Submit. "Login" is the password-login button; "Login with code" is a
+        # sibling SMS-code button, so match the label exactly to avoid ambiguity.
+        await self.page.get_by_role("button", name="Login", exact=True).click()
+        await self.page.wait_for_function(
+            "() => !window.location.hash.includes('/login')",
+            timeout=30_000,
+        )
+
+    async def _wait_for_human_login(self) -> None:
+        """Open the login page and wait for a human to complete authentication."""
+        if not self.page:
+            raise RuntimeError("Browser not started")
         await self.page.goto(f"{self.CLOUD_URL}/#/login")
         # SPA hash routing: wait until hash no longer contains /login
         await self.page.wait_for_function(
@@ -306,6 +393,8 @@ class SupernoteUploader:
             timeout=300_000,
         )
 
+    async def _persist_session(self) -> None:
+        """Save the authenticated storage state to the shared session file."""
         if self.context:
             self.SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
             await self.context.storage_state(path=str(self.SESSION_FILE))

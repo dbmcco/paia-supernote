@@ -7,6 +7,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from playwright.async_api import (
+    Error as PlaywrightError,
+)
+from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 from paia_supernote.uploader import (
     SupernoteUploadConflictError,
@@ -200,6 +206,7 @@ class TestSupernoteUploader:
         mock_browser.new_context = AsyncMock(return_value=mock_context)
         mock_context.new_page = AsyncMock(return_value=mock_page)
         mock_page.goto = AsyncMock()
+        mock_page.wait_for_function = AsyncMock()
 
         # Patch the session file path to use our mock
         uploader.SESSION_FILE = mock_session_file
@@ -217,7 +224,7 @@ class TestSupernoteUploader:
             )
             mock_page.goto.assert_awaited_once_with(
                 uploader.CLOUD_HOME_URL,
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
             )
 
     @pytest.mark.asyncio
@@ -314,6 +321,125 @@ class TestSupernoteUploader:
             await uploader._ensure_authenticated()
             mock_list.assert_called_once()
             mock_reauth.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_authenticated_reauths_when_probe_hits_navigation_error(
+        self, uploader
+    ):
+        """A probe fetch aborted by SPA navigation also triggers re-auth."""
+        uploader.page = Mock()
+        with (
+            patch.object(
+                uploader, "_list_note_files", new_callable=AsyncMock
+            ) as mock_list,
+            patch.object(
+                uploader, "_interactive_reauth", new_callable=AsyncMock
+            ) as mock_reauth,
+        ):
+            mock_list.side_effect = PlaywrightError("Failed to fetch")
+            await uploader._ensure_authenticated()
+            mock_list.assert_called_once()
+            mock_reauth.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_interactive_reauth_logs_in_programmatically_with_env_creds(
+        self, uploader, monkeypatch
+    ):
+        """With SN_PHONE/SN_PASSWORD set, reauth fills the form automatically."""
+        uploader.page = Mock()
+        monkeypatch.setenv("SN_PHONE", "+15555550100")
+        monkeypatch.setenv("SN_PASSWORD", "hunter2")
+        with (
+            patch.object(
+                uploader, "_login_programmatically", new_callable=AsyncMock
+            ) as mock_prog,
+            patch.object(
+                uploader, "_wait_for_human_login", new_callable=AsyncMock
+            ) as mock_human,
+            patch.object(
+                uploader, "_persist_session", new_callable=AsyncMock
+            ) as mock_persist,
+        ):
+            await uploader._interactive_reauth()
+            mock_prog.assert_called_once_with("+15555550100", "hunter2")
+            mock_human.assert_not_called()
+            mock_persist.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_interactive_reauth_waits_for_human_when_no_env_creds(
+        self, uploader, monkeypatch
+    ):
+        """Without env creds, reauth falls back to a visible-browser human login."""
+        uploader.page = Mock()
+        monkeypatch.delenv("SN_PHONE", raising=False)
+        monkeypatch.delenv("SN_PASSWORD", raising=False)
+        with (
+            patch.object(
+                uploader, "_login_programmatically", new_callable=AsyncMock
+            ) as mock_prog,
+            patch.object(
+                uploader, "_wait_for_human_login", new_callable=AsyncMock
+            ) as mock_human,
+            patch.object(uploader, "_persist_session", new_callable=AsyncMock),
+        ):
+            await uploader._interactive_reauth()
+            mock_human.assert_called_once()
+            mock_prog.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_programmatically_fills_form_in_order(self, uploader):
+        """Programmatic login fills phone, then password, then submits."""
+        page = AsyncMock()
+        locator = AsyncMock()
+        checkbox = AsyncMock()
+        checkbox.get_attribute.return_value = ""  # unchecked
+        page.get_by_role = Mock(return_value=locator)  # sync in real Playwright
+        page.query_selector.return_value = checkbox
+        uploader.page = page
+
+        await uploader._login_programmatically("+15555550100", "hunter2")
+
+        page.goto.assert_called_once()
+        page.wait_for_selector.assert_called_once_with(
+            "input[type='text']", timeout=20_000
+        )
+        values = [call.args[1] for call in page.fill.call_args_list]
+        assert values == ["+15555550100", "hunter2"]
+        checkbox.click.assert_called_once()  # ticked because it was unchecked
+        locator.click.assert_called_once()  # Login button clicked
+        page.wait_for_function.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_login_programmatically_skips_already_checked_box(self, uploader):
+        """If the agreement checkbox is already checked, we do not toggle it off."""
+        page = AsyncMock()
+        locator = AsyncMock()
+        checkbox = AsyncMock()
+        checkbox.get_attribute.return_value = "el-checkbox is-checked"
+        page.get_by_role = Mock(return_value=locator)  # sync in real Playwright
+        page.query_selector.return_value = checkbox
+        uploader.page = page
+
+        await uploader._login_programmatically("+15555550100", "hunter2")
+
+        checkbox.click.assert_not_called()
+        locator.click.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_login_timeout_raises_actionable_auth_error(
+        self, uploader, monkeypatch
+    ):
+        """A login that times out surfaces as UploadAuthError, not a raw timeout."""
+        page = AsyncMock()
+        page.wait_for_function.side_effect = PlaywrightTimeoutError("timed out")
+        page.query_selector.return_value = None
+        page.get_by_role = Mock(return_value=AsyncMock())  # sync in real Playwright
+        uploader.page = page
+        monkeypatch.setenv("SN_PHONE", "+15555550100")
+        monkeypatch.setenv("SN_PASSWORD", "hunter2")
+
+        with pytest.raises(UploadAuthError, match="did not complete"):
+            await uploader._interactive_reauth()
 
     @pytest.mark.asyncio
     async def test_initiate_upload_posts_to_apply_endpoint(
@@ -472,6 +598,7 @@ class TestSupernoteUploader:
         mock_page = Mock()
         mock_page.evaluate = AsyncMock(return_value={"status": 403, "body": None})
         mock_page.goto = AsyncMock()
+        mock_page.wait_for_function = AsyncMock()
         uploader.page = mock_page
 
         with pytest.raises(UploadAuthError, match="403"):
@@ -488,8 +615,11 @@ class TestSupernoteUploader:
     async def test_download_notebook_raises_if_file_not_found(self, uploader):
         """download_notebook raises when the file is not in the Note folder."""
         uploader.page = Mock()
-        with patch.object(
-            uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+        with (
+            patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
+            patch.object(
+                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+            ),
         ):
             with pytest.raises(RuntimeError, match="not found"):
                 await uploader.download_notebook("NoSuchFile.note")
@@ -712,17 +842,19 @@ class TestSupernoteUploader:
 
     @pytest.mark.asyncio
     async def test_refresh_csrf_token_uses_cloud_home_route(self, uploader):
-        """Refreshing auth lands on the Cloud route that sets usable CSRF state."""
+        """Refreshing auth lands on the Cloud route and waits for the XSRF cookie."""
         mock_page = Mock()
         mock_page.goto = AsyncMock()
+        mock_page.wait_for_function = AsyncMock()
         uploader.page = mock_page
 
         await uploader._refresh_csrf_token()
 
         mock_page.goto.assert_awaited_once_with(
             "https://cloud.supernote.com/#/home",
-            wait_until="networkidle",
+            wait_until="domcontentloaded",
         )
+        mock_page.wait_for_function.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_list_note_files_raises_auth_error_on_401(self, uploader):

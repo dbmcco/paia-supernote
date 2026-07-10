@@ -96,8 +96,17 @@ def _build_service(
 
 
 def auth_recovery_message() -> str:
+    """Actionable recovery message; adapts to whether env credentials are set."""
+    if os.environ.get("SN_PHONE") and os.environ.get("SN_PASSWORD"):
+        return (
+            "Supernote Cloud login failed even though SN_PHONE/SN_PASSWORD are set. "
+            "Check the credentials in your .env and that the login form has not "
+            "changed. No notes were changed."
+        )
     return (
-        "Supernote Cloud auth is stale (403). Run `supernote auth login`, then retry. "
+        "Supernote Cloud auth is stale (403) and no SN_PHONE/SN_PASSWORD env vars "
+        "are set, so login could not be refreshed automatically. Set them in your "
+        ".env, or run `supernote auth login` to log in manually, then retry. "
         "No notes were changed."
     )
 
@@ -330,7 +339,12 @@ async def cmd_remove(
 
 async def cmd_auth_status(uploader: Any) -> dict:
     await uploader._ensure_authenticated()
-    return {"authenticated": True, "session_file": str(uploader.SESSION_FILE)}
+    auto_login = bool(os.environ.get("SN_PHONE") and os.environ.get("SN_PASSWORD"))
+    return {
+        "authenticated": True,
+        "session_file": str(uploader.SESSION_FILE),
+        "auto_login": auto_login,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +380,12 @@ def format_show(notebook: str, rows: list[dict]) -> str:
         lines.append(
             f"{len(starred)} starred page(s). Next: "
             f"`supernote plan {notebook} --by-stars` to preview filing."
+        )
+    else:
+        lines.append("")
+        lines.append(
+            f"Next: `supernote read {notebook} --pages N` for full page text "
+            f"(pages are zero-based)."
         )
     return "\n".join(lines)
 
@@ -429,6 +449,30 @@ def format_move_result(result: MoveResult) -> str:
     return "\n".join(lines)
 
 
+def _guidance(command: str, notebook: str | None = None) -> str:
+    """Contextual next-step hint appended to every prose command output.
+
+    The CLI is its own manual: each return points at the most sensible next
+    command so an agent never has to guess what to do. Suppressed under --json/-q
+    since it travels only with prose output.
+    """
+    nb = notebook or "<notebook>"
+    hints: dict[str, str] = {
+        "read": (
+            f"\n\nNext: `supernote show {nb}` for the page index, or "
+            f"`supernote move {nb} --by-stars` to file starred pages."
+        ),
+        "append": f"\n\nNext: `supernote show {nb}` to confirm the page landed.",
+        "remove": f"\n\nNext: `supernote show {nb}` to confirm the new page list.",
+        "auth_status": (
+            "\n\nNext: run any read/write command — auth refreshes "
+            "automatically when the session expires."
+        ),
+        "auth_login": "\n\nNext: run any read/write command; the session is fresh.",
+    }
+    return hints.get(command, "")
+
+
 # ---------------------------------------------------------------------------
 # argparse wiring + dispatch
 # ---------------------------------------------------------------------------
@@ -437,9 +481,19 @@ def format_move_result(result: MoveResult) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="supernote",
-        description=(
-            "Agent-facing Supernote Cloud CLI. " "Run `supernote <command> --help`."
+        description="Agent-facing Supernote Cloud CLI.",
+        epilog=(
+            "Conventions a cold agent must know:\n"
+            "  - Auth is automatic: set SN_PHONE and SN_PASSWORD in your env so the\n"
+            "    session refreshes itself when it expires. If unset, `auth login`\n"
+            "    opens a visible browser and waits for a human.\n"
+            "  - Notebook names may be bare or carry .note: 'Quick' == 'Quick.note'.\n"
+            "  - Pages are ZERO-BASED: page 29 is the 30th page in the app.\n"
+            "  - Every write command accepts --dry-run and is idempotent.\n"
+            "  - Run `plan` before `move --by-stars` so routing is visible first.\n"
+            "Run `supernote <command> --help` for per-command detail."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument(
@@ -552,7 +606,7 @@ async def _run_command(
             pages=_parse_pages(args.pages),
             render=args.render,
         )
-        emit(rows, _format_read(rows))
+        emit(rows, _format_read(rows) + _guidance("read", args.notebook))
     elif args.command == "append":
         text = _read_append_text(args)
         result = await cmd_append(
@@ -571,7 +625,7 @@ async def _run_command(
                 f"Backed up to {result['backup_dir']}."
             )
         )
-        emit(result, msg)
+        emit(result, msg + _guidance("append", args.notebook))
     elif args.command == "plan":
         plan = await cmd_plan(
             config,
@@ -609,23 +663,37 @@ async def _run_command(
                 f"Backed up to {result['backup_dir']}."
             )
         )
-        emit(result, msg)
+        emit(result, msg + _guidance("remove", args.notebook))
     elif args.command == "auth":
         if args.auth_command == "status":
             result = await cmd_auth_status(uploader)
-            emit(result, f"Authenticated. Session at {result['session_file']}.")
+            armed = (
+                "armed (SN_PHONE/SN_PASSWORD set)"
+                if result["auto_login"]
+                else "NOT set — login will open a browser and wait for a human"
+            )
+            emit(
+                result,
+                f"Authenticated. Session at {result['session_file']}. "
+                f"Auto-login: {armed}." + _guidance("auth_status"),
+            )
         else:
-            raise SystemExit("Use `supernote auth login` which opens a browser.")
+            raise SystemExit(
+                "`supernote auth login` runs before this dispatch point. "
+                "If you see this, report it as a bug."
+            )
 
 
 async def _dispatch(args: argparse.Namespace, config: CliConfig) -> int:
     if args.command == "auth" and args.auth_command == "login":
-        # Login needs a visible browser, so it does not share the headless session.
-        uploader = SupernoteUploader(headless=False)
+        # With SN_PHONE/SN_PASSWORD set, login is headless + automatic; otherwise
+        # a visible browser opens so a human can complete the login.
+        headless = bool(os.environ.get("SN_PHONE") and os.environ.get("SN_PASSWORD"))
+        uploader = SupernoteUploader(headless=headless)
         try:
             await uploader.start()
             await uploader._ensure_authenticated()
-            print(f"Session saved to {uploader.SESSION_FILE}")
+            print(f"Session saved to {uploader.SESSION_FILE}" + _guidance("auth_login"))
         finally:
             await uploader.stop()
         return 0

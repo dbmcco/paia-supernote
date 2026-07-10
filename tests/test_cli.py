@@ -22,6 +22,7 @@ from paia_supernote.cli import (
     _parse_pages,
     auth_recovery_message,
     cmd_append,
+    cmd_auth_status,
     cmd_ls,
     cmd_move,
     cmd_plan,
@@ -221,11 +222,49 @@ def test_format_plan_distinguishes_would_move_and_already_moved() -> None:
     assert "needs review" in text.lower() or "review" in text.lower()
 
 
-def test_auth_recovery_message_names_the_login_command() -> None:
+def test_auth_recovery_message_without_env_creds(monkeypatch) -> None:
+    monkeypatch.delenv("SN_PHONE", raising=False)
+    monkeypatch.delenv("SN_PASSWORD", raising=False)
     msg = auth_recovery_message()
 
     assert "supernote auth login" in msg
     assert "No notes were changed" in msg
+
+
+def test_auth_recovery_message_with_env_creds(monkeypatch) -> None:
+    monkeypatch.setenv("SN_PHONE", "+15555550100")
+    monkeypatch.setenv("SN_PASSWORD", "hunter2")
+    msg = auth_recovery_message()
+
+    assert "SN_PHONE/SN_PASSWORD" in msg
+    assert "No notes were changed" in msg
+    # With creds set it must NOT tell a human to run auth login manually.
+    assert "run `supernote auth login` to log in manually" not in msg
+
+
+@pytest.mark.asyncio
+async def test_cmd_auth_status_reports_auto_login_when_creds_set(monkeypatch) -> None:
+    uploader = AsyncMock()
+    monkeypatch.setenv("SN_PHONE", "+15555550100")
+    monkeypatch.setenv("SN_PASSWORD", "hunter2")
+
+    result = await cmd_auth_status(uploader)
+
+    assert result["authenticated"] is True
+    assert result["auto_login"] is True
+
+
+@pytest.mark.asyncio
+async def test_cmd_auth_status_reports_no_auto_login_without_creds(
+    monkeypatch,
+) -> None:
+    uploader = AsyncMock()
+    monkeypatch.delenv("SN_PHONE", raising=False)
+    monkeypatch.delenv("SN_PASSWORD", raising=False)
+
+    result = await cmd_auth_status(uploader)
+
+    assert result["auto_login"] is False
 
 
 @pytest.mark.asyncio
