@@ -13,6 +13,7 @@ import pytest
 
 from paia_supernote.cli import (
     CliConfig,
+    _parse_pages,
     auth_recovery_message,
     cmd_append,
     cmd_ls,
@@ -59,9 +60,20 @@ def _plan(*anns: PlannedMove) -> MovePlan:
 async def test_cmd_move_explicit_pages_runs_safe_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    cloud = {"Quick.note": b"src", "Mgmt.note": b"tgt-cloud"}
+    uploads: list[str] = []
+
+    async def fake_download(name: str) -> bytes:
+        return cloud[name]
+
+    async def fake_upload(path: str, name: str) -> bool:
+        cloud[name] = Path(path).read_bytes()  # cloud reflects the write
+        uploads.append(name)
+        return True
+
     uploader = AsyncMock()
-    uploader.download_notebook.return_value = b"src"
-    uploader.upload_notebook.return_value = True
+    uploader.download_notebook.side_effect = fake_download
+    uploader.upload_notebook.side_effect = fake_upload
     monkeypatch.setattr(
         "paia_supernote.quick_filing_service.copy_pages_to_end",
         lambda s, t, source_pages: b"tgt+",
@@ -81,7 +93,7 @@ async def test_cmd_move_explicit_pages_runs_safe_pipeline(
     assert result.backup_dir is not None
     assert (result.backup_dir / "Quick.note").exists()
     assert (result.backup_dir / "Mgmt.note").exists()
-    assert uploader.upload_notebook.await_count == 2  # target, then source
+    assert uploads == ["Mgmt.note", "Quick.note"]  # target, then source
 
 
 @pytest.mark.asyncio
@@ -115,8 +127,17 @@ async def test_cmd_append_renders_backs_up_and_uploads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     uploader = AsyncMock()
-    uploader.download_notebook.return_value = b"note"
-    uploader.upload_notebook.return_value = True
+    holder = {"bytes": b"note"}
+
+    async def fake_download(name: str) -> bytes:
+        return holder["bytes"]
+
+    async def fake_upload(path: str, name: str) -> bool:
+        holder["bytes"] = Path(path).read_bytes()  # cloud reflects the write
+        return True
+
+    uploader.download_notebook.side_effect = fake_download
+    uploader.upload_notebook.side_effect = fake_upload
 
     fake_writer = MagicMock()
     fake_writer.return_value.render_page.return_value = b"rle"
@@ -248,3 +269,14 @@ def test_main_returns_2_and_prints_recovery_on_auth_error(
 
     assert rc == 2
     assert "supernote auth login" in capsys.readouterr().err
+
+
+def test_parse_pages_handles_ranges_and_lists() -> None:
+    assert _parse_pages("3,4,5") == [3, 4, 5]
+    assert _parse_pages("3-5") == [3, 4, 5]
+    assert _parse_pages(None) is None
+
+
+def test_parse_pages_rejects_garbage_with_friendly_error() -> None:
+    with pytest.raises(SystemExit, match="invalid --pages"):
+        _parse_pages("abc")

@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,18 +126,24 @@ async def plan_starred_moves(
     """
     service.ledger.init_schema()
     candidates = await service._detect_candidates(source_bytes)
+    if to_override:
+        # --to forces every starred page to a single target. Rewrite the candidates
+        # so the plan, the backup set, the idempotency key and execution all agree
+        # on that target (and so pages the model could not route are still filed).
+        candidates = [
+            replace(c, target_notebook=to_override, status="ready") for c in candidates
+        ]
     annotations: list[PlannedMove] = []
     affected: set[str] = set()
     for candidate in candidates:
-        target = to_override or candidate.target_notebook
-        ann = _annotate(service, candidate, target)
+        ann = _annotate(service, candidate, candidate.target_notebook)
         annotations.append(ann)
         if (
             candidate.status == "ready"
-            and target
+            and candidate.target_notebook
             and ann.ledger_status != "already_moved"
         ):
-            affected.add(target)
+            affected.add(candidate.target_notebook)
     return MovePlan(
         source_notebook=service.source_notebook,
         source_revision=candidates[0].source_revision if candidates else "",
@@ -260,8 +266,15 @@ async def execute_move_plan(
         before_pages[notebook] = verify_notebook_bytes(name, data)
 
     # 2. Wire verify-before-upload so apply_moves parses each notebook right
-    #    before its upload and aborts on a bad mutation.
-    service.verify_before_upload = lambda name, raw: verify_notebook_bytes(name, raw)
+    #    before its upload (aborts on a bad mutation) and retains the staged
+    #    bytes so step 5 can confirm the cloud actually holds what we sent.
+    staged: dict[str, bytes] = {}
+
+    def _verify_and_capture(name: str, raw: bytes) -> None:
+        verify_notebook_bytes(name, raw)
+        staged[name] = raw
+
+    service.verify_before_upload = _verify_and_capture
 
     # 3. Persist ready candidates as 'detected' to obtain operation records.
     pairs: list = []
@@ -282,12 +295,22 @@ async def execute_move_plan(
     # 4. Apply: write targets, remove source pages, advance the ledger.
     await service.apply_moves(pairs, source_bytes)
 
-    # 5. Re-download every affected notebook and confirm it parses + counts.
+    # 5. Re-download every affected notebook and confirm it parses, has sane
+    #    page counts, and that its bytes match what we staged for upload.
     outcomes = []
     for notebook in affected:
         name = f"{notebook}.note"
         data = await service.uploader.download_notebook(name)
         after = verify_notebook_bytes(name, data)
+        if (
+            name in staged
+            and hashlib.sha256(data).hexdigest()
+            != hashlib.sha256(staged[name]).hexdigest()
+        ):
+            raise RuntimeError(
+                f"post-move re-verify failed: {name} cloud bytes do not match "
+                "the staged upload (sha256 mismatch)"
+            )
         outcomes.append(NotebookOutcome(notebook, before_pages[notebook], after))
 
     completed_pages = sorted(

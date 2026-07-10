@@ -47,9 +47,33 @@ def _candidate(
     )
 
 
-def _service(tmp_path: Path, candidates: list[FilingCandidate]) -> QuickFilingService:
+class FakeUploader:
+    """Cloud double: download returns current cloud bytes; upload writes them back
+    (so re-download after an upload reflects the write, as the real cloud does)."""
+
+    def __init__(self, cloud: dict[str, bytes], *, reflect: bool = True) -> None:
+        self.cloud = dict(cloud)
+        self.reflect = reflect
+        self.upload_names: list[str] = []
+
+    async def download_notebook(self, name: str) -> bytes:
+        return self.cloud[name]
+
+    async def upload_notebook(self, path: str, name: str) -> bool:
+        if self.reflect:
+            self.cloud[name] = Path(path).read_bytes()
+        self.upload_names.append(name)
+        return True
+
+
+def _service(
+    tmp_path: Path,
+    candidates: list[FilingCandidate],
+    *,
+    uploader: object | None = None,
+) -> QuickFilingService:
     service = QuickFilingService(
-        uploader=AsyncMock(),
+        uploader=uploader or AsyncMock(),
         ledger_db_path=tmp_path / "filing.db",
         source_notebook="Quick",
         destination_map={"mgmt": "Mgmt", "lfw": "LFW"},
@@ -208,14 +232,12 @@ async def test_execute_dry_run_writes_nothing(tmp_path: Path) -> None:
 async def test_execute_backs_up_source_and_targets_before_mutating(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service = _service(tmp_path, [_candidate(0, "Mgmt")])
+    service = _service(
+        tmp_path,
+        [_candidate(0, "Mgmt")],
+        uploader=FakeUploader({"Quick.note": b"src-cloud", "Mgmt.note": b"tgt-cloud"}),
+    )
     plan = await plan_starred_moves(service, b"src-bytes")
-
-    async def fake_download(name: str) -> bytes:
-        return {"Quick.note": b"src-cloud", "Mgmt.note": b"tgt-cloud"}[name]
-
-    service.uploader.download_notebook = fake_download  # type: ignore[method-assign]
-    service.uploader.upload_notebook = AsyncMock(return_value=True)
     monkeypatch.setattr(
         "paia_supernote.quick_filing_service.copy_pages_to_end",
         lambda s, t, source_pages: b"tgt-mut",
@@ -232,7 +254,10 @@ async def test_execute_backs_up_source_and_targets_before_mutating(
     assert result.backup_dir is not None
     assert (result.backup_dir / "Quick.note").read_bytes() == b"src-bytes"
     assert (result.backup_dir / "Mgmt.note").read_bytes() == b"tgt-cloud"
-    assert service.uploader.upload_notebook.await_count == 2  # target, then source
+    assert service.uploader.upload_names == [
+        "Mgmt.note",
+        "Quick.note",
+    ]  # target, then source
     assert {o.notebook for o in result.outcomes} == {"Quick", "Mgmt"}
     assert result.completed_pages == [0]
 
@@ -283,21 +308,12 @@ async def test_execute_verify_failure_aborts_upload_but_backup_already_written(
 async def test_execute_re_verifies_page_counts_after_move(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service = _service(tmp_path, [_candidate(0, "Mgmt")])
+    service = _service(
+        tmp_path,
+        [_candidate(0, "Mgmt")],
+        uploader=FakeUploader({"Quick.note": b"src-cloud", "Mgmt.note": b"tgt-cloud"}),
+    )
     plan = await plan_starred_moves(service, b"src-bytes")
-    state = {"uploaded": 0}
-
-    async def fake_download(name: str) -> bytes:
-        if name == "Quick.note":
-            return b"src-after" if state["uploaded"] else b"src-cloud"
-        return b"tgt-after" if state["uploaded"] else b"tgt-cloud"
-
-    async def fake_upload(path: str, name: str) -> bool:
-        state["uploaded"] += 1
-        return True
-
-    service.uploader.download_notebook = fake_download  # type: ignore[method-assign]
-    service.uploader.upload_notebook = fake_upload  # type: ignore[method-assign]
     monkeypatch.setattr(
         "paia_supernote.quick_filing_service.copy_pages_to_end",
         lambda s, t, source_pages: b"tgt-mut",
@@ -308,8 +324,8 @@ async def test_execute_re_verifies_page_counts_after_move(
 
     def fake_verify(name: str, raw: bytes) -> int:
         if name == "Quick.note":
-            return 2 if raw == b"src-after" else 3  # source loses a page
-        return 3 if raw == b"tgt-after" else 2  # target gains a page
+            return 2 if raw == b"src-mut" else 3  # source loses a page
+        return 3 if raw == b"tgt-mut" else 2  # target gains a page
 
     monkeypatch.setattr(move_pipeline, "verify_notebook_bytes", fake_verify)
 
@@ -350,3 +366,61 @@ async def test_execute_skips_when_everything_already_moved(tmp_path: Path) -> No
     assert result.skipped_pages == [0]
     service.uploader.download_notebook.assert_not_awaited()
     service.uploader.upload_notebook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_with_to_override_files_to_override_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Model guessed LFW, but --to overrides to Mgmt. Execution must file to Mgmt,
+    # back up Mgmt (not LFW), and key the ledger op on Mgmt.
+    cloud = {"Quick.note": b"src", "LFW.note": b"lfw-cloud", "Mgmt.note": b"mgmt-cloud"}
+    service = _service(tmp_path, [_candidate(0, "LFW")], uploader=FakeUploader(cloud))
+    plan = await plan_starred_moves(service, b"src", to_override="Mgmt")
+    monkeypatch.setattr(
+        "paia_supernote.quick_filing_service.copy_pages_to_end",
+        lambda s, t, source_pages: b"tgt-mut",
+    )
+    monkeypatch.setattr(
+        "paia_supernote.quick_filing_service.remove_pages", lambda s, pages: b"src-mut"
+    )
+    monkeypatch.setattr(move_pipeline, "verify_notebook_bytes", lambda name, raw: 3)
+
+    result = await execute_move_plan(
+        service, plan, source_bytes=b"src", backups_root=tmp_path / "bk"
+    )
+
+    assert plan.annotations[0].target_notebook == "Mgmt"
+    assert service.uploader.upload_names == ["Mgmt.note", "Quick.note"]
+    assert (result.backup_dir / "Mgmt.note").exists()
+    assert not (
+        result.backup_dir / "LFW.note"
+    ).exists()  # real target backed up, not the model's guess
+    assert result.completed_pages == [0]
+    assert service.ledger.get(plan.annotations[0].operation_id).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_when_cloud_returns_stale_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Cloud does NOT reflect the upload, so re-downloaded bytes differ from staged.
+    # The SHA-256 re-verify must abort loudly rather than report success.
+    cloud = {"Quick.note": b"src-cloud", "Mgmt.note": b"tgt-cloud"}
+    service = _service(
+        tmp_path, [_candidate(0, "Mgmt")], uploader=FakeUploader(cloud, reflect=False)
+    )
+    plan = await plan_starred_moves(service, b"src-bytes")
+    monkeypatch.setattr(
+        "paia_supernote.quick_filing_service.copy_pages_to_end",
+        lambda s, t, source_pages: b"tgt-mut",
+    )
+    monkeypatch.setattr(
+        "paia_supernote.quick_filing_service.remove_pages", lambda s, pages: b"src-mut"
+    )
+    monkeypatch.setattr(move_pipeline, "verify_notebook_bytes", lambda name, raw: 3)
+
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        await execute_move_plan(
+            service, plan, source_bytes=b"src-bytes", backups_root=tmp_path / "bk"
+        )

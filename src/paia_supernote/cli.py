@@ -21,7 +21,7 @@ import json
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -101,15 +101,18 @@ def _parse_pages(spec: str | None) -> list[int] | None:
     if not spec:
         return None
     pages: set[int] = set()
-    for part in spec.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            start, end = part.split("-", 1)
-            pages.update(range(int(start), int(end) + 1))
-        else:
-            pages.add(int(part))
+    try:
+        for part in spec.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                start, end = part.split("-", 1)
+                pages.update(range(int(start), int(end) + 1))
+            else:
+                pages.add(int(part))
+    except ValueError:
+        raise SystemExit(f"invalid --pages spec {spec!r}: use '3,4,5' or '3-8'")
     return sorted(pages)
 
 
@@ -201,6 +204,13 @@ async def _upload_bytes(uploader: Any, name: str, data: bytes) -> bool:
             os.unlink(path)
 
 
+async def _reverify_sha256(uploader: Any, name: str, expected: bytes) -> None:
+    """Re-download and confirm the cloud holds exactly the bytes we uploaded."""
+    redownloaded = await uploader.download_notebook(name)
+    if hashlib.sha256(redownloaded).hexdigest() != hashlib.sha256(expected).hexdigest():
+        raise RuntimeError(f"{name}: post-upload re-verify failed (sha256 mismatch)")
+
+
 def _backup(
     config: CliConfig, name: str, data: bytes, *, now: datetime | None = None
 ) -> Path:
@@ -231,6 +241,7 @@ async def cmd_append(
     updated = append_page_to_notebook(notebook_bytes, rle)
     verify_notebook_bytes(target, updated)
     ok = await _upload_bytes(uploader, target, updated)
+    await _reverify_sha256(uploader, target, updated)
     return {"notebook": notebook, "uploaded": bool(ok), "backup_dir": backup_dir}
 
 
@@ -302,6 +313,7 @@ async def cmd_remove(
     updated = remove_pages(notebook_bytes, pages=list(pages))
     verify_notebook_bytes(target, updated)
     ok = await _upload_bytes(uploader, target, updated)
+    await _reverify_sha256(uploader, target, updated)
     return {
         "notebook": notebook,
         "uploaded": bool(ok),
@@ -484,12 +496,20 @@ def _read_append_text(args: argparse.Namespace) -> str:
     return str(args.text)
 
 
+def _jsonable(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, list) and obj and is_dataclass(obj[0]):
+        return [asdict(item) for item in obj]
+    return obj
+
+
 async def _run_command(
     args: argparse.Namespace, config: CliConfig, uploader: Any
 ) -> None:
     def emit(payload: Any, text: str) -> None:
         if args.json:
-            print(json.dumps(payload, default=str, indent=2))
+            print(json.dumps(_jsonable(payload), default=str, indent=2))
         elif not args.quiet:
             print(text)
 
@@ -541,7 +561,7 @@ async def _run_command(
             pages=_parse_pages(args.pages),
             to=args.to,
         )
-        emit(plan.annotations if args.json else plan, format_plan(plan))
+        emit(plan.annotations, format_plan(plan))
     elif args.command == "move":
         move_result = await cmd_move(
             config,
@@ -582,8 +602,8 @@ async def _dispatch(args: argparse.Namespace, config: CliConfig) -> int:
     if args.command == "auth" and args.auth_command == "login":
         # Login needs a visible browser, so it does not share the headless session.
         uploader = SupernoteUploader(headless=False)
-        await uploader.start()
         try:
+            await uploader.start()
             await uploader._ensure_authenticated()
             print(f"Session saved to {uploader.SESSION_FILE}")
         finally:
@@ -591,8 +611,8 @@ async def _dispatch(args: argparse.Namespace, config: CliConfig) -> int:
         return 0
 
     uploader = SupernoteUploader()
-    await uploader.start()
     try:
+        await uploader.start()
         await _run_command(args, config, uploader)
     finally:
         await uploader.stop()
