@@ -41,7 +41,7 @@ from .note_snapshot import build_snapshot_from_notebook
 from .notebook_writer import append_page_to_notebook
 from .page_state import PageStateStore
 from .quick_filing_service import QuickFilingService
-from .reader import SupernoteReader
+from .reader import build_reader
 from .uploader import SupernoteUploader, UploadAuthError
 from .writer import SupernoteWriter
 
@@ -70,15 +70,7 @@ def load_cli_config(config_path: Path | None = None) -> CliConfig:
         state_db_path=Path(raw["state_db_path"]),
         backups_root=BACKUPS_ROOT,
         destination_map=_filing_destination_map(raw),
-        reader=SupernoteReader(
-            vision_backend=raw["vision_backend"],
-            ollama_model=raw["ollama_model"],
-            ollama_url=raw["ollama_url"],
-            zai_api_key=raw["zai_api_key"],
-            zai_base_url=raw["zai_base_url"],
-            zai_vision_model=raw["zai_vision_model"],
-            zai_text_model=raw["zai_text_model"],
-        ),
+        reader=build_reader(raw),
     )
 
 
@@ -137,7 +129,7 @@ def _parse_pages(spec: str | None) -> list[int] | None:
 
 
 async def cmd_ls(uploader: Any) -> list[dict]:
-    files = await uploader._list_note_files()
+    files = await uploader.list_note_files()
     return [
         {"name": f.get("fileName"), "id": f.get("id")}
         for f in files
@@ -338,7 +330,7 @@ async def cmd_remove(
 
 
 async def cmd_auth_status(uploader: Any) -> dict:
-    await uploader._ensure_authenticated()
+    await uploader.ensure_authenticated()
     auto_login = bool(os.environ.get("SN_PHONE") and os.environ.get("SN_PASSWORD"))
     return {
         "authenticated": True,
@@ -692,7 +684,7 @@ async def _dispatch(args: argparse.Namespace, config: CliConfig) -> int:
         uploader = SupernoteUploader(headless=headless)
         try:
             await uploader.start()
-            await uploader._ensure_authenticated()
+            await uploader.ensure_authenticated()
             print(f"Session saved to {uploader.SESSION_FILE}" + _guidance("auth_login"))
         finally:
             await uploader.stop()

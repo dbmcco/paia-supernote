@@ -168,7 +168,7 @@ def test_ingest_service_passes_configured_zai_api_key_to_reader(tmp_path: Path) 
     config["state_db_path"] = str(tmp_path / "state.db")
     config["zai_api_key"] = "config-token"
 
-    with patch("paia_supernote.ingest_service.SupernoteReader") as mock_reader_cls:
+    with patch("paia_supernote.reader.SupernoteReader") as mock_reader_cls:
         service = IngestService(config=config)
 
     mock_reader_cls.assert_called_once()

@@ -24,20 +24,20 @@ class FakeUploader:
         body_out = {"userFileVOList": []} if status == 200 else "error"
         return {"status": status, "body": body_out}
 
-    async def _ensure_authenticated(self) -> None:
+    async def ensure_authenticated(self) -> None:
         """Base stub has no auto-login, so reauth always fails."""
         raise NotImplementedError("no auto-login on the base stub")
 
 
 class ReauthFakeUploader(FakeUploader):
-    """Uploader stub whose _ensure_authenticated can succeed (env auto-login)."""
+    """Uploader stub whose ensure_authenticated can succeed (env auto-login)."""
 
     def __init__(self, statuses: list[int], *, ensure_succeeds: bool = True) -> None:
         super().__init__(statuses)
         self.ensure_succeeds = ensure_succeeds
         self.ensure_calls = 0
 
-    async def _ensure_authenticated(self) -> None:
+    async def ensure_authenticated(self) -> None:
         self.ensure_calls += 1
         if not self.ensure_succeeds:
             raise RuntimeError("login failed")

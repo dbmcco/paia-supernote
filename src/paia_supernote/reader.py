@@ -54,6 +54,24 @@ class ReadResult:
 ReadResultCallback = Callable[[ReadResult], Awaitable[None]]
 
 
+def build_reader(config: dict) -> "SupernoteReader":
+    """Construct a SupernoteReader from a flat config dict.
+
+    Single source of truth for the vision/OCR reader wiring so the CLI, the
+    daemon service, and the ingest service cannot diverge. ``config`` is whatever
+    ``main.load_config`` returns (a dict with the seven reader keys).
+    """
+    return SupernoteReader(
+        vision_backend=config["vision_backend"],
+        ollama_model=config["ollama_model"],
+        ollama_url=config["ollama_url"],
+        zai_api_key=config["zai_api_key"],
+        zai_base_url=config["zai_base_url"],
+        zai_vision_model=config["zai_vision_model"],
+        zai_text_model=config["zai_text_model"],
+    )
+
+
 class SupernoteReader:
     """Processes .note files to extract and classify content."""
 

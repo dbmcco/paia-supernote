@@ -224,7 +224,7 @@ class SupernoteUploader:
             if f.get("fileName") == target_name and f.get("isFolder") == "N"
         ]
 
-    async def _list_note_files(self) -> list[dict[str, Any]]:
+    async def list_note_files(self) -> list[dict[str, Any]]:
         """Return current file entries in the cloud Note folder."""
         result = await self._api_call(
             "/api/file/list/query",
@@ -275,7 +275,7 @@ class SupernoteUploader:
         if isinstance(body, dict) and not body.get("success", False):
             raise RuntimeError(f"delete failed: {body}")
 
-    async def _ensure_authenticated(self) -> None:
+    async def ensure_authenticated(self) -> None:
         """Verify auth via a real API probe; trigger interactive re-auth if dead.
 
         The Supernote cloud SPA returns a 200 shell for the home route even on an
@@ -301,6 +301,10 @@ class SupernoteUploader:
                 await self._interactive_reauth()
 
         await self._retry_on_closed_target(do_check)
+
+    # Back-compat aliases; production callers should use the public names above.
+    _list_note_files = list_note_files
+    _ensure_authenticated = ensure_authenticated
 
     async def _refresh_csrf_token(self) -> None:
         """Reload the cloud app route so the browser session gets a fresh XSRF token.

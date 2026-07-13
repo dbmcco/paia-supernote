@@ -283,7 +283,7 @@ async def _list_note_entries(uploader: Any) -> list[dict[str, Any]]:
     list_notebooks = getattr(uploader, "list_notebooks", None)
     if list_notebooks is not None:
         return list(await list_notebooks())
-    list_note_files = getattr(uploader, "_list_note_files", None)
+    list_note_files = getattr(uploader, "list_note_files", None)
     if list_note_files is not None:
         return list(await list_note_files())
-    raise AttributeError("uploader must expose list_notebooks or _list_note_files")
+    raise AttributeError("uploader must expose list_notebooks or list_note_files")

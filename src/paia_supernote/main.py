@@ -36,7 +36,7 @@ from .organizer_server import make_organizer_handler
 from .notebook_writer import append_page_to_notebook
 from .quick_filing import notebook_name_to_tag
 from .quick_filing_service import QuickFilingService
-from .reader import SupernoteReader
+from .reader import build_reader
 from .task_curator import TaskCurator
 from .tasks_sync import TasksSync
 from .uploader import (
@@ -254,15 +254,7 @@ class SupernoteService:
     def __init__(self, config: Dict[str, Any] | None = None) -> None:
         self.config = config or load_config()
         self.events = EventsClient(base_url=self.config["events_url"])
-        self.reader = SupernoteReader(
-            vision_backend=self.config["vision_backend"],
-            ollama_model=self.config["ollama_model"],
-            ollama_url=self.config["ollama_url"],
-            zai_api_key=self.config["zai_api_key"],
-            zai_base_url=self.config["zai_base_url"],
-            zai_vision_model=self.config["zai_vision_model"],
-            zai_text_model=self.config["zai_text_model"],
-        )
+        self.reader = build_reader(self.config)
         self.writer = SupernoteWriter()
         self.uploader = SupernoteUploader()
         self.cloud_poller = CloudPoller(
@@ -964,7 +956,7 @@ async def _run_login() -> None:
     uploader = SupernoteUploader(headless=False)
     await uploader.start()
     try:
-        await uploader._ensure_authenticated()
+        await uploader.ensure_authenticated()
         print(f"Session saved to {uploader.SESSION_FILE}")
     finally:
         await uploader.stop()

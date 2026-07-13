@@ -180,7 +180,7 @@ class CloudPoller:
         result = await self._fetch_note_listing()
         if result["status"] in (401, 403):
             try:
-                await self._uploader._ensure_authenticated()
+                await self._uploader.ensure_authenticated()
                 result = await self._fetch_note_listing()
             except Exception as exc:
                 log.warning("cloud_auto_reauth_failed", error=str(exc))

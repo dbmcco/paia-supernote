@@ -171,7 +171,7 @@ async def test_cmd_append_renders_backs_up_and_uploads(
 @pytest.mark.asyncio
 async def test_cmd_ls_lists_only_note_files(tmp_path: Path) -> None:
     uploader = AsyncMock()
-    uploader._list_note_files.return_value = [
+    uploader.list_note_files.return_value = [
         {"fileName": "Quick.note", "isFolder": "N", "id": "1"},
         {"fileName": "Mgmt.note", "isFolder": "N", "id": "2"},
         {"fileName": "Archive", "isFolder": "Y", "id": "3"},
@@ -280,7 +280,7 @@ async def test_cmd_move_surfaces_auth_error_as_actionable(tmp_path: Path) -> Non
 
 def test_main_dispatches_ls_and_prints(tmp_path: Path, monkeypatch, capsys) -> None:
     fake_uploader = AsyncMock()
-    fake_uploader._list_note_files.return_value = [
+    fake_uploader.list_note_files.return_value = [
         {"fileName": "Quick.note", "isFolder": "N", "id": "1"}
     ]
     fake_uploader.SESSION_FILE = Path("~/.paia/supernote/session.json")
@@ -303,7 +303,7 @@ def test_main_returns_2_and_prints_recovery_on_auth_error(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     fake_uploader = AsyncMock()
-    fake_uploader._list_note_files.side_effect = UploadAuthError("403")
+    fake_uploader.list_note_files.side_effect = UploadAuthError("403")
     monkeypatch.setattr(
         "paia_supernote.cli.SupernoteUploader", lambda *a, **k: fake_uploader
     )

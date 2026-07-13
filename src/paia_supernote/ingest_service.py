@@ -18,7 +18,7 @@ import structlog
 from .cloud_poller import CloudPoller
 from .events import EventsClient
 from .page_state import PageStateStore
-from .reader import SupernoteReader
+from .reader import SupernoteReader, build_reader
 from .uploader import SupernoteUploader
 from .watcher import SupernoteWatcher
 
@@ -36,15 +36,7 @@ class IngestService:
     ) -> None:
         from .main import load_config
         self.config = config or load_config()
-        self.reader = reader or SupernoteReader(
-            vision_backend=self.config["vision_backend"],
-            ollama_model=self.config["ollama_model"],
-            ollama_url=self.config["ollama_url"],
-            zai_api_key=self.config["zai_api_key"],
-            zai_base_url=self.config["zai_base_url"],
-            zai_vision_model=self.config["zai_vision_model"],
-            zai_text_model=self.config["zai_text_model"],
-        )
+        self.reader = reader or build_reader(self.config)
         self.events = EventsClient(base_url=self.config["events_url"])
         self.page_state = PageStateStore(Path(self.config["state_db_path"]))
         self.page_state.init_schema()
