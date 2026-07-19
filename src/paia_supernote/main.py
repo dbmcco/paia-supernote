@@ -20,7 +20,13 @@ from typing import Any, Callable, Dict
 import structlog
 import tomllib
 
+from .agent_write_contracts import (
+    AgentWriteRevisionError,
+    missing_notebook_conflict,
+    validate_agent_write_request,
+)
 from .cloud_poller import CloudPoller
+from .contract_errors import agent_error_json, format_agent_error
 from .enrich_service import EnrichService
 from .events import EventsClient
 from .ingest_service import IngestService
@@ -31,9 +37,9 @@ from .model_config import (
     resolve_supernote_zai_api_key,
 )
 from .notebook_artifacts import NotebookPageSpec, replace_notebook_pages
+from .notebook_writer import append_page_to_notebook
 from .organizer_runtime import create_organizer_api
 from .organizer_server import make_organizer_handler
-from .notebook_writer import append_page_to_notebook
 from .quick_filing import notebook_name_to_tag
 from .quick_filing_service import QuickFilingService
 from .reader import build_reader
@@ -582,6 +588,8 @@ class SupernoteService:
         content_type: str | None,
         page_count: int = 0,
         error: str,
+        structured_error: Any | None = None,
+        error_message: str | None = None,
     ) -> None:
         await self.events.publish_write_failed(
             request_event_id=event_data.get("request_event_id"),
@@ -592,6 +600,8 @@ class SupernoteService:
             content_type=content_type,
             page_count=page_count,
             error=error,
+            structured_error=structured_error,
+            error_message=error_message,
         )
 
     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
@@ -611,9 +621,6 @@ class SupernoteService:
         try:
             raw_agent = str(event_data["agent"])
             agent = self._resolve_agent_name(raw_agent)
-            notebook = event_data.get("notebook") or self.config["agent_mappings"].get(
-                agent, {}
-            ).get("notebook", "")
             content = event_data.get("content", "")
             content_type = event_data.get("content_type")
 
@@ -623,11 +630,44 @@ class SupernoteService:
                 await self._publish_write_failed(
                     event_data,
                     agent=raw_agent,
-                    notebook=notebook,
+                    notebook=event_data.get("notebook"),
                     content_type=content_type,
                     error="unknown_agent",
                 )
                 return
+
+            requested_notebook = event_data.get("notebook")
+            if str(requested_notebook or "").strip():
+                notebook = str(requested_notebook).strip()
+            elif event_data.get("use_agent_default_notebook") is True:
+                notebook = str(
+                    self.config["agent_mappings"].get(agent, {}).get("notebook") or ""
+                ).strip()
+            else:
+                raise AgentWriteRevisionError(
+                    missing_notebook_conflict(
+                        event_data,
+                        config=self.config,
+                        resolved_agent=agent,
+                    )
+                )
+
+            if not notebook:
+                raise AgentWriteRevisionError(
+                    missing_notebook_conflict(
+                        event_data,
+                        config=self.config,
+                        resolved_agent=agent,
+                    )
+                )
+
+            validate_agent_write_request(
+                event_data,
+                config=self.config,
+                state_db_path=Path(self.config["state_db_path"]),
+                resolved_agent=agent,
+                resolved_notebook=notebook,
+            )
 
             # Delegate task_page_curate to TaskCurator (can target tasks.note)
             if content_type == "task_page_curate":
@@ -797,6 +837,20 @@ class SupernoteService:
                     error="upload_failed",
                 )
 
+        except AgentWriteRevisionError as exc:
+            log.warning(
+                "write_revision_conflict",
+                conflict=exc.conflict.model_dump(),
+            )
+            await self._publish_write_failed(
+                event_data,
+                agent=agent or raw_agent,
+                notebook=notebook,
+                content_type=content_type,
+                error=agent_error_json(exc.conflict, indent=None),
+                structured_error=exc.conflict,
+                error_message=format_agent_error(exc.conflict),
+            )
         except Exception as exc:
             log.error("write_request_error", error=str(exc))
             await self._publish_write_failed(
@@ -944,7 +998,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory for rendered organizer page images",
     )
-    subparsers.add_parser("login", help="Re-authenticate with Supernote Cloud (opens browser)")
+    subparsers.add_parser(
+        "login", help="Re-authenticate with Supernote Cloud (opens browser)"
+    )
     return parser
 
 
@@ -952,7 +1008,10 @@ async def _run_login() -> None:
     """Open a visible browser to refresh the Supernote Cloud session."""
     from .uploader import SupernoteUploader
 
-    print("Opening Supernote Cloud in browser — log in, then close the tab or press Ctrl+C here.")
+    print(
+        "Opening Supernote Cloud in browser — log in, "
+        "then close the tab or press Ctrl+C here."
+    )
     uploader = SupernoteUploader(headless=False)
     await uploader.start()
     try:

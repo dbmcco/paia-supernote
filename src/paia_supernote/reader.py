@@ -29,6 +29,7 @@ from .model_config import (
     default_zai_vision_model,
     resolve_supernote_zai_api_key,
 )
+from .note_snapshot import NotebookSnapshot, build_snapshot_from_notebook
 
 SNAPSHOT_DIR = Path.home() / ".paia" / "supernote" / "snapshots"
 
@@ -115,6 +116,35 @@ class SupernoteReader:
         if self._client is None:
             self._client = anthropic.AsyncAnthropic()
         return self._client
+
+    def build_snapshot(
+        self,
+        note_source: Union[str, Path, bytes],
+        notebook_name: str,
+        revision: str,
+    ) -> NotebookSnapshot:
+        """Parse a .note source into stable page IDs and content hashes."""
+        if isinstance(note_source, bytes):
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
+            try:
+                os.write(tmp_fd, note_source)
+                os.close(tmp_fd)
+                notebook = supernotelib.load_notebook(tmp_path)
+                return build_snapshot_from_notebook(
+                    notebook,
+                    notebook_name=notebook_name,
+                    revision=revision,
+                )
+            finally:
+                os.unlink(tmp_path)
+
+        path = Path(note_source)
+        notebook = supernotelib.load_notebook(str(path))
+        return build_snapshot_from_notebook(
+            notebook,
+            notebook_name=notebook_name,
+            revision=revision,
+        )
 
     async def process_file(
         self,
@@ -267,7 +297,8 @@ class SupernoteReader:
         """Call the configured OpenAI-compatible Supernote model endpoint."""
         if not self.zai_api_key:
             raise RuntimeError(
-                "The configured Supernote model API key is required when using the zai backend"
+                "The configured Supernote model API key is required when using "
+                "the zai backend"
             )
 
         payload = {

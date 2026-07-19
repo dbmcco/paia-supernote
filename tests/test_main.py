@@ -10,6 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from paia_supernote.cloud_change_ledger import (
+    CloudChangeLedger,
+    NotebookSnapshot,
+    PageRevision,
+)
 from paia_supernote.enrich_service import EnrichService
 from paia_supernote.ingest_service import IngestService
 from paia_supernote.main import (
@@ -27,6 +32,32 @@ from paia_supernote.main import (
 from paia_supernote.model_config import supernote_zai_credential_env_var
 from paia_supernote.page_state import PageStateStore
 from paia_supernote.uploader import SupernoteUploadConflictError
+
+
+def _config_with_write_revision(
+    tmp_path: Path, notebook: str, revision: str = "rev-current"
+) -> dict:
+    config = dict(DEFAULT_CONFIG)
+    config["state_db_path"] = str(tmp_path / "state.db")
+    config["cloud_change_ledger_notebooks"] = [notebook]
+    ledger = CloudChangeLedger(tmp_path / "state.db")
+    ledger.init_schema()
+    ledger.apply_snapshot(
+        NotebookSnapshot(
+            notebook=notebook,
+            cloud_revision=revision,
+            cloud_update_time=123,
+            pages=[
+                PageRevision(
+                    page_id=f"{notebook.lower()}-page-1",
+                    page_index=0,
+                    content_hash=f"{notebook.lower()}-hash-1",
+                )
+            ],
+        )
+    )
+    return config
+
 
 # -- Config loading -----------------------------------------------------------
 
@@ -465,8 +496,10 @@ class TestServiceStart:
         service.events.start.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_write_request_lazy_starts_service_uploader(self) -> None:
-        config = dict(DEFAULT_CONFIG)
+    async def test_write_request_lazy_starts_service_uploader(
+        self, tmp_path: Path
+    ) -> None:
+        config = _config_with_write_revision(tmp_path, "Walk")
         config["service_uploader_start_mode"] = "lazy"
         service = SupernoteService(config=config)
         service.uploader = MagicMock()
@@ -480,6 +513,7 @@ class TestServiceStart:
                 "agent": "Sam",
                 "notebook": "Walk",
                 "content_type": "replace_pages",
+                "base_notebook_revision": "rev-current",
                 "pages": [{"agent": "Sam", "content": "Page 1"}],
             }
         )
@@ -863,7 +897,9 @@ class TestMainEntrypoint2:
         The fix is to replace them directly on the service instance after construction.
         """
         # Arrange — create service then replace instance attrs with mocks
-        service = SupernoteService(config=DEFAULT_CONFIG)
+        service = SupernoteService(
+            config=_config_with_write_revision(tmp_path, "Quick")
+        )
         mock_uploader = AsyncMock()
         mock_task_curator = AsyncMock()
         mock_uploader.download_notebook = AsyncMock(return_value=b"mock_notebook_bytes")
@@ -875,6 +911,7 @@ class TestMainEntrypoint2:
             "notebook": "Quick",
             "content": "some new content",
             "content_type": "task_page_curate",
+            "base_notebook_revision": "rev-current",
         }
 
         # Act
@@ -887,6 +924,7 @@ class TestMainEntrypoint2:
                 "notebook": "Quick",
                 "content": "some new content",
                 "content_type": "task_page_curate",
+                "base_notebook_revision": "rev-current",
                 "notebook_bytes": b"mock_notebook_bytes",
             }
         )
@@ -898,7 +936,9 @@ class TestMainEntrypoint2:
         tmp_path: Path,
     ) -> None:
         """content_type=replace_pages uses stable page replacement."""
-        service = SupernoteService(config=DEFAULT_CONFIG)
+        service = SupernoteService(
+            config=_config_with_write_revision(tmp_path, "Quick")
+        )
         mock_uploader = AsyncMock()
         mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
         mock_uploader.upload_notebook = AsyncMock(return_value=True)
@@ -908,6 +948,7 @@ class TestMainEntrypoint2:
             "agent": "Sam",
             "notebook": "Quick",
             "content_type": "replace_pages",
+            "base_notebook_revision": "rev-current",
             "pages": [
                 {"agent": "Sam", "content": "Page 1"},
                 {"agent": "Caroline", "content": "Page 2"},
@@ -950,8 +991,12 @@ class TestMainEntrypoint2:
         assert not _is_conflict_name("Walk.note", "Walk")
 
     @pytest.mark.asyncio
-    async def test_replace_pages_conflict_is_failed_without_retry(self) -> None:
-        service = SupernoteService(config=DEFAULT_CONFIG)
+    async def test_replace_pages_conflict_is_failed_without_retry(
+        self, tmp_path: Path
+    ) -> None:
+        service = SupernoteService(
+            config=_config_with_write_revision(tmp_path, "Walk")
+        )
         service.uploader = AsyncMock()
         service.events = AsyncMock()
         service._replace_pages_with_uploader = AsyncMock(
@@ -963,6 +1008,7 @@ class TestMainEntrypoint2:
                 "agent": "Sam",
                 "notebook": "Walk",
                 "content_type": "replace_pages",
+                "base_notebook_revision": "rev-current",
                 "pages": [{"agent": "Sam", "content": "Page 1"}],
             }
         )
@@ -976,9 +1022,11 @@ class TestMainEntrypoint2:
 
     @pytest.mark.asyncio
     async def test_replace_pages_upload_conflict_is_failed_without_fresh_retry(
-        self,
+        self, tmp_path: Path
     ) -> None:
-        service = SupernoteService(config=DEFAULT_CONFIG)
+        service = SupernoteService(
+            config=_config_with_write_revision(tmp_path, "Walk")
+        )
         service.uploader = AsyncMock()
         service.events = AsyncMock()
         service._replace_pages_with_uploader = AsyncMock(
@@ -993,6 +1041,7 @@ class TestMainEntrypoint2:
                     "agent": "Sam",
                     "notebook": "Walk",
                     "content_type": "replace_pages",
+                    "base_notebook_revision": "rev-current",
                     "pages": [{"agent": "Sam", "content": "Page 1"}],
                 }
             )

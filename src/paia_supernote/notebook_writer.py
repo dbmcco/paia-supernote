@@ -1,6 +1,6 @@
 """
-ABOUTME: Notebook page-append helper — wraps RATTA_RLE bytes into an existing .note file.
-ABOUTME: Parses target notebook, appends a new page with agent content, reconstructs binary.
+ABOUTME: Notebook page-append helper — wraps RATTA_RLE bytes into a .note file.
+ABOUTME: Appends a new page with agent content, then reconstructs the binary.
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import uuid
 from pathlib import Path
 from typing import Union
 
-import supernotelib.parser as sn_parser
 import supernotelib.manipulator as sn_manip
+import supernotelib.parser as sn_parser
 
 OFFSET_FIELDS = (
     "RECOGNTEXT",
@@ -53,7 +53,7 @@ def append_page_to_notebook(
         FileNotFoundError: If note_source is a path that does not exist.
     """
     if isinstance(note_source, bytes):
-        # Write bytes to a temp file so load_notebook (which requires a path) can read it
+        # Write bytes to a temp file so load_notebook can read from a path.
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
         try:
             os.write(tmp_fd, note_source)

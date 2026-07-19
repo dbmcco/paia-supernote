@@ -6,6 +6,7 @@ ABOUTME: Polls /api/file/list/query, downloads changed files, fires callback wit
 from __future__ import annotations
 
 import asyncio
+from pathlib import PurePosixPath
 from typing import Awaitable, Callable, Dict, Iterable, Optional
 
 import structlog
@@ -61,10 +62,11 @@ class CloudPoller:
         self._on_poll_health = on_poll_health
         # Start healthy; the first auth failure transitions to degraded and fires.
         self._poll_healthy = True
+        watched_source = (
+            self.WATCHED_NOTEBOOKS if watched_notebooks is None else watched_notebooks
+        )
         self._watched_notebooks = {
-            str(name).strip()
-            for name in (watched_notebooks or self.WATCHED_NOTEBOOKS)
-            if str(name).strip()
+            str(name).strip() for name in watched_source if str(name).strip()
         }
         self._watched_notebook_keys = {
             name.casefold() for name in self._watched_notebooks
@@ -141,7 +143,7 @@ class CloudPoller:
             if entry.get("size", 0) == 0:
                 continue
 
-            notebook_name = name[:-5]  # strip .note suffix
+            notebook_name = _notebook_name_from_file_name(name)
             if notebook_name.casefold() not in self._watched_notebook_keys:
                 continue
 
@@ -242,3 +244,9 @@ class CloudPoller:
             await self._on_poll_health(healthy, detail)
         except Exception as exc:  # monitoring must never break the poll loop
             log.warning("cloud_poll_health_callback_error", error=str(exc))
+
+
+def _notebook_name_from_file_name(file_name: str) -> str:
+    """Return display notebook stem from a Cloud file name or path."""
+    leaf = PurePosixPath(str(file_name)).name
+    return leaf[:-5] if leaf.endswith(".note") else leaf

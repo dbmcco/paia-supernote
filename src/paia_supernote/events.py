@@ -13,6 +13,9 @@ from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 import structlog
+from pydantic import BaseModel
+
+from .contract_errors import format_agent_error, redact_value
 
 log = structlog.get_logger(__name__)
 
@@ -285,11 +288,16 @@ class EventsClient:
         content_type: str | None,
         page_count: int = 0,
         error: str,
+        structured_error: BaseModel | dict[str, Any] | None = None,
+        error_message: str | None = None,
     ) -> None:
         """Publish supernote.write.failed with request correlation."""
         correlation_id = str(
             request_event_id or request_source_event_id or run_id or uuid.uuid4()
         )
+        structured_payload = _jsonable_error_payload(structured_error)
+        if error_message is None and structured_error is not None:
+            error_message = _format_structured_error(structured_error)
         await self._publish(
             event_type="supernote.write.failed",
             payload={
@@ -301,6 +309,8 @@ class EventsClient:
                 "content_type": content_type,
                 "page_count": page_count,
                 "error": error,
+                "structured_error": structured_payload,
+                "error_message": error_message or error,
             },
             dedupe_key=f"supernote.write.failed:{correlation_id}",
             occurred_at=datetime.now(timezone.utc),
@@ -332,6 +342,20 @@ class EventsClient:
             log.debug("event_published", event_type=event_type)
         except httpx.HTTPError as exc:
             log.warning("event_publish_failed", event_type=event_type, error=str(exc))
+
+
+def _jsonable_error_payload(error: BaseModel | dict[str, Any] | None) -> Any:
+    if error is None:
+        return None
+    if isinstance(error, BaseModel):
+        return redact_value(error.model_dump(mode="json"))
+    return redact_value(error)
+
+
+def _format_structured_error(error: BaseModel | dict[str, Any]) -> str:
+    if isinstance(error, BaseModel) and hasattr(error, "error_code"):
+        return format_agent_error(error)  # type: ignore[arg-type]
+    return str(_jsonable_error_payload(error))
 
 
 # Backwards-compatible alias used by main.py

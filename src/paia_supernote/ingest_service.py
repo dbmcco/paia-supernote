@@ -7,15 +7,24 @@ falling back to cloud polling when not. The local path requires no auth.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 from contextlib import suppress
-import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
 import structlog
 
+from .cloud_change_ledger import (
+    CHANGE_ADDED,
+    CHANGE_UPDATED,
+    CloudChangeLedger,
+    NotebookSnapshot,
+    PageChangeRecord,
+    PageRevision,
+)
 from .cloud_poller import CloudPoller
+from .config import notebook_is_ledger_allowlisted, resolve_ledger_notebooks
 from .events import EventsClient
 from .page_state import PageStateStore
 from .reader import SupernoteReader, build_reader
@@ -38,9 +47,13 @@ class IngestService:
         self.config = config or load_config()
         self.reader = reader or build_reader(self.config)
         self.events = EventsClient(base_url=self.config["events_url"])
-        self.page_state = PageStateStore(Path(self.config["state_db_path"]))
+        state_db_path = Path(self.config["state_db_path"])
+        self.page_state = PageStateStore(state_db_path)
         self.page_state.init_schema()
+        self.ledger = CloudChangeLedger(state_db_path)
+        self.ledger.init_schema()
         self._watched_notebook_keys = self._build_watched_notebook_keys()
+        self._cloud_watched_notebooks = resolve_ledger_notebooks(self.config)
 
         # Cloud poller path (used only when Partner app sync unavailable)
         self._uploader: Optional[SupernoteUploader] = uploader
@@ -110,13 +123,92 @@ class IngestService:
                 continue
             await persist_result(result)
 
-        if notebook_name.casefold() == "walk":
-            for result in results:
-                await self.events.publish_walk_feedback_detected(
-                    notebook=result.notebook,
-                    page=result.page_num,
-                    text=result.text,
+        await self._publish_walk_feedback(notebook_name, results)
+
+    async def _on_cloud_note_changed(
+        self,
+        notebook_name: str,
+        note_bytes: bytes,
+        update_time: int | None = None,
+    ) -> None:
+        """Ledger-aware Cloud ingest: snapshot first, OCR only changed pages."""
+        if not notebook_is_ledger_allowlisted(self.config, notebook_name):
+            log.info("cloud_ingest_notebook_not_allowlisted", notebook=notebook_name)
+            return
+
+        note_hash = hashlib.sha256(note_bytes).hexdigest()
+        cloud_revision = f"{update_time or 0}:{note_hash}"
+        note_snapshot = self.reader.build_snapshot(
+            note_bytes,
+            notebook_name,
+            revision=cloud_revision,
+        )
+        page_by_index = {
+            page.page_index: page for page in note_snapshot.pages.values()
+        }
+        ledger_snapshot = NotebookSnapshot(
+            notebook=notebook_name,
+            cloud_revision=cloud_revision,
+            cloud_update_time=update_time,
+            pages=[
+                PageRevision(
+                    page_id=note_snapshot.pages[page_id].page_id,
+                    page_index=note_snapshot.pages[page_id].page_index,
+                    content_hash=note_snapshot.pages[page_id].content_hash,
                 )
+                for page_id in note_snapshot.page_order
+            ],
+        )
+        changes = self.ledger.apply_snapshot(ledger_snapshot)
+        pages_to_ocr = _ocr_page_indexes(changes)
+        if not pages_to_ocr:
+            log.info(
+                "cloud_ingest_no_ocr_needed",
+                notebook=notebook_name,
+                changes=len(changes),
+            )
+            return
+
+        results = await self.reader.read_pages(
+            note_bytes,
+            notebook_name,
+            pages=pages_to_ocr,
+        )
+        for result in results:
+            page = page_by_index.get(result.page_num)
+            if page is None:
+                continue
+            source_revision = f"{cloud_revision}:{page.page_id}:{page.content_hash}"
+            self.page_state.upsert_ocr_page(
+                notebook=result.notebook,
+                page=result.page_num,
+                source_revision=source_revision,
+                raw_text=result.text,
+                ocr_model=self.config["zai_vision_model"],
+            )
+            self.ledger.mark_page_ocr_status(
+                result.notebook,
+                page.page_id,
+                "ready",
+            )
+            log.info(
+                "ocr_succeeded",
+                notebook=result.notebook,
+                page=result.page_num,
+                page_id=page.page_id,
+            )
+
+        await self._publish_walk_feedback(notebook_name, results)
+
+    async def _publish_walk_feedback(self, notebook_name: str, results: list) -> None:
+        if notebook_name.casefold() != "walk":
+            return
+        for result in results:
+            await self.events.publish_walk_feedback_detected(
+                notebook=result.notebook,
+                page=result.page_num,
+                text=result.text,
+            )
 
     async def _on_poll_health(
         self, healthy: bool, detail: dict[str, Any]
@@ -179,9 +271,9 @@ class IngestService:
         uploader = self._uploader or SupernoteUploader()
         cloud_poller = self._cloud_poller or CloudPoller(
             uploader=uploader,
-            on_note_changed=self._on_note_changed,
+            on_note_changed=self._on_cloud_note_changed,
             poll_interval=self.config["poll_interval"],
-            watched_notebooks=self._watched_notebook_keys,
+            watched_notebooks=self._cloud_watched_notebooks,
             process_existing_on_start=False,
             on_poll_health=self._on_poll_health,
         )
@@ -229,3 +321,14 @@ class IngestService:
 
         if poller_task in done:
             poller_task.result()
+
+
+def _ocr_page_indexes(changes: list[PageChangeRecord]) -> list[int]:
+    """Return page indexes that need OCR for new or content-updated pages."""
+    indexes = {
+        change.new_index
+        for change in changes
+        if change.change_type in {CHANGE_ADDED, CHANGE_UPDATED}
+        and change.new_index is not None
+    }
+    return sorted(indexes)

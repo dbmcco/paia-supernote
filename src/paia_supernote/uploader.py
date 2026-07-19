@@ -121,6 +121,9 @@ class SupernoteUploader:
     async def upload_notebook(self, notebook_path: str, target_name: str) -> bool:
         """Upload .note file to Supernote Cloud (three-step flow).
 
+        This is the low-level mutation primitive. Agent-facing write routes must
+        perform their ledger base-revision guard before calling this method.
+
         Safe replace strategy: record the existing file ID first, upload the new
         version (cloud creates a versioned duplicate), then delete the OLD file
         by its saved ID. If the upload fails, the original is untouched.

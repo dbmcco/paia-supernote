@@ -281,13 +281,40 @@ Authentication uses browser cookies obtained via Playwright (interactive login f
 | `zai_vision_model` | — | Model ID for handwriting OCR |
 | `zai_text_model` | — | Model ID for text tasks |
 | `state_db_path` | `~/.paia/supernote/supernote-state.db` | SQLite state database |
-| `folio_sync_notebooks` | `[]` | Notebooks to watch and OCR |
+| `folio_sync_notebooks` | `[]` | Notebooks to watch and OCR (also the ledger allowlist fallback when `cloud_change_ledger_notebooks` is unset) |
+| `cloud_change_ledger_notebooks` | _unset_ | Explicit allowlist for the Cloud change ledger. When present (even empty `[]`) it fully controls which notebooks are ledger-tracked; falls back to `folio_sync_notebooks` when unset |
 | `filing_enabled` | `false` | Enable auto-filing of starred pages |
 | `filing_dry_run` | `true` | Log filing decisions without executing |
 | `filing_source_notebooks` | `[]` | Notebooks to file from |
 | `filing_destination_notebooks` | `[]` | Target notebooks for filing |
 | `filing_ledger_db_path` | `~/.paia/supernote/filing-ledger.db` | Filing audit database |
 | `events_url` | `http://localhost:3511` | PAIA events service URL (optional) |
+
+## Cloud Change Ledger & Agent Contracts
+
+The service keeps a durable SQLite-backed **change ledger** for an explicit
+allowlist of Cloud notebooks, and exposes cached, base-revision-guarded
+read/write contracts for agents. See
+[`docs/supernote-cloud-change-ledger-contracts.md`](docs/supernote-cloud-change-ledger-contracts.md)
+for the full reference. Summary:
+
+- **Allowlist**: only `cloud_change_ledger_notebooks` (falling back to
+  `folio_sync_notebooks`) are ledger-tracked; non-allowlisted notebooks are
+  skipped before download/parse/OCR/mutation.
+- **Cached reads** (`supernote changes`, `supernote read`) read the local ledger
+  cache without contacting Supernote Cloud. `changes` returns a replayable
+  `next_cursor` and the current `notebook_revision`.
+- **Per-agent cursors**: `supernote changes --agent <agent>` reads after that
+  agent's last cursor; `--advance` acknowledges it only after a successful read.
+- **Base-revision writes**: the `supernote.write.requested` route requires a
+  `base_notebook_revision` and fails closed on stale/missing/mismatched/
+  disallowed revisions before any apply/upload/S3 call.
+- **Structured errors**: every CLI/event/agent failure uses one shared
+  `AgentError` envelope (`error_code`, `next_actions`, `retryable`,
+  `mutation_applied`, …) with secrets redacted; `--json` is canonical for agents.
+- **TOCTOU limitation**: the write guard checks the latest *cached* ledger
+  snapshot, not a live Cloud fetch, so freshness is bounded by the configured
+  `poll_interval` plus ingest delay — it is not a live compare-and-swap.
 
 ## License
 

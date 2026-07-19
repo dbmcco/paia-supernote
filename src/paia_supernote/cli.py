@@ -26,6 +26,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
+from .agent_read_contracts import (
+    AdvanceAgentCursorRequest,
+    LatestNotebookStateRequest,
+    NotebookChangesRequest,
+    ReadContractError,
+    SupernoteReadContract,
+)
+from .contract_errors import (
+    AgentError,
+    agent_error_json,
+    cloud_auth_error,
+    format_agent_error,
+)
 from .main import DEFAULT_CONFIG_PATH, _filing_destination_map, load_config
 from .move_pipeline import (
     MovePlan,
@@ -61,6 +76,7 @@ class CliConfig:
     backups_root: Path
     destination_map: dict[str, str]
     reader: Any
+    raw_config: dict[str, Any] | None = None
 
 
 def load_cli_config(config_path: Path | None = None) -> CliConfig:
@@ -71,6 +87,7 @@ def load_cli_config(config_path: Path | None = None) -> CliConfig:
         backups_root=BACKUPS_ROOT,
         destination_map=_filing_destination_map(raw),
         reader=build_reader(raw),
+        raw_config=raw,
     )
 
 
@@ -339,6 +356,37 @@ async def cmd_auth_status(uploader: Any) -> dict:
     }
 
 
+def cmd_changes(
+    config: CliConfig,
+    notebook: str,
+    *,
+    since: str | None = None,
+    agent: str | None = None,
+    advance: bool = False,
+    latest: bool = False,
+) -> BaseModel:
+    """Read cached ledger changes/state without Cloud or uploader access."""
+    contract = SupernoteReadContract(config.raw_config or {}, config.state_db_path)
+    if latest:
+        return contract.get_latest_notebook_state(
+            LatestNotebookStateRequest(notebook=notebook)
+        )
+    response = contract.get_changes(
+        NotebookChangesRequest(notebook=notebook, since=since, agent=agent)
+    )
+    if advance:
+        if agent is None:
+            raise SystemExit("changes --advance requires --agent")
+        return contract.advance_agent_cursor(
+            AdvanceAgentCursorRequest(
+                agent=agent,
+                notebook=notebook,
+                change_id=response.next_cursor,
+            )
+        )
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Verbose formatting (the guidance the model reads)
 # ---------------------------------------------------------------------------
@@ -441,6 +489,58 @@ def format_move_result(result: MoveResult) -> str:
     return "\n".join(lines)
 
 
+def format_changes(payload: BaseModel) -> str:
+    data = payload.model_dump(mode="json")
+    if "pages" in data:
+        lines = [
+            f"{data['notebook']} cached state at {data['notebook_revision']} ",
+            f"({data['page_count']} page(s), next cursor {data['next_cursor']}).",
+        ]
+        for page in data["pages"]:
+            preview = f" — {page['text_preview']}" if page.get("text_preview") else ""
+            lines.append(
+                f"  page {page['page_index']}: {page['page_id']} "
+                f"[{page['ocr_status']}]{preview}"
+            )
+        return "\n".join(lines)
+
+    if "changes" in data:
+        lines = [
+            f"{data['notebook']} changes since {data['cursor_kind']} "
+            f"{data['cursor']} (next cursor {data['next_cursor']})."
+        ]
+        if not data["changes"]:
+            lines.append("No cached changes found after that cursor.")
+        for change in data["changes"]:
+            idx = change["new_index"] if change["new_index"] is not None else "removed"
+            preview = (
+                f" — {change['text_preview']}" if change.get("text_preview") else ""
+            )
+            lines.append(
+                f"  #{change['change_id']} {change['change_type']} "
+                f"page {idx} ({change['page_id']}){preview}"
+            )
+        lines.append("Next: rerun with --advance --agent <agent> after consuming it.")
+        return "\n".join(lines)
+
+    if {"agent", "cursor", "advanced"}.issubset(data):
+        state = "advanced" if data["advanced"] else "unchanged"
+        return (
+            f"{data['agent']} cursor for {data['notebook']} "
+            f"{state}: {data['cursor']}"
+        )
+
+    if {"agent", "cursor"}.issubset(data):
+        return f"{data['agent']} cursor for {data['notebook']}: {data['cursor']}"
+
+    return json.dumps(data, indent=2)
+
+
+def format_contract_error(error: ReadContractError | AgentError) -> str:
+    payload = error.error if isinstance(error, ReadContractError) else error
+    return format_agent_error(payload)
+
+
 def _guidance(command: str, notebook: str | None = None) -> str:
     """Contextual next-step hint appended to every prose command output.
 
@@ -531,6 +631,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p_remove.add_argument("--pages", required=True)
     p_remove.add_argument("--dry-run", action="store_true")
 
+    p_changes = sub.add_parser(
+        "changes",
+        help="query cached ledger changes without contacting Supernote Cloud",
+    )
+    p_changes.add_argument("notebook")
+    p_changes.add_argument("--since", help="change ID or ISO timestamp cursor")
+    p_changes.add_argument("--agent", help="read changes after this agent's cursor")
+    p_changes.add_argument(
+        "--advance",
+        action="store_true",
+        help="after a successful agent query, advance that agent cursor",
+    )
+    p_changes.add_argument(
+        "--latest",
+        action="store_true",
+        help="return latest cached notebook/page state instead of changes",
+    )
+
     p_auth = sub.add_parser("auth", help="cloud auth")
     auth_sub = p_auth.add_subparsers(dest="auth_command", required=True)
     auth_sub.add_parser("status")
@@ -549,6 +667,8 @@ def _read_append_text(args: argparse.Namespace) -> str:
 
 
 def _jsonable(obj: Any) -> Any:
+    if isinstance(obj, BaseModel):
+        return obj.model_dump(mode="json")
     if is_dataclass(obj):
         return asdict(obj)
     if isinstance(obj, list) and obj and is_dataclass(obj[0]):
@@ -656,6 +776,16 @@ async def _run_command(
             )
         )
         emit(result, msg + _guidance("remove", args.notebook))
+    elif args.command == "changes":
+        result = cmd_changes(
+            config,
+            args.notebook,
+            since=args.since,
+            agent=args.agent,
+            advance=args.advance,
+            latest=args.latest,
+        )
+        emit(result, format_changes(result))
     elif args.command == "auth":
         if args.auth_command == "status":
             result = await cmd_auth_status(uploader)
@@ -677,6 +807,10 @@ async def _run_command(
 
 
 async def _dispatch(args: argparse.Namespace, config: CliConfig) -> int:
+    if args.command == "changes":
+        await _run_command(args, config, uploader=None)
+        return 0
+
     if args.command == "auth" and args.auth_command == "login":
         # With SN_PHONE/SN_PASSWORD set, login is headless + automatic; otherwise
         # a visible browser opens so a human can complete the login.
@@ -704,8 +838,18 @@ def main(argv: list[str] | None = None) -> int:
     config = load_cli_config(args.config)
     try:
         return asyncio.run(_dispatch(args, config))
+    except ReadContractError as exc:
+        if args.json:
+            print(agent_error_json(exc.error), file=sys.stderr)
+        else:
+            print(format_contract_error(exc), file=sys.stderr)
+        return 2
     except UploadAuthError:
-        print(auth_recovery_message(), file=sys.stderr)
+        error = cloud_auth_error(auth_recovery_message())
+        if args.json:
+            print(agent_error_json(error), file=sys.stderr)
+        else:
+            print(format_contract_error(error), file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         return 130

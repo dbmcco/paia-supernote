@@ -136,6 +136,10 @@ class QuickFilingService:
         state so the next run resumes rather than double-applying.
 
         Returns the number of completed operations.
+
+        This manual filing service is an internal/non-agent move pipeline. It is
+        intentionally exempt from the agent write request base-revision contract
+        and keeps its existing dry-run plus ``verify_before_upload`` safety hooks.
         """
         completed = 0
         ready_pairs = [
