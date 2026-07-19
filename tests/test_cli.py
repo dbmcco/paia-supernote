@@ -27,6 +27,7 @@ from paia_supernote.cli import (
     cmd_move,
     cmd_plan,
     cmd_read,
+    cmd_show,
     format_move_result,
     format_plan,
     main,
@@ -128,6 +129,32 @@ async def test_cmd_plan_explicit_is_read_only(tmp_path: Path) -> None:
     assert plan.annotations[0].target_notebook == "Mgmt"
     assert plan.annotations[0].ledger_status == "would_move"
     uploader.upload_notebook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cmd_show_does_not_crash_on_fresh_state_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cmd_show must self-initialize the page_state schema.
+
+    On a fresh install (no ingest ever run) the state DB has no page_state
+    table; cmd_show used to crash with sqlite3.OperationalError. It should
+    initialize the schema and return an empty row set instead.
+    """
+    config = _config(tmp_path)  # state_db_path -> nonexistent DB
+    uploader = AsyncMock()
+    uploader.download_notebook.return_value = b"notebook-bytes"
+
+    monkeypatch.setattr(cli, "_load_notebook", lambda raw: object())
+    monkeypatch.setattr(
+        cli,
+        "build_snapshot_from_notebook",
+        lambda notebook_obj, **kw: SimpleNamespace(page_order=[], pages={}),
+    )
+
+    rows = await cmd_show(config, uploader, "Quick")
+
+    assert rows == []
 
 
 @pytest.mark.asyncio

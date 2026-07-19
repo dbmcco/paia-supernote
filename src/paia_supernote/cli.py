@@ -164,6 +164,7 @@ async def cmd_show(
         notebook_obj, notebook_name=notebook, revision=revision
     )
     page_state = PageStateStore(config.state_db_path)
+    page_state.init_schema()
     cached = {state.page: state for state in page_state.list_pages(notebook)}
 
     total = len(snapshot.page_order)
