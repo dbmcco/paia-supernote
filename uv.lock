@@ -1003,14 +1003,18 @@ dev = [
 
 [[package]]
 name = "paia-contracts"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "../paia-contracts" }
 dependencies = [
     { name = "pydantic" },
+    { name = "rfc8785" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.10" }]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.10" },
+    { name = "rfc8785", specifier = ">=0.1.4" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1501,6 +1505,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/48/57/28bfbf0a775b618b6e4d854ef8dd3f5c8988e5d614d8898703502a35f61c/reportlab-4.4.10.tar.gz", hash = "sha256:5cbbb34ac3546039d0086deb2938cdec06b12da3cdb836e813258eb33cd28487", size = 3714962, upload-time = "2026-02-12T10:45:21.325Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/2e/e1798b8b248e1517e74c6cdf10dd6edd485044e7edf46b5f11ffcc5a0add/reportlab-4.4.10-py3-none-any.whl", hash = "sha256:5abc815746ae2bc44e7ff25db96814f921349ca814c992c7eac3c26029bf7c24", size = 1955400, upload-time = "2026-02-12T10:45:18.828Z" },
+]
+
+[[package]]
+name = "rfc8785"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/2f/fa1d2e740c490191b572d33dbca5daa180cb423c24396b856f5886371d8b/rfc8785-0.1.4.tar.gz", hash = "sha256:e545841329fe0eee4f6a3b44e7034343100c12b4ec566dc06ca9735681deb4da", size = 14321, upload-time = "2024-09-27T16:33:31.206Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/78/119878110660b2ad709888c8a1614fce7e2fab39080ab960656dc8605bf6/rfc8785-0.1.4-py3-none-any.whl", hash = "sha256:520d690b448ecf0703691c76e1a34a24ddcd4fc5bc41d589cb7c58ec651bcd48", size = 9240, upload-time = "2024-09-27T16:33:29.683Z" },
 ]
 
 [[package]]

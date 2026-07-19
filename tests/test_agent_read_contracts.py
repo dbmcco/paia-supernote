@@ -112,6 +112,58 @@ def test_cached_latest_notebook_state_returns_pages_and_ocr_without_cloud(
     assert response.pages[2].text_preview == "new page two text"
 
 
+def test_latest_include_text_cli_returns_full_cached_ocr_without_uploader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``supernote changes --latest --include-text --json`` returns full cached
+    page OCR from the local SQLite cache without constructing SupernoteUploader,
+    while the default ``--latest`` run stays preview-only (text is null).
+    """
+    _, db_path, _, _ = _seed_contract(tmp_path)
+    config = CliConfig(
+        ledger_db_path=tmp_path / "filing.db",
+        state_db_path=db_path,
+        backups_root=tmp_path / "backups",
+        destination_map={},
+        reader=object(),
+        raw_config={"cloud_change_ledger_notebooks": ["Quick"]},
+    )
+
+    def fail_uploader(*args, **kwargs):
+        raise AssertionError(
+            "changes --latest must not instantiate Cloud uploader"
+        )
+
+    monkeypatch.setattr(cli, "load_cli_config", lambda path=None: config)
+    monkeypatch.setattr(cli, "SupernoteUploader", fail_uploader)
+
+    # Full cached OCR is returned only when --include-text is passed.
+    rc = cli.main(["--json", "changes", "Quick", "--latest", "--include-text"])
+    full_payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert full_payload["notebook"] == "Quick"
+    assert full_payload["notebook_revision"] == "rev-2"
+    full_pages = {page["page_id"]: page for page in full_payload["pages"]}
+    assert full_pages["p0"]["text"] == "updated page zero text"
+    assert full_pages["p2"]["text"] == "new page two text"
+    assert full_pages["p0"]["ocr_status"] == "ready"
+    assert full_pages["p0"]["text_preview"] == "updated page zero text"
+
+    # Default latest stays preview-only: text is null, preview is populated.
+    rc = cli.main(["--json", "changes", "Quick", "--latest"])
+    preview_payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    preview_pages = {page["page_id"]: page for page in preview_payload["pages"]}
+    assert preview_pages["p0"]["text"] is None
+    assert preview_pages["p0"]["text_preview"] == "updated page zero text"
+
+    # --include-text without --latest is rejected rather than silently ignored.
+    with pytest.raises(SystemExit):
+        cli.main(["--json", "changes", "Quick", "--include-text"])
+
+
 def test_explicit_change_cursor_returns_ordered_cached_changes(
     tmp_path: Path,
 ) -> None:

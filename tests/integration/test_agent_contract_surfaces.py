@@ -38,6 +38,7 @@ from paia_supernote.cloud_change_ledger import (
 from paia_supernote.contract_errors import format_agent_error, make_agent_error
 from paia_supernote.events import EventsClient
 from paia_supernote.main import DEFAULT_CONFIG, SupernoteService
+from paia_supernote.page_state import PageStateStore
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -134,6 +135,49 @@ def test_cli_changes_latest_returns_cached_state_without_cloud(
     assert payload["pages"][0]["page_id"] == "p-1"
     # No uploader was constructed for the cached read path (no Cloud contact).
     assert captured.err == ""
+
+
+@pytest.mark.integration
+def test_cli_changes_latest_include_text_returns_full_cached_ocr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``changes --latest --include-text --json`` returns full cached OCR for
+    ready pages, while the default ``--latest`` run stays preview-only."""
+    state_db = tmp_path / "state.db"
+    _seed_snapshot(
+        tmp_path,
+        _NOTEBOOK,
+        "rev-1",
+        pages=[PageRevision("p-1", 0, "hash-1")],
+    )
+    page_state = PageStateStore(state_db)
+    page_state.init_schema()
+    page_state.upsert_ocr_page(
+        _NOTEBOOK, 0, "rev-1:p-1:hash-1", "full cached OCR for page one", "m"
+    )
+    ledger = CloudChangeLedger(state_db)
+    ledger.mark_page_ocr_status(_NOTEBOOK, "p-1", "ready")
+    monkeypatch.setattr(cli, "load_cli_config", lambda path=None: _cli_config(tmp_path))
+
+    # Full cached OCR is returned only when --include-text is passed.
+    rc = cli.main(["--json", "changes", _NOTEBOOK, "--latest", "--include-text"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    pages = json.loads(captured.out)["pages"]
+    assert pages[0]["page_id"] == "p-1"
+    assert pages[0]["text"] == "full cached OCR for page one"
+    assert pages[0]["ocr_status"] == "ready"
+    assert pages[0]["text_preview"] == "full cached OCR for page one"
+    # The cached read never contacts Cloud (no structured error on stderr).
+    assert captured.err == ""
+
+    # Default latest stays preview-only: text is null, preview is populated.
+    cli.main(["--json", "changes", _NOTEBOOK, "--latest"])
+    default_pages = json.loads(capsys.readouterr().out)["pages"]
+    assert default_pages[0]["text"] is None
+    assert default_pages[0]["text_preview"] == "full cached OCR for page one"
 
 
 @pytest.mark.integration

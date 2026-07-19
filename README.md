@@ -301,9 +301,14 @@ for the full reference. Summary:
 - **Allowlist**: only `cloud_change_ledger_notebooks` (falling back to
   `folio_sync_notebooks`) are ledger-tracked; non-allowlisted notebooks are
   skipped before download/parse/OCR/mutation.
-- **Cached reads** (`supernote changes`, `supernote read`) read the local ledger
-  cache without contacting Supernote Cloud. `changes` returns a replayable
-  `next_cursor` and the current `notebook_revision`.
+- **Cached reads** (`supernote changes`) read the local ledger cache without
+  contacting Supernote Cloud. `changes` returns a replayable `next_cursor` and
+  the current `notebook_revision`. `supernote changes <notebook> --latest`
+  returns the cached snapshot with a text preview; add `--include-text` (with
+  `--json`) to get the full cached page OCR for every page without Cloud access.
+  The existing `supernote read` command remains the direct current-notebook read
+  path; the cache-backed full-page command is the `changes --latest --include-text`
+  form.
 - **Per-agent cursors**: `supernote changes --agent <agent>` reads after that
   agent's last cursor; `--advance` acknowledges it only after a successful read.
 - **Base-revision writes**: the `supernote.write.requested` route requires a

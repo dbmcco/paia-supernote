@@ -56,16 +56,24 @@ Supernote Cloud. This makes reads fast, replayable, and safe to retry.
 ```text
 supernote changes <notebook>                          # all cached changes since the start
 supernote changes <notebook> --since <change-id|iso>  # replayable explicit cursor
-supernote changes <notebook> --latest                 # latest cached notebook/page state + OCR
-supernote read <notebook> --pages <indexes>           # full cached OCR text for a page
+supernote changes <notebook> --latest                 # latest cached notebook/page state + OCR preview
+supernote changes <notebook> --latest --include-text --json  # full cached page OCR for the notebook
+supernote read <notebook> --pages <indexes>           # direct current-notebook read path
 ```
 
 - Every changes response returns `next_cursor` (a monotonic change ID) and the
   current `notebook_revision`. Pass that cursor back as `--since` for an
   auditable, replayable read.
 - `--latest` returns the current cached snapshot: notebook revision, page count,
-  ordered pages with their stable page IDs, content hashes, OCR status, and text
-  preview.
+  ordered pages with their stable page IDs, content hashes, OCR status, and a
+  text **preview**. By default the full OCR `text` is omitted (it is `null`).
+- `--include-text` (requires `--latest`, canonical with `--json`) fills in the
+  full cached page OCR `text` for each page from the local ledger cache. This is
+  the full cached page-read command: it returns every cached page's OCR text
+  without contacting Supernote Cloud or constructing the uploader. Outside
+  `--latest` it is rejected (changes responses carry a preview, not full text).
+- The existing `supernote read` command remains the direct current-notebook read
+  path; it is not the cache-backed command described in this section.
 - Repeated reads of unchanged cached state are idempotent and produce no new
   change records.
 - If no cached snapshot exists yet for an allowlisted notebook, the read returns

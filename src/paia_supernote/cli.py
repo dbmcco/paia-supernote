@@ -364,13 +364,16 @@ def cmd_changes(
     agent: str | None = None,
     advance: bool = False,
     latest: bool = False,
+    include_text: bool = False,
 ) -> BaseModel:
     """Read cached ledger changes/state without Cloud or uploader access."""
     contract = SupernoteReadContract(config.raw_config or {}, config.state_db_path)
     if latest:
         return contract.get_latest_notebook_state(
-            LatestNotebookStateRequest(notebook=notebook)
+            LatestNotebookStateRequest(notebook=notebook, include_text=include_text)
         )
+    if include_text:
+        raise SystemExit("changes --include-text requires --latest")
     response = contract.get_changes(
         NotebookChangesRequest(notebook=notebook, since=since, agent=agent)
     )
@@ -648,6 +651,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="return latest cached notebook/page state instead of changes",
     )
+    p_changes.add_argument(
+        "--include-text",
+        action="store_true",
+        help=(
+            "with --latest, return full cached page OCR text "
+            "(default latest output is preview-only)"
+        ),
+    )
 
     p_auth = sub.add_parser("auth", help="cloud auth")
     auth_sub = p_auth.add_subparsers(dest="auth_command", required=True)
@@ -784,6 +795,7 @@ async def _run_command(
             agent=args.agent,
             advance=args.advance,
             latest=args.latest,
+            include_text=args.include_text,
         )
         emit(result, format_changes(result))
     elif args.command == "auth":
