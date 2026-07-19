@@ -46,8 +46,8 @@ class TestLoadConfig:
         assert config["vision_backend"] == "zai"
         assert config["rewrite_backend"] == "zai"
         assert config["zai_api_key"] is None
-        assert config["zai_vision_model"] == "x-ai/grok-4.3"
-        assert config["zai_text_model"] == "x-ai/grok-4.3"
+        assert config["zai_vision_model"] == "glm-4.5v"
+        assert config["zai_text_model"] == "glm-5.1"
         assert "agent_mappings" in config
 
     def test_loads_toml_file(self, tmp_path: Path) -> None:
@@ -205,7 +205,10 @@ class TestLoadConfig:
         monkeypatch.delenv(supernote_zai_credential_env_var())
         monkeypatch.setenv("ZAI_API_KEY", "legacy-env-token")
         config = load_config(config_path=cfg_file)
-        assert config["zai_api_key"] == "file-token"
+        # The active route is z.ai, so the legacy ZAI_API_KEY is a valid
+        # same-provider env source and, under env > file precedence, overrides
+        # the TOML value.
+        assert config["zai_api_key"] == "legacy-env-token"
 
     def test_default_config_includes_state_db_path(self, tmp_path: Path) -> None:
         config = load_config(config_path=tmp_path / "missing.toml")

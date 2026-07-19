@@ -302,6 +302,11 @@ def test_main_dispatches_ls_and_prints(tmp_path: Path, monkeypatch, capsys) -> N
 def test_main_returns_2_and_prints_recovery_on_auth_error(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    # The "supernote auth login" recovery hint only appears when no
+    # SN_PHONE/SN_PASSWORD env creds are set; isolate from any real .env leakage
+    # so this exercises the manual-login recovery branch deterministically.
+    monkeypatch.delenv("SN_PHONE", raising=False)
+    monkeypatch.delenv("SN_PASSWORD", raising=False)
     fake_uploader = AsyncMock()
     fake_uploader.list_note_files.side_effect = UploadAuthError("403")
     monkeypatch.setattr(
