@@ -99,6 +99,21 @@ class IngestService:
         note_bytes: bytes,
         update_time: int | None = None,
     ) -> None:
+        """Local-watcher (Partner-app sync folder) ingest callback.
+
+        Allowlisted notebooks route through the SAME ledger-aware path as the
+        Cloud poller so a Partner-app sync machine produces identical
+        page_change/page_snapshot rows — agents reading ``changes <notebook>``
+        see consistent state regardless of transport. Non-ledger notebooks
+        (walk, tasks) keep the direct page_state write since they are not
+        diff-tracked.
+        """
+        if notebook_is_ledger_allowlisted(self.config, notebook_name):
+            await self._on_cloud_note_changed(
+                notebook_name, note_bytes, update_time
+            )
+            return
+
         note_hash = hashlib.sha256(note_bytes).hexdigest()
         persisted_pages: set[int] = set()
 

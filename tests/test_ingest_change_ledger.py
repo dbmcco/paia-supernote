@@ -503,3 +503,29 @@ async def test_ingest_once_notebook_scope_skips_other_notebooks(
     }
     assert status == {0: "ready"}
     assert list(service.ledger.current_pages("Quick")) == []
+
+
+# --- local-watcher -> ledger parity (Partner-app sync machines) -------------
+
+
+@pytest.mark.asyncio
+async def test_local_watcher_path_routes_allowlisted_notebook_through_ledger(
+    tmp_path: Path,
+) -> None:
+    """On a Partner-app sync machine the local watcher must populate the ledger
+    (page_snapshot/page_change rows) for allowlisted notebooks, exactly as the
+    Cloud poller does — so agents reading ``changes <notebook>`` see consistent
+    state regardless of which transport ingested the note.
+
+    Driven exactly as the local watcher drives it (no update_time). The ledger
+    path uses read_pages_resilient, never process_file."""
+    reader = FakeReader({b"rev1": [("p0", "h0"), ("p1", "h1")]})
+    service = _service(tmp_path, reader, allowlist=["Quick"])
+
+    await service._on_note_changed("Quick", b"rev1")
+
+    status = {
+        p.page_index: p.ocr_status for p in service.ledger.current_pages("Quick")
+    }
+    assert status == {0: "ready", 1: "ready"}
+    assert reader.ocr_calls == [(b"rev1", "Quick", (0, 1))]  # ledger path, all-new
