@@ -205,13 +205,15 @@ class IngestService:
 
         results: list = []
         if pages_to_ocr:
-            ocr_results, ocr_errors = await self.reader.read_pages_resilient(
-                note_bytes, notebook_name, pages=pages_to_ocr
+            results.extend(
+                await self._ocr_and_persist(
+                    note_bytes,
+                    notebook_name,
+                    page_by_index,
+                    cloud_revision,
+                    pages_to_ocr,
+                )
             )
-            self._persist_ocr_outcome(
-                notebook_name, page_by_index, cloud_revision, ocr_results, ocr_errors
-            )
-            results.extend(ocr_results)
         else:
             log.info(
                 "cloud_ingest_no_ocr_needed",
@@ -225,15 +227,45 @@ class IngestService:
         # notebook is ingested (we already have the bytes in hand).
         due = self._due_pending_indexes(notebook_name)
         if due:
-            sweep_results, sweep_errors = await self.reader.read_pages_resilient(
-                note_bytes, notebook_name, pages=due
+            results.extend(
+                await self._ocr_and_persist(
+                    note_bytes,
+                    notebook_name,
+                    page_by_index,
+                    cloud_revision,
+                    due,
+                )
             )
-            self._persist_ocr_outcome(
-                notebook_name, page_by_index, cloud_revision, sweep_results, sweep_errors
-            )
-            results.extend(sweep_results)
 
         await self._publish_walk_feedback(notebook_name, results)
+
+    async def _ocr_and_persist(
+        self,
+        note_bytes: bytes,
+        notebook_name: str,
+        page_by_index: dict,
+        cloud_revision: str,
+        pages: list[int],
+    ) -> list:
+        """OCR pages one at a time, persisting each before the next.
+
+        Bounds the loss from a slow or interrupted back-fill to the single
+        in-flight page. At ~90s/page on the vision backend a multi-page notebook
+        can outrun any single process; per-page persistence plus the retry
+        sweep's resumption of still-pending pages turns a fragile one-shot batch
+        into resumable, incremental progress. ``read_pages_resilient`` still
+        isolates per-page failures within each single-page call.
+        """
+        results: list = []
+        for page_index in pages:
+            ocr_results, ocr_errors = await self.reader.read_pages_resilient(
+                note_bytes, notebook_name, pages=[page_index]
+            )
+            self._persist_ocr_outcome(
+                notebook_name, page_by_index, cloud_revision, ocr_results, ocr_errors
+            )
+            results.extend(ocr_results)
+        return results
 
     def _persist_ocr_outcome(
         self,

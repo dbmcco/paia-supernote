@@ -200,6 +200,66 @@ async def test_partial_ocr_failure_persists_successes_and_records_retry(
 
 
 @pytest.mark.asyncio
+async def test_backfill_ocrs_and_persists_one_page_at_a_time(
+    tmp_path: Path,
+) -> None:
+    """Back-fill OCR runs page-by-page, persisting each before the next, so a
+    slow or interrupted run never discards already-completed OCR. The resilient
+    reader must be called once per page (not one batch call holding every page)."""
+    reader = FakeReader(
+        snapshots={b"rev1": [("P0", "h0"), ("P1", "h1"), ("P2", "h2")]}
+    )
+    svc = _service(tmp_path, reader)
+
+    await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+
+    # One resilient call PER page, not one call holding all three.
+    assert len(reader.ocr_calls) == 3
+    for _bytes, _name, pages in reader.ocr_calls:
+        assert list(pages) in ([0], [1], [2])
+    # Each page persisted immediately after its own OCR.
+    for idx in (0, 1, 2):
+        st = svc.page_state.get_page("Quick", idx)
+        assert st is not None
+        assert st.raw_text.startswith("ocr-")
+
+
+class _KillAfterFirstPageReader(FakeReader):
+    """read_pages_resilient succeeds on the first call then raises, simulating
+    process death mid-back-fill after one page completed."""
+
+    async def read_pages_resilient(
+        self, note_bytes: bytes, notebook_name: str, *, pages: list[int]
+    ):
+        if self.ocr_calls:
+            raise RuntimeError("simulated kill mid-back-fill")
+        return await super().read_pages_resilient(
+            note_bytes, notebook_name, pages=pages
+        )
+
+
+@pytest.mark.asyncio
+async def test_backfill_interruption_keeps_already_completed_page(
+    tmp_path: Path,
+) -> None:
+    """If the process dies after one page of a multi-page back-fill, that page's
+    OCR must already be persisted — not lost with the rest of the batch."""
+    reader = _KillAfterFirstPageReader(
+        snapshots={b"rev1": [("P0", "h0"), ("P1", "h1")]}
+    )
+    svc = _service(tmp_path, reader)
+
+    with pytest.raises(RuntimeError, match="simulated kill"):
+        await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+
+    # Page 0 completed and persisted before the kill on page 1.
+    persisted = {p.page for p in svc.page_state.list_pages("Quick")}
+    assert 0 in persisted
+    assert 1 not in persisted
+    assert svc.page_state.get_page("Quick", 0).raw_text.startswith("ocr-")
+
+
+@pytest.mark.asyncio
 async def test_due_pending_page_is_retried_on_next_ingest(tmp_path: Path) -> None:
     """A page left pending by a prior failure is re-OCRed on the next ingest of
     the same notebook once its backoff has elapsed, and flips to ready when OCR
@@ -283,8 +343,10 @@ async def test_cloud_ingest_records_ledger_and_ocrs_only_new_or_updated_pages(
     await service._on_cloud_note_changed("Quick", b"rev2-copy", update_time=300)
 
     assert reader.ocr_calls == [
-        (b"rev1", "Quick", (0, 1)),
-        (b"rev2", "Quick", (0, 2)),
+        (b"rev1", "Quick", (0,)),
+        (b"rev1", "Quick", (1,)),
+        (b"rev2", "Quick", (0,)),
+        (b"rev2", "Quick", (2,)),
     ]
     rows = service.page_state.list_pages("Quick")
     assert {row.page: row.raw_text for row in rows} == {
@@ -316,7 +378,11 @@ async def test_cloud_ingest_records_reorder_without_ocr(tmp_path: Path) -> None:
     assert cursor is not None
     await service._on_cloud_note_changed("Quick", b"rev2", update_time=200)
 
-    assert reader.ocr_calls == [(b"rev1", "Quick", (0, 1, 2))]
+    assert reader.ocr_calls == [
+        (b"rev1", "Quick", (0,)),
+        (b"rev1", "Quick", (1,)),
+        (b"rev1", "Quick", (2,)),
+    ]
     changes = service.ledger.changes_since("Quick", cursor)
     assert [change.change_type for change in changes] == [
         CHANGE_REORDER,
@@ -415,7 +481,11 @@ async def test_cloud_ingest_adds_and_reorder_ocrs_only_added_pages(
     await service._on_cloud_note_changed("Quick", b"rev2", update_time=200)
 
     # rev1 OCRs both pages; rev2 OCRs only the newly added page c (index 0).
-    assert reader.ocr_calls == [(b"rev1", "Quick", (0, 1)), (b"rev2", "Quick", (0,))]
+    assert reader.ocr_calls == [
+        (b"rev1", "Quick", (0,)),
+        (b"rev1", "Quick", (1,)),
+        (b"rev2", "Quick", (0,)),
+    ]
     changes = service.ledger.changes_since("Quick", cursor)
     assert sorted(c.change_type for c in changes) == [
         CHANGE_ADDED,
@@ -454,7 +524,10 @@ async def test_ingest_once_backfill_seeds_ledger_from_existing_files(
         p.page_index: p.ocr_status for p in service.ledger.current_pages("Quick")
     }
     assert status == {0: "ready", 1: "ready"}
-    assert reader.ocr_calls == [(b"quick-bytes", "Quick", (0, 1))]
+    assert reader.ocr_calls == [
+        (b"quick-bytes", "Quick", (0,)),
+        (b"quick-bytes", "Quick", (1,)),
+    ]
 
 
 @pytest.mark.asyncio
@@ -528,7 +601,10 @@ async def test_local_watcher_path_routes_allowlisted_notebook_through_ledger(
         p.page_index: p.ocr_status for p in service.ledger.current_pages("Quick")
     }
     assert status == {0: "ready", 1: "ready"}
-    assert reader.ocr_calls == [(b"rev1", "Quick", (0, 1))]  # ledger path, all-new
+    assert reader.ocr_calls == [
+        (b"rev1", "Quick", (0,)),
+        (b"rev1", "Quick", (1,)),
+    ]  # ledger path, all-new
 
 
 # --- back-fill cost guard (--max-pages) ------------------------------------
@@ -568,5 +644,8 @@ async def test_ingest_once_max_pages_proceeds_when_under_cap(
 
     await service.ingest_once(process_existing_on_start=True, max_pages=5)
 
-    assert reader.ocr_calls == [(b"quick-bytes", "Quick", (0, 1))]
+    assert reader.ocr_calls == [
+        (b"quick-bytes", "Quick", (0,)),
+        (b"quick-bytes", "Quick", (1,)),
+    ]
     assert service.backfill_aborted is False
