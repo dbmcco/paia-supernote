@@ -6,6 +6,7 @@ from Supernote Cloud and does not call uploader/apply/S3 mutation endpoints.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -289,6 +290,79 @@ def validate_agent_write_request(
         base_notebook_revision=request.base_notebook_revision,
         current_revision=latest.cloud_revision,
         observed_at=latest.observed_at,
+    )
+
+
+def notebook_bytes_hash(revision: str) -> str | None:
+    """Extract the raw ``sha256(note_bytes)`` embedded in a Cloud revision.
+
+    Revisions are ``"{update_time}:{sha256(note_bytes)}"`` (see ingest). Returns
+    the 64-char hex hash, or ``None`` when the revision predates that shape (a
+    legacy or synthetic revision) so callers can fail-open to the cache check
+    rather than reject a write they cannot verify.
+    """
+    if ":" not in revision:
+        return None
+    candidate = revision.rsplit(":", 1)[1]
+    if len(candidate) != 64:
+        return None
+    try:
+        int(candidate, 16)  # validate hex
+    except ValueError:
+        return None
+    return candidate
+
+
+def assert_downloaded_matches_base(
+    downloaded_bytes: bytes,
+    accepted: AgentWriteAccepted,
+) -> None:
+    """Post-download compare-and-swap against the agent's base revision.
+
+    The cache check in :func:`validate_agent_write_request` only sees the local
+    ledger; it cannot detect a concurrent Cloud edit that landed after the cache
+    was populated. This guard compares the *actual* downloaded Cloud bytes to the
+    hash embedded in the agent's base revision and raises ``stale_base_revision``
+    on divergence — before any caller appends/replaces/uploads.
+
+    Fails open (no-op) when the base revision carries no embedded bytes-hash, so
+    synthetic or legacy revisions keep working under the cache check alone.
+    """
+    expected = notebook_bytes_hash(accepted.base_notebook_revision)
+    if expected is None:
+        return
+    actual = hashlib.sha256(downloaded_bytes).hexdigest()
+    if actual == expected:
+        return
+    raise AgentWriteRevisionError(
+        _conflict(
+            "stale_base_revision",
+            notebook=accepted.notebook,
+            message=(
+                "Downloaded Cloud bytes do not match the base revision — a "
+                "concurrent edit landed between the agent read and this write."
+            ),
+            requested_base_revision=accepted.base_notebook_revision,
+            current_revision=accepted.current_revision,
+            field="base_notebook_revision",
+            received={
+                "base_notebook_revision": accepted.base_notebook_revision,
+                "downloaded_sha256": actual,
+            },
+            expected={"base_notebook_revision": "a fresh revision from a re-read"},
+            retryable=True,
+            next_step=(
+                "Re-read the notebook, merge any intervening changes, then retry."
+            ),
+            details={
+                "post_download_cas": {
+                    "base_notebook_revision": accepted.base_notebook_revision,
+                    "expected_sha256": expected,
+                    "downloaded_sha256": actual,
+                    "match": False,
+                }
+            },
+        )
     )
 
 

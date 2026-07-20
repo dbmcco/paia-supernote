@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -1131,3 +1132,126 @@ def test_default_folio_sync_notebooks_is_empty_so_unconfigured_fails_loud(
     assert DEFAULT_CONFIG["folio_sync_notebooks"] == []
     cfg = load_config(tmp_path / "absent-config.toml")
     assert resolve_ledger_notebooks(cfg) == []
+
+
+class TestAgentWritePathIntegrity:
+    """Post-download base-revision CAS + post-upload sha256 re-verify.
+
+    The cache-only base-revision guard can't catch a concurrent Cloud edit that
+    landed after the cache was populated. So the write route compares the real
+    downloaded bytes to the hash embedded in the base revision before mutating,
+    and re-verifies the Cloud holds exactly the uploaded bytes after upload.
+    These are the integrity checks behind 'agents don't clobber each other or
+    the Partner app'.
+    """
+
+    @staticmethod
+    def _service_with_base(tmp_path: Path, base_bytes: bytes, notebook: str = "Quick"):
+        base_rev = f"123:{hashlib.sha256(base_bytes).hexdigest()}"
+        service = SupernoteService(
+            config=_config_with_write_revision(tmp_path, notebook, revision=base_rev)
+        )
+        service.events = AsyncMock()
+        return service, base_rev
+
+    @pytest.mark.asyncio
+    async def test_append_rejects_when_downloaded_bytes_diverge_from_base(
+        self, tmp_path: Path
+    ) -> None:
+        """A concurrent Cloud edit between the agent read and the write must be
+        caught after download (post-download CAS) and rejected before any mutate."""
+        base_bytes = b"original-notebook-bytes"
+        service, base_rev = self._service_with_base(tmp_path, base_bytes)
+        mock_uploader = AsyncMock()
+        # Cloud now holds DIFFERENT bytes than the agent's base.
+        mock_uploader.download_notebook = AsyncMock(return_value=b"concurrent-edit")
+        mock_uploader.upload_notebook = AsyncMock(return_value=True)
+        service.uploader = mock_uploader
+
+        await service._handle_write_request(
+            {
+                "agent": "Sam",
+                "notebook": "Quick",
+                "content": "new page",
+                "base_notebook_revision": base_rev,
+            }
+        )
+
+        mock_uploader.upload_notebook.assert_not_awaited()  # blocked before mutate
+        service.events.publish_write_failed.assert_awaited_once()
+        conflict = service.events.publish_write_failed.await_args.kwargs[
+            "structured_error"
+        ]
+        assert conflict.error_code == "stale_base_revision"
+
+    @pytest.mark.asyncio
+    async def test_append_succeeds_when_post_upload_reverify_matches(
+        self, tmp_path: Path
+    ) -> None:
+        """Happy path: base matches, upload succeeds, re-download matches the
+        uploaded bytes -> write_completed."""
+        base_bytes = b"original-notebook-bytes"
+        updated_bytes = b"updated-notebook-with-new-page"
+        service, base_rev = self._service_with_base(tmp_path, base_bytes)
+        mock_uploader = AsyncMock()
+        mock_uploader.download_notebook = AsyncMock(
+            side_effect=[base_bytes, updated_bytes]  # initial download, then re-verify
+        )
+        mock_uploader.upload_notebook = AsyncMock(return_value=True)
+        service.uploader = mock_uploader
+        service.writer = MagicMock()
+        service.writer.render_page.return_value = b"ratta-rle"
+
+        with patch(
+            "paia_supernote.main.append_page_to_notebook",
+            return_value=updated_bytes,
+        ):
+            await service._handle_write_request(
+                {
+                    "agent": "Sam",
+                    "notebook": "Quick",
+                    "content": "new page",
+                    "base_notebook_revision": base_rev,
+                }
+            )
+
+        service.events.publish_write_completed.assert_awaited_once()
+        service.events.publish_write_failed.assert_not_awaited()
+        # download for CAS + download for re-verify
+        assert mock_uploader.download_notebook.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_append_fails_when_post_upload_reverify_diverges(
+        self, tmp_path: Path
+    ) -> None:
+        """If a concurrent overwrite lands during the upload window, the
+        post-upload re-download won't match the bytes we uploaded -> write_failed."""
+        base_bytes = b"original-notebook-bytes"
+        updated_bytes = b"updated-notebook-with-new-page"
+        service, base_rev = self._service_with_base(tmp_path, base_bytes)
+        mock_uploader = AsyncMock()
+        mock_uploader.download_notebook = AsyncMock(
+            side_effect=[base_bytes, b"someone-overwrote-cloud-mid-upload"]
+        )
+        mock_uploader.upload_notebook = AsyncMock(return_value=True)
+        service.uploader = mock_uploader
+        service.writer = MagicMock()
+        service.writer.render_page.return_value = b"ratta-rle"
+
+        with patch(
+            "paia_supernote.main.append_page_to_notebook",
+            return_value=updated_bytes,
+        ):
+            await service._handle_write_request(
+                {
+                    "agent": "Sam",
+                    "notebook": "Quick",
+                    "content": "new page",
+                    "base_notebook_revision": base_rev,
+                }
+            )
+
+        service.events.publish_write_failed.assert_awaited_once()
+        service.events.publish_write_completed.assert_not_awaited()
+        err = service.events.publish_write_failed.await_args.kwargs.get("error", "")
+        assert "re-verify" in err

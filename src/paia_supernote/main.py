@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import inspect
 import os
 import signal
@@ -22,6 +23,7 @@ import tomllib
 
 from .agent_write_contracts import (
     AgentWriteRevisionError,
+    assert_downloaded_matches_base,
     missing_notebook_conflict,
     validate_agent_write_request,
 )
@@ -661,7 +663,7 @@ class SupernoteService:
                     )
                 )
 
-            validate_agent_write_request(
+            accepted = validate_agent_write_request(
                 event_data,
                 config=self.config,
                 state_db_path=Path(self.config["state_db_path"]),
@@ -798,6 +800,11 @@ class SupernoteService:
                 "notebook_downloaded", target_name=target_name, size=len(notebook_bytes)
             )
 
+            # Step 1.5: Post-download compare-and-swap. The cache-only base check
+            # can't see a concurrent Cloud edit; reject now if the live bytes
+            # diverge from the base revision the agent read, before we mutate.
+            assert_downloaded_matches_base(notebook_bytes, accepted)
+
             # Step 2: Render page content to RATTA_RLE bytes
             ratta_rle_bytes = self.writer.render_page(agent, content)
 
@@ -817,6 +824,29 @@ class SupernoteService:
                 os.unlink(tmp_path)
 
             if success:
+                # Step 5: re-verify the Cloud holds exactly the bytes we uploaded.
+                # Catches a concurrent overwrite that landed during the upload
+                # window — a successful upload alone cannot detect it.
+                try:
+                    await self._reverify_upload(
+                        self.uploader, target_name, updated_bytes
+                    )
+                except RuntimeError as exc:
+                    log.warning(
+                        "write_reverify_failed",
+                        agent=agent,
+                        notebook=notebook,
+                        error=str(exc),
+                    )
+                    await self._publish_write_failed(
+                        event_data,
+                        agent=agent,
+                        notebook=notebook,
+                        content_type=content_type,
+                        page_count=1,
+                        error=str(exc),
+                    )
+                    return
                 log.info("write_complete", agent=agent, notebook=notebook)
                 await self._publish_write_completed(
                     event_data,
@@ -859,6 +889,27 @@ class SupernoteService:
                 notebook=notebook,
                 content_type=content_type,
                 error=str(exc),
+            )
+
+    async def _reverify_upload(
+        self,
+        uploader: SupernoteUploader,
+        target_name: str,
+        expected_bytes: bytes,
+    ) -> None:
+        """Re-download and confirm the Cloud holds exactly the bytes we uploaded.
+
+        Mirrors the manual-move path's re-verify (``cli._reverify_sha256``):
+        catches a concurrent overwrite that landed during the upload window,
+        which a successful upload response alone cannot detect.
+        """
+        redownloaded = await uploader.download_notebook(target_name)
+        if (
+            hashlib.sha256(redownloaded).digest()
+            != hashlib.sha256(expected_bytes).digest()
+        ):
+            raise RuntimeError(
+                f"{target_name}: post-upload re-verify failed (sha256 mismatch)"
             )
 
     async def _replace_pages_with_uploader(

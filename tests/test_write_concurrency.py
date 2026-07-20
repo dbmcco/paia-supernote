@@ -245,6 +245,10 @@ async def test_current_base_revision_preserves_append_upload_path(
     service = _service(tmp_path)
     service.writer = MagicMock()
     service.writer.render_page.return_value = b"rle"
+    # 1st download = base bytes; re-verify download = the appended bytes uploaded
+    service.uploader.download_notebook = AsyncMock(
+        side_effect=[b"notebook", b"updated-notebook"]
+    )
 
     with patch(
         "paia_supernote.main.append_page_to_notebook",
@@ -259,7 +263,7 @@ async def test_current_base_revision_preserves_append_upload_path(
             }
         )
 
-    service.uploader.download_notebook.assert_awaited_once_with("Quick.note")
+    assert service.uploader.download_notebook.await_count == 2
     service.writer.render_page.assert_called_once_with("Sam", "hello")
     append_page.assert_called_once_with(b"notebook", b"rle")
     service.uploader.upload_notebook.assert_awaited_once()
