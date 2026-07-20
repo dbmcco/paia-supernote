@@ -529,3 +529,44 @@ async def test_local_watcher_path_routes_allowlisted_notebook_through_ledger(
     }
     assert status == {0: "ready", 1: "ready"}
     assert reader.ocr_calls == [(b"rev1", "Quick", (0, 1))]  # ledger path, all-new
+
+
+# --- back-fill cost guard (--max-pages) ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_once_max_pages_aborts_before_ocr_when_exceeded(
+    tmp_path: Path,
+) -> None:
+    """``ingest --once --backfill --max-pages 2`` against a 3-page notebook must
+    surface the estimate and abort BEFORE any vision call — the cost guard."""
+    reader = FakeReader({b"quick-bytes": [("p0", "h0"), ("p1", "h1"), ("p2", "h2")]})
+    entries = [
+        {"fileName": "Quick.note", "updateTime": 10, "isFolder": "N", "size": 10},
+    ]
+    uploader = _uploader_with(entries, {"Quick.note": b"quick-bytes"})
+    service = _service(tmp_path, reader, uploader=uploader)
+
+    await service.ingest_once(process_existing_on_start=True, max_pages=2)
+
+    assert reader.ocr_calls == []  # 3 pages > cap of 2 -> no OCR
+    assert service.backfill_aborted is True
+    assert service.backfill_estimate.get("Quick") == 3
+
+
+@pytest.mark.asyncio
+async def test_ingest_once_max_pages_proceeds_when_under_cap(
+    tmp_path: Path,
+) -> None:
+    """``--max-pages`` above the page count lets the back-fill proceed normally."""
+    reader = FakeReader({b"quick-bytes": [("p0", "h0"), ("p1", "h1")]})
+    entries = [
+        {"fileName": "Quick.note", "updateTime": 10, "isFolder": "N", "size": 10},
+    ]
+    uploader = _uploader_with(entries, {"Quick.note": b"quick-bytes"})
+    service = _service(tmp_path, reader, uploader=uploader)
+
+    await service.ingest_once(process_existing_on_start=True, max_pages=5)
+
+    assert reader.ocr_calls == [(b"quick-bytes", "Quick", (0, 1))]
+    assert service.backfill_aborted is False

@@ -24,7 +24,7 @@ from .cloud_change_ledger import (
     PageChangeRecord,
     PageRevision,
 )
-from .cloud_poller import CloudPoller
+from .cloud_poller import BackfillPageCapExceeded, CloudPoller
 from .config import notebook_is_ledger_allowlisted, resolve_ledger_notebooks
 from .events import EventsClient
 from .page_state import PageStateStore
@@ -62,6 +62,12 @@ class IngestService:
         self._local_watcher: Optional[SupernoteWatcher] = None
 
         self._shutdown_event = asyncio.Event()
+
+        # Back-fill cost guard: when set, _on_cloud_note_changed caps total OCR'd
+        # pages across an on-demand ingest_once run and aborts cleanly on overflow.
+        self._backfill_budget: int | None = None
+        self.backfill_aborted: bool = False
+        self.backfill_estimate: dict[str, int] = {}
 
     def _build_watched_notebook_keys(self) -> set[str]:
         """Notebooks to watch: Walk + tasks always, plus folio_sync_notebooks."""
@@ -177,6 +183,25 @@ class IngestService:
         )
         changes = self.ledger.apply_snapshot(ledger_snapshot)
         pages_to_ocr = _ocr_page_indexes(changes)
+
+        # Back-fill cost guard: surface the per-notebook OCR estimate and, when a
+        # cap is active, abort before spending vision budget. The estimate is
+        # recorded even on abort so the caller can report why it stopped.
+        if pages_to_ocr:
+            self.backfill_estimate[notebook_name] = len(pages_to_ocr)
+            log.info(
+                "backfill_page_estimate",
+                notebook=notebook_name,
+                pages_to_ocr=len(pages_to_ocr),
+            )
+            if self._backfill_budget is not None:
+                if len(pages_to_ocr) > self._backfill_budget:
+                    raise BackfillPageCapExceeded(
+                        notebook_name,
+                        requested=len(pages_to_ocr),
+                        remaining=self._backfill_budget,
+                    )
+                self._backfill_budget -= len(pages_to_ocr)
 
         results: list = []
         if pages_to_ocr:
@@ -323,6 +348,7 @@ class IngestService:
         *,
         process_existing_on_start: bool = False,
         notebooks: list[str] | None = None,
+        max_pages: int | None = None,
     ) -> None:
         """Run a single Cloud poll cycle, then exit. Never a continuous loop.
 
@@ -337,7 +363,14 @@ class IngestService:
             notebooks: scope the poll to these stems. Defaults to the resolved
                 ledger allowlist. The ledger allowlist still gates which
                 downloaded notebooks are written — name allowlisted notebooks.
+            max_pages: optional back-fill cap on total pages OCR'd this run.
+                When a notebook's new pages would exceed the remaining budget,
+                the run aborts before OCR-ing it (``backfill_aborted`` set), so a
+                huge notebook can't surprise-spend vision budget.
         """
+        self._backfill_budget = max_pages
+        self.backfill_aborted = False
+        self.backfill_estimate = {}
         await self.events.start()
         try:
             uploader = self._uploader or SupernoteUploader()
@@ -359,10 +392,20 @@ class IngestService:
             await uploader.start()
             try:
                 await cloud_poller.poll_once()
+            except BackfillPageCapExceeded as exc:
+                self.backfill_aborted = True
+                log.warning(
+                    "backfill_aborted_max_pages",
+                    notebook=exc.notebook,
+                    requested=exc.requested,
+                    remaining=exc.remaining,
+                    estimate=dict(self.backfill_estimate),
+                )
             finally:
                 with suppress(Exception):
                     await uploader.stop()
         finally:
+            self._backfill_budget = None
             await self.events.stop()
 
     async def _run_with_local_watcher(self) -> None:

@@ -770,6 +770,14 @@ class TestMainEntrypoint:
         assert args.once is True
         assert args.backfill is True
         assert args.notebook == ["Mgmt", "Dev"]
+        assert args.max_pages is None
+
+    def test_ingest_max_pages_flag_parses(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            ["ingest", "--once", "--backfill", "--max-pages", "50"]
+        )
+        assert args.max_pages == 50
 
     @patch("paia_supernote.main.load_config")
     @patch("paia_supernote.main._configure_logging")
@@ -789,7 +797,7 @@ class TestMainEntrypoint:
 
         mock_cls.assert_called_once()
         mock_service.ingest_once.assert_awaited_once_with(
-            process_existing_on_start=True, notebooks=["Mgmt"]
+            process_existing_on_start=True, notebooks=["Mgmt"], max_pages=None
         )
         # The continuous-loop entrypoint must NOT run for --once.
         mock_service.start.assert_not_called()

@@ -21,6 +21,26 @@ NoteChangedCallback = Callable[[str, bytes, "int | None"], Awaitable[None]]
 PollHealthCallback = Callable[[bool, Dict[str, object]], Awaitable[None]]
 
 
+class BackfillPageCapExceeded(RuntimeError):
+    """Raised by an on_changed callback to abort a back-fill poll.
+
+    Signals that the configured page-count cap would be exceeded; propagates out
+    of ``poll_once`` (the per-file handler re-raises it instead of swallowing)
+    so the on-demand ingest can report a clean abort instead of OCR-ing past
+    the cap. Lives here (not in ingest_service) to avoid a circular import —
+    ingest_service already imports from this module.
+    """
+
+    def __init__(self, notebook: str, requested: int, remaining: int) -> None:
+        self.notebook = notebook
+        self.requested = requested
+        self.remaining = remaining
+        super().__init__(
+            f"{notebook}: {requested} pages exceed the back-fill cap "
+            f"({remaining} remaining); aborting before OCR"
+        )
+
+
 class CloudPoller:
     """Polls Supernote Cloud for changed .note files.
 
@@ -178,6 +198,8 @@ class CloudPoller:
                 await self._callback(notebook_name, note_bytes, update_time)
                 # Advance the revision marker only after download + callback succeed.
                 self._last_seen[name] = update_time
+            except BackfillPageCapExceeded:
+                raise
             except Exception as exc:
                 log.warning("cloud_download_error", name=name, error=str(exc))
 

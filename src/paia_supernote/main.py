@@ -1056,6 +1056,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scope the poll to this notebook stem (repeatable). "
         "Defaults to all allowlisted notebooks. Pair with --once.",
     )
+    ingest_parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=None,
+        metavar="N",
+        help="With --once --backfill: cap total pages OCR'd this run. Aborts "
+        "before OCR if a notebook would exceed the remaining budget — a "
+        "cost guard against surprise vision spend on huge notebooks.",
+    )
     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
     subparsers.add_parser("status", help="Show pipeline queue counts")
     organizer_parser = subparsers.add_parser(
@@ -1160,6 +1169,7 @@ def main(argv: list[str] | None = None) -> None:
                 service.ingest_once(
                     process_existing_on_start=bool(args.backfill),
                     notebooks=args.notebook,
+                    max_pages=args.max_pages,
                 )
             )
         finally:
