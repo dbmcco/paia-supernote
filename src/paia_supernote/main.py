@@ -73,7 +73,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "linear_team_key": "LFW",
     "linear_team_id": None,
     "state_db_path": str(Path("~/.paia/supernote/supernote-state.db").expanduser()),
-    "folio_sync_notebooks": ["LFW", "Synthera", "Navicyte", "Synth"],
+    "folio_sync_notebooks": [],
     "filing_enabled": False,
     "filing_dry_run": True,
     "filing_ledger_db_path": str(

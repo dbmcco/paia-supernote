@@ -157,14 +157,11 @@ class TestLoadConfig:
 
         assert config["filing_enabled"] is True
         assert config["filing_dry_run"] is False
-        assert _watched_notebooks(config) >= {
-            "Walk",
-            "tasks",
-            "LFW",
-            "MGMT",
-            "Navicyte",
-            "Synth",
-        }
+        assert config["filing_source_notebooks"] == ["LFW", "MGMT"]
+        assert config["filing_destination_notebooks"] == ["Navicyte", "Synth"]
+        # Watch set always includes Walk + tasks + filing sources (when enabled);
+        # destinations are not auto-watched unless also in the allowlist.
+        assert _watched_notebooks(config) >= {"Walk", "tasks", "LFW", "MGMT"}
         assert _filing_destination_map(config)["lfw-hec"] == "LFW"
         assert _filing_destination_map(config)["navicyte"] == "Navicyte"
 
@@ -1052,3 +1049,20 @@ class TestMainEntrypoint2:
             "blocking cloud copies"
             in service.events.publish_write_failed.await_args.kwargs["error"]
         )
+
+
+def test_default_folio_sync_notebooks_is_empty_so_unconfigured_fails_loud(
+    tmp_path: Path,
+) -> None:
+    """An unconfigured machine must not silently watch ghost notebooks.
+
+    The default allowlist is empty so a fresh install with no config.toml fails
+    loud (structured disallowed_notebook) instead of silently watching notebook
+    names that don't exist on Cloud and capturing nothing.
+    """
+    from paia_supernote.config import resolve_ledger_notebooks
+    from paia_supernote.main import DEFAULT_CONFIG, load_config
+
+    assert DEFAULT_CONFIG["folio_sync_notebooks"] == []
+    cfg = load_config(tmp_path / "absent-config.toml")
+    assert resolve_ledger_notebooks(cfg) == []
