@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from .db import connect
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,7 +31,7 @@ class PageStateStore:
 
     def init_schema(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS page_state (
@@ -62,7 +63,7 @@ class PageStateStore:
         ocr_model: str,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO page_state (
@@ -86,7 +87,7 @@ class PageStateStore:
             )
 
     def get_page(self, notebook: str, page: int) -> PageState:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 """
                 SELECT notebook, page, source_revision, raw_text, ocr_model,
@@ -121,7 +122,7 @@ class PageStateStore:
         )
 
     def list_pages(self, notebook: str) -> list[PageState]:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             rows = conn.execute(
                 """
                 SELECT notebook, page, source_revision, raw_text, ocr_model,
@@ -154,7 +155,7 @@ class PageStateStore:
 
     def next_dirty_page(self) -> PageState | None:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 """
                 SELECT notebook, page, source_revision, raw_text, ocr_model,
@@ -199,7 +200,7 @@ class PageStateStore:
         source_revision: str,
         folio_object_id: str,
     ) -> bool:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             cur = conn.execute(
                 """
                 UPDATE page_state
@@ -230,7 +231,7 @@ class PageStateStore:
         page: int,
         source_revision: str,
     ) -> bool:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             cur = conn.execute(
                 """
                 UPDATE page_state
@@ -265,7 +266,7 @@ class PageStateStore:
         retry_at = (
             datetime.now(timezone.utc) + timedelta(seconds=retry_delay_seconds)
         ).isoformat()
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 UPDATE page_state
@@ -306,7 +307,7 @@ class PageStateStore:
             datetime.now(timezone.utc) + timedelta(seconds=retry_delay_seconds)
         ).isoformat()
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO page_state (
@@ -325,14 +326,14 @@ class PageStateStore:
             )
 
     def dirty_count(self) -> int:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM page_state WHERE dirty_for_enrichment = 1"
             ).fetchone()
         return row[0] if row else 0
 
     def error_count(self, stage: str | None = None) -> int:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             if stage:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM page_state WHERE last_error IS NOT NULL AND last_error_stage = ?",

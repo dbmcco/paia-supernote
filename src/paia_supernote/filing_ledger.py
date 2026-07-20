@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from .db import connect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,7 +38,7 @@ class FilingLedger:
 
     def init_schema(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS filing_operations (
@@ -103,7 +104,7 @@ class FilingLedger:
             target_notebook=target_notebook,
         )
         now = _now()
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO filing_operations (
@@ -171,7 +172,7 @@ class FilingLedger:
         self._update(operation_id, status="failed", error=error)
 
     def get(self, operation_id: str) -> FilingOperation:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 """
                 SELECT operation_id, created_at, updated_at, status,
@@ -216,7 +217,7 @@ class FilingLedger:
         values["updated_at"] = _now()
         assignments = ", ".join(f"{key} = ?" for key in values)
         params = [*values.values(), operation_id]
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             cur = conn.execute(
                 f"UPDATE filing_operations SET {assignments} WHERE operation_id = ?",
                 params,

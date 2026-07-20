@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from .db import connect
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -142,7 +143,7 @@ class CloudChangeLedger:
     def init_schema(self) -> None:
         """Create ledger tables. Idempotent and safe alongside ``page_state``."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS notebook_snapshot (
@@ -227,7 +228,7 @@ class CloudChangeLedger:
         notebook_hash = _compute_notebook_hash(snapshot.pages)
         new_pages = {p.page_id: p for p in snapshot.pages}
 
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             prev = conn.execute(
                 """
                 SELECT notebook_hash FROM notebook_snapshot
@@ -305,7 +306,7 @@ class CloudChangeLedger:
 
     def latest_notebook_state(self, notebook: str) -> StoredNotebookState | None:
         """Return the current cached notebook snapshot, if any."""
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 """
                 SELECT notebook, cloud_revision, notebook_hash, cloud_update_time,
@@ -329,7 +330,7 @@ class CloudChangeLedger:
 
     def current_pages(self, notebook: str) -> list[StoredPageState]:
         """Return current non-removed pages ordered by cached page index."""
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             rows = conn.execute(
                 """
                 SELECT notebook, page_id, page_index, content_hash,
@@ -356,7 +357,7 @@ class CloudChangeLedger:
         ]
 
     def latest_change_id(self, notebook: str) -> int | None:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 "SELECT MAX(change_id) FROM page_change WHERE notebook = ?",
                 (notebook,),
@@ -368,7 +369,7 @@ class CloudChangeLedger:
     def changes_since(
         self, notebook: str, after_change_id: int
     ) -> list[PageChangeRecord]:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             rows = conn.execute(
                 """
                 SELECT change_id, notebook, revision, page_id, change_type,
@@ -385,7 +386,7 @@ class CloudChangeLedger:
         self, notebook: str, observed_after: str
     ) -> list[PageChangeRecord]:
         """Return changes observed after an ISO timestamp string."""
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             rows = conn.execute(
                 """
                 SELECT change_id, notebook, revision, page_id, change_type,
@@ -399,7 +400,7 @@ class CloudChangeLedger:
         return [_row_to_record(row) for row in rows]
 
     def get_agent_cursor(self, agent: str, notebook: str) -> int | None:
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             row = conn.execute(
                 """
                 SELECT last_change_id FROM agent_cursor
@@ -416,7 +417,7 @@ class CloudChangeLedger:
     ) -> bool:
         """Advance an agent cursor. Only monotonically forward moves apply."""
         observed_at = _now_iso()
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             existing = conn.execute(
                 """
                 SELECT last_change_id FROM agent_cursor
@@ -442,7 +443,7 @@ class CloudChangeLedger:
         self, notebook: str, page_id: str, status: str
     ) -> bool:
         """Record OCR readiness for the current stored page revision."""
-        with sqlite3.connect(self._db_path) as conn:
+        with connect(self._db_path) as conn:
             cur = conn.execute(
                 """
                 UPDATE page_snapshot
