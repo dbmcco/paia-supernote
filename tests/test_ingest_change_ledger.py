@@ -260,6 +260,36 @@ async def test_backfill_interruption_keeps_already_completed_page(
 
 
 @pytest.mark.asyncio
+async def test_retry_sweep_recovers_page_left_pending_without_page_state_row(
+    tmp_path: Path,
+) -> None:
+    """A page pending in the ledger with NO page_state row — the exact state a
+    killed back-fill leaves behind — must be recovered by the retry sweep on the
+    next ingest, not crash it with an absent-row assertion."""
+    kill_reader = _KillAfterFirstPageReader(
+        snapshots={b"rev1": [("P0", "h0"), ("P1", "h1")]}
+    )
+    svc = _service(tmp_path, kill_reader)
+    with pytest.raises(RuntimeError, match="simulated kill"):
+        await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+    # P0 persisted; P1 pending in the ledger with no page_state row.
+    assert {p.page for p in svc.page_state.list_pages("Quick")} == {0}
+    assert {p.page_index: p.ocr_status for p in svc.ledger.current_pages("Quick")} == {
+        0: "ready",
+        1: "pending",
+    }
+
+    # Re-ingest IDENTICAL bytes: no diff, so only the retry sweep can recover P1.
+    svc.reader = FakeReader(snapshots={b"rev1": [("P0", "h0"), ("P1", "h1")]})
+    await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+
+    # P1 recovered.
+    status = {p.page_index: p.ocr_status for p in svc.ledger.current_pages("Quick")}
+    assert status == {0: "ready", 1: "ready"}
+    assert svc.page_state.get_page("Quick", 1).raw_text.startswith("ocr-")
+
+
+@pytest.mark.asyncio
 async def test_due_pending_page_is_retried_on_next_ingest(tmp_path: Path) -> None:
     """A page left pending by a prior failure is re-OCRed on the next ingest of
     the same notebook once its backoff has elapsed, and flips to ready when OCR

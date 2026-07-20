@@ -87,7 +87,7 @@ class PageStateStore:
                 (notebook, page, source_revision, raw_text, ocr_model, now, now),
             )
 
-    def get_page(self, notebook: str, page: int) -> PageState:
+    def get_page_or_none(self, notebook: str, page: int) -> "PageState | None":
         with connect(self._db_path) as conn:
             row = conn.execute(
                 """
@@ -100,7 +100,8 @@ class PageStateStore:
                 """,
                 (notebook, page),
             ).fetchone()
-        assert row is not None
+        if row is None:
+            return None
         (
             notebook_, page_, source_revision_, raw_text_, ocr_model_,
             dirty_for_enrichment_, last_enriched_revision_,
@@ -121,6 +122,14 @@ class PageStateStore:
             last_error=last_error_,
             last_error_stage=last_error_stage_,
         )
+
+    def get_page(self, notebook: str, page: int) -> PageState:
+        """Return the page state row; asserts it exists. Callers that may see an
+        absent row — e.g. the retry sweep over never-OCRed pending pages left by
+        a killed back-fill — must use get_page_or_none instead."""
+        state = self.get_page_or_none(notebook, page)
+        assert state is not None
+        return state
 
     def list_pages(self, notebook: str) -> list[PageState]:
         with connect(self._db_path) as conn:

@@ -323,7 +323,7 @@ class IngestService:
         for stored in self.ledger.current_pages(notebook_name):
             if stored.ocr_status != "pending":
                 continue
-            state = self.page_state.get_page(notebook_name, stored.page_index)
+            state = self.page_state.get_page_or_none(notebook_name, stored.page_index)
             if state is None or state.next_retry_at is None:
                 due.append(stored.page_index)
                 continue
