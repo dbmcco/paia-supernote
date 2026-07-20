@@ -132,6 +132,7 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
                 "zai_text_model",
                 "state_db_path",
                 "folio_sync_notebooks",
+                "cloud_change_ledger_notebooks",
                 "service_cloud_poller_enabled",
                 "service_uploader_start_mode",
             ):

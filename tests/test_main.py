@@ -102,6 +102,25 @@ class TestLoadConfig:
         # Unset keys keep defaults
         assert config["work_url"] == "http://localhost:3560"
 
+    def test_loads_cloud_change_ledger_allowlist(self, tmp_path: Path) -> None:
+        """The explicit cloud_change_ledger_notebooks key must be passed through
+        from the TOML [supernote] section so resolve_ledger_notebooks uses it
+        instead of silently falling back to folio_sync_notebooks."""
+        cfg_file = tmp_path / "config.toml"
+        cfg_file.write_text(
+            textwrap.dedent("""\
+            [supernote]
+            cloud_change_ledger_notebooks = ["Mgmt", "Dev", "Quick"]
+            folio_sync_notebooks = ["Quick"]
+            """)
+        )
+        config = load_config(config_path=cfg_file)
+        assert config["cloud_change_ledger_notebooks"] == ["Mgmt", "Dev", "Quick"]
+        # resolve_ledger_notebooks must prefer the explicit key over the legacy fallback
+        from paia_supernote.config import resolve_ledger_notebooks
+
+        assert resolve_ledger_notebooks(config) == ["Mgmt", "Dev", "Quick"]
+
     def test_env_vars_override_toml(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
