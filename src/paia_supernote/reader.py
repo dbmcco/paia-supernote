@@ -666,42 +666,88 @@ class SupernoteReader:
             for page_num in pages:
                 if page_num < 0 or page_num >= total:
                     continue
-                page_image = converter.convert(page_num)
-                transcription = await self._transcribe_page(page_image)
-                if not transcription:
-                    continue
-
-                content_type = await self.classify_content(transcription)
-                checkbox_items = []
-                for match in re.finditer(r"[\u2611\u25a0]\s*(.+)", transcription):
-                    checkbox_items.append(
-                        CheckboxItem(
-                            task_text=match.group(1).strip(),
-                            tag="focus",
-                            page_num=page_num,
-                        )
-                    )
-                for match in re.finditer(r"[\u25cf]\s*(.+)", transcription):
-                    checkbox_items.append(
-                        CheckboxItem(
-                            task_text=match.group(1).strip(),
-                            tag="orbit",
-                            page_num=page_num,
-                        )
-                    )
-
-                results.append(
-                    ReadResult(
-                        notebook=notebook_name,
-                        page_num=page_num,
-                        text=transcription,
-                        checkboxes=checkbox_items,
-                        content_type=content_type,
-                        timestamp=datetime.now(timezone.utc),
-                        page_image=page_image,
-                    )
-                )
+                result = await self._build_read_result(notebook_name, converter, page_num)
+                if result is not None:
+                    results.append(result)
             return results
+        finally:
+            os.unlink(tmp_path)
+
+    async def _build_read_result(
+        self, notebook_name: str, converter, page_num: int
+    ):
+        """OCR + classify a single page; returns a ReadResult or None for empty text.
+
+        Shared by read_pages (fail-loud) and read_pages_resilient (isolated).
+        Raises propagate to the caller so each policy can decide how to handle
+        a transient vision failure on one page.
+        """
+        page_image = converter.convert(page_num)
+        transcription = await self._transcribe_page(page_image)
+        if not transcription:
+            return None
+
+        content_type = await self.classify_content(transcription)
+        checkbox_items = []
+        for match in re.finditer(r"[\u2611\u25a0]\s*(.+)", transcription):
+            checkbox_items.append(
+                CheckboxItem(
+                    task_text=match.group(1).strip(),
+                    tag="focus",
+                    page_num=page_num,
+                )
+            )
+        for match in re.finditer(r"[\u25cf]\s*(.+)", transcription):
+            checkbox_items.append(
+                CheckboxItem(
+                    task_text=match.group(1).strip(),
+                    tag="orbit",
+                    page_num=page_num,
+                )
+            )
+        return ReadResult(
+            notebook=notebook_name,
+            page_num=page_num,
+            text=transcription,
+            checkboxes=checkbox_items,
+            content_type=content_type,
+            timestamp=datetime.now(timezone.utc),
+            page_image=page_image,
+        )
+
+    async def read_pages_resilient(
+        self, note_bytes: bytes, notebook_name: str, *, pages: list[int]
+    ) -> tuple[List["ReadResult"], dict[int, str]]:
+        """Read pages, isolating per-page failures.
+
+        Returns ``(successes, {page_num: error_message})``. A transient failure
+        on one page does not discard the pages already read; failed pages are
+        reported so the caller can record them for retry instead of losing the
+        whole batch (which is what read_pages does on a single raise).
+        """
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
+        try:
+            os.write(tmp_fd, note_bytes)
+            os.close(tmp_fd)
+
+            notebook = supernotelib.load_notebook(tmp_path)
+            converter = ImageConverter(notebook)
+            total = notebook.get_total_pages()
+            results: list = []
+            errors: dict[int, str] = {}
+            for page_num in pages:
+                if page_num < 0 or page_num >= total:
+                    continue
+                try:
+                    result = await self._build_read_result(
+                        notebook_name, converter, page_num
+                    )
+                except Exception as exc:  # isolate per-page failure
+                    errors[page_num] = str(exc) or exc.__class__.__name__
+                    continue
+                if result is not None:
+                    results.append(result)
+            return results, errors
         finally:
             os.unlink(tmp_path)
 

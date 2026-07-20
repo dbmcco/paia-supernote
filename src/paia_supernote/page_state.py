@@ -286,6 +286,44 @@ class PageStateStore:
                 ),
             )
 
+    def record_ocr_failure(
+        self,
+        notebook: str,
+        page: int,
+        source_revision: str,
+        ocr_model: str,
+        error: str,
+        retry_delay_seconds: int,
+    ) -> None:
+        """Record an OCR failure for retry (upsert; safe on first attempt).
+
+        Unlike mark_failed (UPDATE-only), this inserts a placeholder row when
+        the page has never been OCR'd successfully, so a first-attempt vision
+        failure is still tracked with a backoff. retry_count starts at 1 on
+        insert and increments on subsequent failures.
+        """
+        retry_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=retry_delay_seconds)
+        ).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO page_state (
+                    notebook, page, source_revision, raw_text, ocr_model,
+                    ocr_updated_at, dirty_for_enrichment, retry_count,
+                    next_retry_at, last_error, last_error_stage, updated_at
+                ) VALUES (?, ?, ?, '', ?, ?, 0, 1, ?, ?, 'ocr', ?)
+                ON CONFLICT(notebook, page) DO UPDATE SET
+                    retry_count = page_state.retry_count + 1,
+                    next_retry_at = excluded.next_retry_at,
+                    last_error = excluded.last_error,
+                    last_error_stage = excluded.last_error_stage,
+                    updated_at = excluded.updated_at
+                """,
+                (notebook, page, source_revision, ocr_model, now, retry_at, error, now),
+            )
+
     def dirty_count(self) -> int:
         with sqlite3.connect(self._db_path) as conn:
             row = conn.execute(

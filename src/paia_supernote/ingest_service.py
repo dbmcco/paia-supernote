@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import inspect
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -161,19 +162,49 @@ class IngestService:
         )
         changes = self.ledger.apply_snapshot(ledger_snapshot)
         pages_to_ocr = _ocr_page_indexes(changes)
-        if not pages_to_ocr:
+
+        results: list = []
+        if pages_to_ocr:
+            ocr_results, ocr_errors = await self.reader.read_pages_resilient(
+                note_bytes, notebook_name, pages=pages_to_ocr
+            )
+            self._persist_ocr_outcome(
+                notebook_name, page_by_index, cloud_revision, ocr_results, ocr_errors
+            )
+            results.extend(ocr_results)
+        else:
             log.info(
                 "cloud_ingest_no_ocr_needed",
                 notebook=notebook_name,
                 changes=len(changes),
             )
-            return
 
-        results = await self.reader.read_pages(
-            note_bytes,
-            notebook_name,
-            pages=pages_to_ocr,
-        )
+        # Retry sweep: recover pages still ledger-pending from prior OCR
+        # failures whose backoff has elapsed. Runs even when nothing changed,
+        # so a page that wedged at `pending` is re-OCRed the next time this
+        # notebook is ingested (we already have the bytes in hand).
+        due = self._due_pending_indexes(notebook_name)
+        if due:
+            sweep_results, sweep_errors = await self.reader.read_pages_resilient(
+                note_bytes, notebook_name, pages=due
+            )
+            self._persist_ocr_outcome(
+                notebook_name, page_by_index, cloud_revision, sweep_results, sweep_errors
+            )
+            results.extend(sweep_results)
+
+        await self._publish_walk_feedback(notebook_name, results)
+
+    def _persist_ocr_outcome(
+        self,
+        notebook_name: str,
+        page_by_index: dict,
+        cloud_revision: str,
+        results: list,
+        errors: dict[int, str],
+    ) -> None:
+        """Persist successful OCR (page_state + ledger ready) and record failures for retry."""
+        retry_delay = int(self.config.get("ocr_retry_delay_seconds", 300))
         for result in results:
             page = page_by_index.get(result.page_num)
             if page is None:
@@ -186,19 +217,50 @@ class IngestService:
                 raw_text=result.text,
                 ocr_model=self.config["zai_vision_model"],
             )
-            self.ledger.mark_page_ocr_status(
-                result.notebook,
-                page.page_id,
-                "ready",
-            )
+            self.ledger.mark_page_ocr_status(result.notebook, page.page_id, "ready")
             log.info(
                 "ocr_succeeded",
                 notebook=result.notebook,
                 page=result.page_num,
                 page_id=page.page_id,
             )
+        for page_num, err in errors.items():
+            page = page_by_index.get(page_num)
+            if page is None:
+                continue
+            source_revision = f"{cloud_revision}:{page.page_id}:{page.content_hash}"
+            self.page_state.record_ocr_failure(
+                notebook=notebook_name,
+                page=page_num,
+                source_revision=source_revision,
+                ocr_model=self.config["zai_vision_model"],
+                error=err,
+                retry_delay_seconds=retry_delay,
+            )
+            log.warning(
+                "ocr_failed",
+                notebook=notebook_name,
+                page=page_num,
+                error=err,
+            )
 
-        await self._publish_walk_feedback(notebook_name, results)
+    def _due_pending_indexes(self, notebook_name: str) -> list[int]:
+        """Ledger page indexes still pending whose retry backoff has elapsed."""
+        now = datetime.now(timezone.utc)
+        due: list[int] = []
+        for stored in self.ledger.current_pages(notebook_name):
+            if stored.ocr_status != "pending":
+                continue
+            state = self.page_state.get_page(notebook_name, stored.page_index)
+            if state is None or state.next_retry_at is None:
+                due.append(stored.page_index)
+                continue
+            try:
+                if datetime.fromisoformat(state.next_retry_at) <= now:
+                    due.append(stored.page_index)
+            except ValueError:
+                due.append(stored.page_index)
+        return due
 
     async def _publish_walk_feedback(self, notebook_name: str, results: list) -> None:
         if notebook_name.casefold() != "walk":

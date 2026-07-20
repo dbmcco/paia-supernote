@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -79,6 +79,25 @@ class FakeReader:
             for page_num in pages
         ]
 
+    async def read_pages_resilient(
+        self, note_bytes: bytes, notebook_name: str, *, pages: list[int]
+    ):
+        # Same OCR trail as read_pages; ingest now uses this resilient variant.
+        self.ocr_calls.append((note_bytes, notebook_name, tuple(pages)))
+        results = [
+            ReadResult(
+                notebook=notebook_name,
+                page_num=page_num,
+                text=f"ocr-{note_bytes.decode()}-{page_num}",
+                checkboxes=[],
+                content_type="general",
+                timestamp=datetime.now(timezone.utc),
+                page_image=None,
+            )
+            for page_num in pages
+        ]
+        return results, {}
+
     async def process_file(self, *args, **kwargs):  # pragma: no cover - should not run
         raise AssertionError("cloud ledger path should not OCR through process_file")
 
@@ -97,6 +116,104 @@ def _service(tmp_path: Path, reader: FakeReader, allowlist: list[str] | None = N
         },
         reader=reader,  # type: ignore[arg-type]
     )
+
+
+class FlakyReader(FakeReader):
+    """FakeReader whose ``read_pages_resilient`` fails a configured page set.
+
+    Records the same ``ocr_calls`` trail as the base reader so existing
+    call-count assertions stay valid, but isolates per-page failures and
+    reports them via the resilient contract (successes, {page: error}).
+    """
+
+    def __init__(self, snapshots, fail_pages: set[int]) -> None:
+        super().__init__(snapshots)
+        self.fail_pages = set(fail_pages)
+
+    async def read_pages_resilient(
+        self, note_bytes: bytes, notebook_name: str, *, pages: list[int]
+    ):
+        self.ocr_calls.append((note_bytes, notebook_name, tuple(pages)))
+        results: list[ReadResult] = []
+        errors: dict[int, str] = {}
+        for page_num in pages:
+            if page_num in self.fail_pages:
+                errors[page_num] = "vision timeout (simulated)"
+                continue
+            results.append(
+                ReadResult(
+                    notebook=notebook_name,
+                    page_num=page_num,
+                    text=f"ocr-{note_bytes.decode()}-{page_num}",
+                    checkboxes=[],
+                    content_type="general",
+                    timestamp=datetime.now(timezone.utc),
+                    page_image=None,
+                )
+            )
+        return results, errors
+
+
+@pytest.mark.asyncio
+async def test_partial_ocr_failure_persists_successes_and_records_retry(
+    tmp_path: Path,
+) -> None:
+    """A transient OCR failure on one page must not lose the pages that succeeded.
+
+    The failed page is left ``pending`` in the ledger with a recorded
+    retry/backoff in page_state, instead of wedging forever or losing the
+    already-OCRed sibling pages.
+    """
+    reader = FlakyReader(
+        snapshots={b"rev1": [("P0", "h0"), ("P1", "h1"), ("P2", "h2")]},
+        fail_pages={1},
+    )
+    svc = _service(tmp_path, reader)
+
+    await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+
+    status = {p.page_index: p.ocr_status for p in svc.ledger.current_pages("Quick")}
+    assert status == {0: "ready", 1: "pending", 2: "ready"}
+
+    failed = svc.page_state.get_page("Quick", 1)
+    assert failed is not None
+    assert failed.retry_count == 1
+    assert failed.last_error == "vision timeout (simulated)"
+    assert failed.last_error_stage == "ocr"
+    assert failed.next_retry_at is not None  # backoff scheduled
+
+
+@pytest.mark.asyncio
+async def test_due_pending_page_is_retried_on_next_ingest(tmp_path: Path) -> None:
+    """A page left pending by a prior failure is re-OCRed on the next ingest of
+    the same notebook once its backoff has elapsed, and flips to ready when OCR
+    now succeeds — even though the notebook content itself did not change.
+    """
+    reader = FlakyReader(
+        snapshots={b"rev1": [("P0", "h0"), ("P1", "h1")]},
+        fail_pages={1},
+    )
+    svc = _service(tmp_path, reader)
+
+    await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+    status = {p.page_index: p.ocr_status for p in svc.ledger.current_pages("Quick")}
+    assert status == {0: "ready", 1: "pending"}
+
+    # Force the backoff to have elapsed so the retry sweep is due now.
+    db = str(tmp_path / "state.db")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE page_state SET next_retry_at = ? "
+            "WHERE notebook = 'Quick' AND page = 1",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),),
+        )
+
+    reader.fail_pages = set()  # page 1 now succeeds
+    # Re-ingest IDENTICAL bytes: no diff, so only the retry sweep can recover page 1.
+    await svc._on_cloud_note_changed("Quick", b"rev1", update_time=100)
+
+    status = {p.page_index: p.ocr_status for p in svc.ledger.current_pages("Quick")}
+    assert status == {0: "ready", 1: "ready"}
 
 
 @pytest.mark.asyncio
