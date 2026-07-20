@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from .db import connect
+from .db import connect, migrate
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -53,6 +53,7 @@ class PageStateStore:
                 )
                 """
             )
+            migrate(conn)
 
     def upsert_ocr_page(
         self,

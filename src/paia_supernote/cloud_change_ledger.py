@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from .db import connect
+from .db import connect, migrate
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -213,6 +213,7 @@ class CloudChangeLedger:
                 )
                 """
             )
+            migrate(conn)
 
     def apply_snapshot(
         self, snapshot: NotebookSnapshot

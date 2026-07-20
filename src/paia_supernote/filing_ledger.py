@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from .db import connect
+from .db import connect, migrate
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +64,7 @@ class FilingLedger:
                 )
                 """
             )
+            migrate(conn)
 
     @staticmethod
     def operation_id_for(
