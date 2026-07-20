@@ -1,0 +1,121 @@
+{
+  "runId": "400d6d54",
+  "agent": "planner",
+  "task": "You are a delegated subagent running from a fork of the parent session. Treat the inherited conversation as reference-only context, not a live thread to continue. Do not continue or answer prior messages as if they are waiting for a reply. Your sole job is to execute the task below and return a focused result for that task using your tools.\n\nTask:\nProduce a sequenced, phased implementation plan to take the Supernote Cloud change ledger from its current state to sustainably capturing diffs that agents reliably read. Your forked context has the full session history including two reviewer reports — use them.\\n\\nGOAL STATE: the ledger auto-captures page-level diffs from real Supernote Cloud notebooks, self-heals through transient OCR failures, agents read diffs reliably via stateful cursors, supervision is sound, and there are no surprise cost spikes.\\n\\nCURRENT STATE (verified): commits 0dcfcb3 / 0984f59 / 28b53ed on origin/main; 417 tests green; Quick.note back-filled (36 pages, all ocr_status=ready) on this machine only; allowlist set per-machine via ~/.paia/supernote/config.toml (folio_sync_notebooks=[\\\"Quick\\\"]). No ingest daemon running.\\n\\nCONSOLIDATED REVIEW FINDINGS TO PLAN AROUND (cite the IDs):\\n- M1 (Major, write-safety): agent write path's base-revision guard is cache-only; the agent append path lacks post-download CAS and post-upload sha256 re-verify that the manual CLI path has. Concurrent agent appends can silently lose data. (agent_write_contracts.py, main.py write route.)\\n- M2 (Major, durability): no schema-migration path — init_schema only does CREATE TABLE IF NOT EXISTS; no user_version/ALTER. Column additions break existing DBs.\\n- A1 (High, self-heal): transient OCR failure leaves pages permanently ocr_status=pending — apply_snapshot advances the revision before OCR, read_pages raises on any vision error losing in-flight results, and a re-poll is a no-op so pages never retry. This is the single highest-leverage fix.\\n- A2 (High, silent bypass): on machines with the Supernote Partner-app sync folder, ingest routes to _run_with_local_watcher → _on_note_changed (non-ledger path) and the ledger is NEVER populated. Silent.\\n- A3 (High, supervision): ingest/enrich/service plists exist and are installed in ~/Library/LaunchAgents/ but NOT loaded. ingest plist has KeepAlive+RunAtLoad but NO env vars (ZAI_API_KEY, SN_PHONE, SN_PASSWORD) and invokes `uv run paia-supernote ingest` with WorkingDirectory=repo (no --directory). Loading it as-is would run a daemon that fails every OCR — which A1 would then wedge permanently.\\n- A4 (Med, UX): no `ingest --once [--notebook X] [--backfill]` CLI flag; back-fill requires hand scripts. process_existing_on_start is hardcoded False in the daemon path.\\n- A5 (Med, config): DEFAULT_CONFIG folio_sync_notebooks=[LFW,Synthera,Navicyte,Synth] points at notebooks that don't exist on Cloud. Should default to [] so misconfig fails loud.\\n- A6 (Med, concurrency): shared state.db has no WAL, no busy_timeout. Concurrent ingest write + agent read can raise 'database is locked'.\\n- Test gaps (High): partial-OCR-failure retry, DB concurrency, local-watcher ledger population, back-fill/first-run, continuous-loop lifecycle.\\n\\nCONSTRAINTS: Braydon is cost-conscious (OCR ≈ 2 LLM calls per changed page, sequential, 600s timeout each, no batching/rate-limit today). He leans toward on-demand ingest unless there are active agent consumers (his own 'tools vs the work' caution). Strict-TDD repo — every change needs a failing test first. Single machine for now.\\n\\nREQUIREMENTS FOR THE PLAN:\\n1. Phase it (e.g., P0 safety/quick-wins → P1 self-heal & correctness → P2 durability & scale). Sequence so that A1 (OCR self-heal) and the plist env-wiring land BEFORE we rely on continuous supervision (A3) — do not let a daemon run that wedges pages at pending.\\n2. Each work item: ID, problem (cite finding), concrete change (files + approach), acceptance criteria with the failing-test-that-becomes-green, risk, effort (S/M/L).\\n3. Call out the decision points that need Braydon's input rather than deciding them (continuous daemon vs on-demand; which notebooks beyond Quick; whether to load the plist at all yet).\\n4. End with: (a) the open decisions for Braydon as a short list, and (b) the single recommended first action.\\n\\nReturn the plan inline. Read-only — do not edit files.\"\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/braydon/projects/experiments/paia-supernote/.pi-subagents/artifacts/outputs/400d6d54/plan.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 127678,
+    "output": 5039,
+    "cacheRead": 125696,
+    "cacheWrite": 0,
+    "cost": 0,
+    "turns": 2
+  },
+  "model": "zai/glm-5.2:high",
+  "attemptedModels": [
+    "zai/glm-5.2:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "zai/glm-5.2:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 127678,
+        "output": 5039,
+        "cacheRead": 125696,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 2
+      }
+    }
+  ],
+  "durationMs": 89599,
+  "toolCount": 1,
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Plan cites every consolidated finding by ID with file paths and severity: M1 Major (agent_write_contracts.py + main.py write route), M2 Major (cloud_change_ledger.py/page_state.py schema), A1 High (ingest_service.py apply-before-OCR; reader.py read_pages atomicity), A2 High (ingest_service.py _run_with_local_watcher), A3 High (scripts/paia-supernote-ingest.plist + ~/Library/LaunchAgents), A4 Med (main.py ingest subparser), A5 Med (main.py DEFAULT_CONFIG), A6 Med (sqlite open sites). Each work item names concrete files + approach."
+        }
+      ],
+      "changedFiles": [
+        ".pi-subagents/artifacts/outputs/400d6d54/plan.md"
+      ],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [],
+      "validationOutput": [
+        "Plan is read-only (no source edits); artifact written to the authoritative path.",
+        "Sequencing invariant enforced: P0.1 (A1 OCR self-heal) + plist env-wiring precede P2.3 (A3 supervision load); explicit hard-gate note prevents loading a daemon that would wedge pages at pending.",
+        "All six consolidated findings (M1,M2,A1-A6) plus the test-gap list are mapped to concrete TDD work items with failing-test-first acceptance criteria.",
+        "Verified supervision state from parent session: plists installed but NOT loaded; ingest plist lacks ZAI_API_KEY/SN_PHONE/SN_PASSWORD env vars — accounted for in P2.3."
+      ],
+      "residualRisks": [
+        "Ordering risk: if P2.3 (load plist) is done before P0.1 (self-heal) + env-wiring, a continuous daemon would fail every OCR and wedge pages at pending permanently — mitigated by the explicit hard-gate in the plan.",
+        "P1.3 (M1 write-safety) is data-loss-class; the structured stale_base_revision error contract and a concurrency integration test must land together to avoid regressions.",
+        "P0.1 changes read_pages return shape; all call sites (CLI read/show, back-fill) must be audited to avoid breaking consumers.",
+        "Open decisions deferred to Braydon (daemon continuous vs on-demand; notebook set beyond Quick; whether to load any plist now) are not resolved by this plan by design."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No code diff — planning artifact only. The plan (plan.md) phases the work P0->P1->P2 with TDD acceptance criteria and a recommended first action of P0.1 (OCR self-heal).",
+      "reviewFindings": [
+        "M1 Major (write-safety): agent_write_contracts.py + main.py write route — base-revision guard cache-only, missing post-download CAS + post-upload sha256 re-verify; concurrent appends can silently lose data.",
+        "M2 Major (durability): cloud_change_ledger.py/page_state.py/filing_ledger.py — no user_version/ALTER migration path; column additions break existing DBs.",
+        "A1 High (self-heal): ingest_service.py _on_cloud_note_changed applies snapshot before OCR; reader.py read_pages raises atomically losing in-flight results; pages stuck pending forever. Highest-leverage fix.",
+        "A2 High (silent bypass): ingest_service.py _run_with_local_watcher routes to non-ledger _on_note_changed on Partner-sync machines; ledger never populated.",
+        "A3 High (supervision): scripts/paia-supernote-ingest.plist installed in ~/Library/LaunchAgents but not loaded; missing env vars (ZAI_API_KEY/SN_PHONE/SN_PASSWORD); loading as-is fails all OCR.",
+        "A4 Med (UX): main.py — no ingest --once/--notebook/--backfill; process_existing_on_start hardcoded False.",
+        "A5 Med (config): main.py DEFAULT_CONFIG folio_sync_notebooks points at non-existent notebooks; should default to [].",
+        "A6 Med (concurrency): state.db no WAL/busy_timeout; concurrent write+read can raise 'database is locked'.",
+        "Test gaps High: partial-OCR retry, DB concurrency, local-watcher population, back-fill/first-run, loop lifecycle, pageSize truncation, default-config sanity."
+      ],
+      "manualNotes": "Plan is read-only; no source files modified. Recommended first action: P0.1 (OCR self-heal) under TDD. Three decisions are explicitly left to Braydon: (1) continuous daemon vs on-demand ingest (plan assumes on-demand until an agent consumer exists), (2) which notebooks beyond Quick to allowlist (suggest Mgmt/Dev/Meetings next), (3) do not load any plist until P0.1 + env-wiring are verified on this machine."
+    }
+  },
+  "transcriptPath": "/Users/braydon/projects/experiments/paia-supernote/.pi-subagents/artifacts/400d6d54_planner_0_transcript.jsonl",
+  "timestamp": 1784505733548
+}

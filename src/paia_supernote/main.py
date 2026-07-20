@@ -983,7 +983,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="mode", required=False)
     subparsers.add_parser("service", help="Run the event-backed Supernote service")
-    subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
+    ingest_parser = subparsers.add_parser(
+        "ingest", help="Poll Supernote Cloud and OCR pages"
+    )
+    ingest_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single poll cycle and exit (no continuous loop).",
+    )
+    ingest_parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="With --once: process ALL existing pages in each watched notebook, "
+        "not just changes since the last poll (cost-guard override).",
+    )
+    ingest_parser.add_argument(
+        "--notebook",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="Scope the poll to this notebook stem (repeatable). "
+        "Defaults to all allowlisted notebooks. Pair with --once.",
+    )
     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
     subparsers.add_parser("status", help="Show pipeline queue counts")
     organizer_parser = subparsers.add_parser(
@@ -1078,6 +1099,31 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
         return
+
+    if mode == "ingest" and args.once:
+        # On-demand single poll cycle (``ingest --once [--backfill] [--notebook X]``).
+        service = IngestService(config)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                service.ingest_once(
+                    process_existing_on_start=bool(args.backfill),
+                    notebooks=args.notebook,
+                )
+            )
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+        return
+
+    if mode == "ingest" and not args.once and (args.backfill or args.notebook):
+        # --backfill / --notebook are --once modifiers; without --once the
+        # continuous-loop daemon ignores them. Warn so this is not silent.
+        log.warning(
+            "ingest_flags_require_once_ignored",
+            backfill=args.backfill,
+            notebook=args.notebook,
+        )
 
     if mode == "service":
         service: Any = SupernoteService(config)

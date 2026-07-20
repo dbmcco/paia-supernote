@@ -117,6 +117,15 @@ class CloudPoller:
             self._task = None
         log.info("cloud_poller_stopped")
 
+    async def poll_once(self) -> None:
+        """Run a single poll cycle and return (no loop).
+
+        For on-demand / back-fill use (``ingest --once``). Shares the exact
+        list -> detect -> download -> callback path with the continuous loop
+        so behavior is identical, just without the sleep/repeat.
+        """
+        await self._poll_once()
+
     async def _loop(self) -> None:
         """Polling loop: poll, sleep, repeat."""
         while self._running:

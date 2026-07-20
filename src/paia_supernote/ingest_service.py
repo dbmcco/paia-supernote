@@ -303,6 +303,53 @@ class IngestService:
         finally:
             await self.events.stop()
 
+    async def ingest_once(
+        self,
+        *,
+        process_existing_on_start: bool = False,
+        notebooks: list[str] | None = None,
+    ) -> None:
+        """Run a single Cloud poll cycle, then exit. Never a continuous loop.
+
+        On-demand back-fill / targeted ingest (``ingest --once``). Always uses
+        the Cloud poller path: the Partner-app local watcher is event-driven and
+        has no notion of "process existing", so back-fill is a Cloud-only concept.
+
+        Args:
+            process_existing_on_start: treat every existing watched file as new
+                (the cost-guard override for first-time back-fill). ``False`` by
+                default so a plain ``--once`` never OCRs the whole Cloud library.
+            notebooks: scope the poll to these stems. Defaults to the resolved
+                ledger allowlist. The ledger allowlist still gates which
+                downloaded notebooks are written — name allowlisted notebooks.
+        """
+        await self.events.start()
+        try:
+            uploader = self._uploader or SupernoteUploader()
+            watched = (
+                [str(name) for name in notebooks]
+                if notebooks
+                else list(self._cloud_watched_notebooks)
+            )
+            cloud_poller = CloudPoller(
+                uploader=uploader,
+                on_note_changed=self._on_cloud_note_changed,
+                poll_interval=self.config["poll_interval"],
+                watched_notebooks=watched,
+                process_existing_on_start=process_existing_on_start,
+                on_poll_health=self._on_poll_health,
+            )
+            self._uploader = uploader
+            self._cloud_poller = cloud_poller
+            await uploader.start()
+            try:
+                await cloud_poller.poll_once()
+            finally:
+                with suppress(Exception):
+                    await uploader.stop()
+        finally:
+            await self.events.stop()
+
     async def _run_with_local_watcher(self) -> None:
         loop = asyncio.get_running_loop()
 

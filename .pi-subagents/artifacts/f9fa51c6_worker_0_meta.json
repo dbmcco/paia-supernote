@@ -1,0 +1,190 @@
+{
+  "runId": "f9fa51c6",
+  "agent": "worker",
+  "task": "Implement the bounded follow-up task supernote-cloud-ledger.cached-full-text. Add a `--include-text` option to the existing `supernote changes <notebook> --latest` CLI path, pass it into LatestNotebookStateRequest(include_text=True), keep default latest output preview-only, and add/update focused offline tests proving full cached OCR is returned without constructing SupernoteUploader. Update README.md and docs/supernote-cloud-change-ledger-contracts.md to document `supernote changes <notebook> --latest --include-text --json` as the full cached page-read command. Do not touch write/Cloud mutation paths, uv.lock, scratch, organizer, or commit. Run the task validation commands and return files/tests.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/supernote-full-text-worker.json\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 51179,
+    "output": 19984,
+    "cacheRead": 1739392,
+    "cacheWrite": 0,
+    "cost": 0,
+    "turns": 51
+  },
+  "model": "zai/glm-5.2:high",
+  "attemptedModels": [
+    "zai/glm-5.2:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "zai/glm-5.2:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 51179,
+        "output": 19984,
+        "cacheRead": 1739392,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 51
+      }
+    }
+  ],
+  "durationMs": 448039,
+  "toolCount": 55,
+  "acceptance": {
+    "status": "checked",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": true,
+      "inferredReason": [
+        "write-capable worker/task"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "write-capable worker/task"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Added only the --include-text read-path wiring + guard + 2 focused offline tests + docs across the 5 task-scope files. The read contract was unchanged. No write/Cloud mutation paths, scratch, organizer, uv.lock, or commit touched; no files staged."
+        }
+      ],
+      "changedFiles": [
+        "src/paia_supernote/cli.py",
+        "tests/test_agent_read_contracts.py",
+        "tests/integration/test_agent_contract_surfaces.py",
+        "README.md",
+        "docs/supernote-cloud-change-ledger-contracts.md"
+      ],
+      "testsAddedOrUpdated": [
+        "tests/test_agent_read_contracts.py::test_latest_include_text_cli_returns_full_cached_ocr_without_uploader",
+        "tests/integration/test_agent_contract_surfaces.py::test_cli_changes_latest_include_text_returns_full_cached_ocr"
+      ],
+      "commandsRun": [
+        {
+          "command": "uv run pytest -q tests/test_agent_read_contracts.py tests/test_cli_structured_errors.py",
+          "result": "passed",
+          "summary": "12 passed"
+        },
+        {
+          "command": "uv run pytest -q -m integration tests/integration/test_agent_contract_surfaces.py",
+          "result": "passed",
+          "summary": "7 passed (+1 new test)"
+        },
+        {
+          "command": "uv run ruff check src/paia_supernote/cli.py tests/test_agent_read_contracts.py tests/integration/test_agent_contract_surfaces.py",
+          "result": "passed",
+          "summary": "All checks passed"
+        },
+        {
+          "command": "uv run pytest -q",
+          "result": "passed",
+          "summary": "416 passed, 17 skipped, 15 deselected integration (baseline maintained)"
+        },
+        {
+          "command": "runtime smoke via real cli.main(): default --latest preview-only; --latest --include-text returns full OCR; --include-text without --latest rejected",
+          "result": "passed",
+          "summary": "All assertions passed"
+        }
+      ],
+      "validationOutput": [
+        "supernote changes --help shows [--latest] [--include-text] with correct help text",
+        "Default --latest --json: pages[].text == null, text_preview populated (preview-only)",
+        "--latest --include-text --json: pages[].text == full cached OCR, ocr_status ready, no Cloud contact",
+        "--include-text without --latest: SystemExit('changes --include-text requires --latest')",
+        "git diff --cached empty; git status clean except the 5 intended files + pre-existing uv.lock M"
+      ],
+      "residualRisks": [
+        "Prose (non --json) format_changes output still renders only text_preview for the pages branch; the full text is intentionally exposed via --json as documented (full cached page-read is specified as a --json command). Out of scope per the bounded task."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Wired a --include-text boolean through the changes --latest read path into LatestNotebookStateRequest(include_text=...), added a requires-latest guard, and covered it with one offline unit test (uploader-fail monkeypatch proving full OCR + preview-only default + guard) and one integration CLI-surface test; updated README and the ledger contract doc to document the exact full cached page-read command. No contract/mutation code changed.",
+      "reviewFindings": [
+        "no blockers. Guard `--include-text requires --latest` follows the existing `--advance requires --agent` precedent; default preview-only behavior is asserted in both tests and at runtime.",
+        "note: uv.lock is M in git but was modified before this session (mtime predates session edits); uv run did not alter it."
+      ],
+      "manualNotes": "Runtime mtime check confirms uv.lock not touched this session. The read contract file (agent_read_contracts.py) already implemented include_text and preview-by-default, so it intentionally required zero edits. Output written to /tmp/supernote-full-text-worker.json."
+    }
+  },
+  "transcriptPath": "/Users/braydon/projects/experiments/paia-supernote/.pi-subagents/artifacts/f9fa51c6_worker_0_transcript.jsonl",
+  "timestamp": 1784490025822
+}

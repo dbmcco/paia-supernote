@@ -753,6 +753,71 @@ class TestMainEntrypoint:
         assert parser.parse_args(["enrich"]).mode == "enrich"
         assert parser.parse_args(["status"]).mode == "status"
 
+    def test_ingest_subparser_defaults_to_no_once_no_backfill(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["ingest"])
+        assert args.once is False
+        assert args.backfill is False
+        assert args.notebook is None
+
+    def test_ingest_once_backfill_notebook_flags_parse(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            ["ingest", "--once", "--backfill", "--notebook", "Mgmt", "--notebook", "Dev"]
+        )
+        assert args.mode == "ingest"
+        assert args.once is True
+        assert args.backfill is True
+        assert args.notebook == ["Mgmt", "Dev"]
+
+    @patch("paia_supernote.main.load_config")
+    @patch("paia_supernote.main._configure_logging")
+    def test_main_ingest_once_routes_to_ingest_once_helper(
+        self,
+        mock_logging: MagicMock,
+        mock_load_config: MagicMock,
+    ) -> None:
+        mock_load_config.return_value = dict(DEFAULT_CONFIG)
+
+        with patch("paia_supernote.main.IngestService") as mock_cls:
+            mock_service = MagicMock()
+            mock_service.ingest_once = AsyncMock()
+            mock_cls.return_value = mock_service
+
+            main(argv=["ingest", "--once", "--backfill", "--notebook", "Mgmt"])
+
+        mock_cls.assert_called_once()
+        mock_service.ingest_once.assert_awaited_once_with(
+            process_existing_on_start=True, notebooks=["Mgmt"]
+        )
+        # The continuous-loop entrypoint must NOT run for --once.
+        mock_service.start.assert_not_called()
+
+    @patch("paia_supernote.main.load_config")
+    @patch("paia_supernote.main._configure_logging")
+    def test_main_ingest_without_once_runs_continuous_loop(
+        self,
+        mock_logging: MagicMock,
+        mock_load_config: MagicMock,
+    ) -> None:
+        """``ingest`` without ``--once`` keeps the existing continuous-loop behavior."""
+        mock_load_config.return_value = dict(DEFAULT_CONFIG)
+
+        async def fake_start() -> None:
+            pass
+
+        with patch("paia_supernote.main.IngestService") as mock_cls:
+            mock_service = MagicMock()
+            mock_service.start = MagicMock(side_effect=fake_start)
+            mock_service.stop = AsyncMock()
+            mock_service.ingest_once = AsyncMock()
+            mock_cls.return_value = mock_service
+
+            main(argv=["ingest"])
+
+        mock_service.start.assert_called_once()
+        mock_service.ingest_once.assert_not_called()
+
     @patch("paia_supernote.main.load_config")
     @patch("paia_supernote.main._configure_logging")
     def test_main_ingest_mode_starts_ingest_service(

@@ -27,6 +27,15 @@ class ListingUploader:
         self.downloads = downloads
         self.downloaded: list[str] = []
 
+    async def start(self) -> None:
+        """No-op session start for tests (real uploader launches a browser)."""
+
+    async def stop(self) -> None:
+        """No-op session stop for tests."""
+
+    async def ensure_authenticated(self) -> None:
+        """No-op auth check for tests."""
+
     async def _api_call(self, endpoint: str, body: dict) -> dict:
         assert endpoint == "/api/file/list/query"
         return {"status": 200, "body": {"userFileVOList": self.entries}}
@@ -102,7 +111,13 @@ class FakeReader:
         raise AssertionError("cloud ledger path should not OCR through process_file")
 
 
-def _service(tmp_path: Path, reader: FakeReader, allowlist: list[str] | None = None):
+def _service(
+    tmp_path: Path,
+    reader: FakeReader,
+    allowlist: list[str] | None = None,
+    *,
+    uploader: ListingUploader | None = None,
+) -> IngestService:
     return IngestService(
         config={
             "events_url": "http://events.invalid",
@@ -115,6 +130,7 @@ def _service(tmp_path: Path, reader: FakeReader, allowlist: list[str] | None = N
             ),
         },
         reader=reader,  # type: ignore[arg-type]
+        uploader=uploader,
     )
 
 
@@ -410,3 +426,80 @@ async def test_cloud_ingest_adds_and_reorder_ocrs_only_added_pages(
     # The reordered pages a and b were never re-OCR'd.
     added_change = next(c for c in changes if c.change_type == CHANGE_ADDED)
     assert added_change.page_id == "c"
+
+
+# --- on-demand ingest_once (ingest --once / --backfill / --notebook) -----------
+
+
+def _uploader_with(entries: list[dict], downloads: dict[str, bytes]) -> ListingUploader:
+    return ListingUploader(entries, downloads)
+
+
+@pytest.mark.asyncio
+async def test_ingest_once_backfill_seeds_ledger_from_existing_files(
+    tmp_path: Path,
+) -> None:
+    """``ingest --once --backfill`` processes EVERY existing watched file as new,
+    seeding a fresh DB. This is the cost-guard override for first-time back-fill."""
+    reader = FakeReader({b"quick-bytes": [("p0", "h0"), ("p1", "h1")]})
+    entries = [
+        {"fileName": "Quick.note", "updateTime": 10, "isFolder": "N", "size": 10},
+    ]
+    uploader = _uploader_with(entries, {"Quick.note": b"quick-bytes"})
+    service = _service(tmp_path, reader, uploader=uploader)
+
+    await service.ingest_once(process_existing_on_start=True)
+
+    status = {
+        p.page_index: p.ocr_status for p in service.ledger.current_pages("Quick")
+    }
+    assert status == {0: "ready", 1: "ready"}
+    assert reader.ocr_calls == [(b"quick-bytes", "Quick", (0, 1))]
+
+
+@pytest.mark.asyncio
+async def test_ingest_once_without_backfill_preserves_cost_guard(
+    tmp_path: Path,
+) -> None:
+    """Plain ``ingest --once`` (no ``--backfill``) must NOT OCR the whole Cloud
+    library on a fresh DB. Existing files are noted but skipped; only genuine
+    future changes get processed. This is the cost guard."""
+    reader = FakeReader({b"quick-bytes": [("p0", "h0")]})
+    entries = [
+        {"fileName": "Quick.note", "updateTime": 10, "isFolder": "N", "size": 10},
+    ]
+    uploader = _uploader_with(entries, {"Quick.note": b"quick-bytes"})
+    service = _service(tmp_path, reader, uploader=uploader)
+
+    await service.ingest_once(process_existing_on_start=False)
+
+    assert reader.ocr_calls == []
+    assert list(service.ledger.current_pages("Quick")) == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_once_notebook_scope_skips_other_notebooks(
+    tmp_path: Path,
+) -> None:
+    """``ingest --once --notebook Mgmt`` downloads/processes only Mgmt this cycle;
+    other allowlisted notebooks present in Cloud are not touched."""
+    reader = FakeReader(
+        {b"quick-bytes": [("q0", "hq")], b"mgmt-bytes": [("m0", "hm")]}
+    )
+    entries = [
+        {"fileName": "Quick.note", "updateTime": 10, "isFolder": "N", "size": 10},
+        {"fileName": "Mgmt.note", "updateTime": 11, "isFolder": "N", "size": 10},
+    ]
+    uploader = _uploader_with(
+        entries, {"Quick.note": b"quick-bytes", "Mgmt.note": b"mgmt-bytes"}
+    )
+    service = _service(tmp_path, reader, allowlist=["Quick", "Mgmt"], uploader=uploader)
+
+    await service.ingest_once(process_existing_on_start=True, notebooks=["Mgmt"])
+
+    assert uploader.downloaded == ["Mgmt.note"]
+    status = {
+        p.page_index: p.ocr_status for p in service.ledger.current_pages("Mgmt")
+    }
+    assert status == {0: "ready"}
+    assert list(service.ledger.current_pages("Quick")) == []
