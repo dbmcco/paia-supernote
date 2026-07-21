@@ -239,8 +239,14 @@ class CloudPoller:
         return result["body"].get("userFileVOList", [])
 
     async def _fetch_note_listing(self) -> dict:
-        """Single authenticated Note-folder list query (raw API result)."""
-        return await self._uploader._api_call(
+        """Walk the Note folder tree; aggregate all entries (root + subfolders).
+
+        Returns a result shaped like the raw API response so the caller's
+        health/auth handling (which inspects ``result["status"]``) is unchanged.
+        The root listing's status is authoritative for auth/health; a subfolder
+        listing that fails is skipped rather than failing the whole poll.
+        """
+        root = await self._uploader._api_call(
             "/api/file/list/query",
             {
                 "directoryId": self._uploader.NOTE_FOLDER_ID,
@@ -251,6 +257,36 @@ class CloudPoller:
                 "filterType": 0,
             },
         )
+        if root["status"] != 200 or not isinstance(root["body"], dict):
+            return root  # caller handles auth/health on the root status
+
+        all_entries = list(root["body"].get("userFileVOList", []))
+        queue = [str(e.get("id")) for e in all_entries if e.get("isFolder") == "Y"]
+        seen = set(queue)
+        while queue:
+            directory_id = queue.pop(0)
+            sub = await self._uploader._api_call(
+                "/api/file/list/query",
+                {
+                    "directoryId": directory_id,
+                    "pageNo": 1,
+                    "pageSize": 200,
+                    "order": "time",
+                    "sequence": "desc",
+                    "filterType": 0,
+                },
+            )
+            if sub["status"] != 200 or not isinstance(sub["body"], dict):
+                continue  # skip an unreadable subfolder, don't fail the poll
+            for entry in sub["body"].get("userFileVOList", []):
+                all_entries.append(entry)
+                if entry.get("isFolder") == "Y":
+                    child = str(entry.get("id") or "")
+                    if child and child not in seen:
+                        seen.add(child)
+                        queue.append(child)
+
+        return {"status": 200, "body": {"userFileVOList": all_entries}}
 
     async def _set_poll_health(
         self, healthy: bool, *, reason: str | None, status: int | None

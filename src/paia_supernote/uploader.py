@@ -151,18 +151,23 @@ class SupernoteUploader:
             # Delete existing file(s) BEFORE uploading so the new upload gets the
             # correct name. If the old file exists when we upload, the cloud
             # auto-increments to "test(1).note" etc.
-            existing_ids = await self._find_file_ids(target_name)
-            if existing_ids:
-                await self._delete_by_ids(existing_ids)
+            # Resolve the notebook's current folder so the upload writes back to
+            # the same folder (cos/, know/), not a new copy in the root. New
+            # notebooks default to the root Note folder.
+            file_id, directory_id = await self._resolve_notebook_location(target_name)
+            if file_id:
+                await self._delete_by_ids([file_id])
                 await self._wait_for_target_absent(target_name)
 
             upload_info = await self._initiate_upload_with_recovery(
-                notebook_path, target_name
+                notebook_path, target_name, directory_id=directory_id
             )
 
             if not upload_info.get("_skip_s3"):
                 await self._upload_to_s3(notebook_path, upload_info)
-            await self._finish_upload(notebook_path, target_name, upload_info)
+            await self._finish_upload(
+                notebook_path, target_name, upload_info, directory_id=directory_id
+            )
             await self._wait_for_stable_single_target(target_name)
 
             return True
@@ -187,15 +192,15 @@ class SupernoteUploader:
 
         await self._ensure_authenticated()
         try:
-            file_ids = await self._find_file_ids(target_name)
+            entry = await self._resolve_notebook_entry(target_name)
         except UploadAuthError:
             await self._restart_browser_session()
-            file_ids = await self._find_file_ids(target_name)
-        if not file_ids:
+            entry = await self._resolve_notebook_entry(target_name)
+        if not entry:
             raise RuntimeError(f"{target_name!r} not found in Note folder")
 
-        # Use the most recent entry; list/query returns newest first by time.
-        file_id = file_ids[0]
+        # Use the resolved file ID (unique across the whole folder tree).
+        file_id = entry["id"]
 
         result = await self._api_call(
             "/api/file/download/url",
@@ -219,20 +224,20 @@ class SupernoteUploader:
             return response.content
 
     async def _find_file_ids(self, target_name: str) -> List[str]:
-        """Return cloud file IDs matching target_name in the Note folder."""
-        files = await self._list_note_files()
+        """Return cloud file IDs matching target_name anywhere in the Note tree."""
+        files = await self.list_note_files_recursive()
         return [
-            f["id"]
+            str(f["id"])
             for f in files
             if f.get("fileName") == target_name and f.get("isFolder") == "N"
         ]
 
-    async def list_note_files(self) -> list[dict[str, Any]]:
-        """Return current file entries in the cloud Note folder."""
+    async def _list_folder(self, directory_id: str) -> list[dict[str, Any]]:
+        """List file + folder entries in one Cloud folder by directoryId."""
         result = await self._api_call(
             "/api/file/list/query",
             {
-                "directoryId": self.NOTE_FOLDER_ID,
+                "directoryId": directory_id,
                 "pageNo": 1,
                 "pageSize": 200,
                 "order": "time",
@@ -246,10 +251,75 @@ class SupernoteUploader:
             return []
         return list(result["body"].get("userFileVOList", []))
 
+    async def list_note_files(self) -> list[dict[str, Any]]:
+        """Return current file entries in the cloud Note folder (root only)."""
+        return await self._list_folder(self.NOTE_FOLDER_ID)
+
+    async def list_note_files_recursive(self) -> list[dict[str, Any]]:
+        """Walk the Note folder tree and return every entry (root + subfolders).
+
+        Each entry is annotated with ``_directoryId`` — the folder it lives in —
+        so callers can route reads and target uploads back to the right folder.
+        """
+        collected: list[dict[str, Any]] = []
+        queue = [self.NOTE_FOLDER_ID]
+        seen: set[str] = set()
+        while queue:
+            directory_id = queue.pop(0)
+            if directory_id in seen:
+                continue
+            seen.add(directory_id)
+            for entry in await self._list_folder(directory_id):
+                entry["_directoryId"] = directory_id
+                collected.append(entry)
+                if entry.get("isFolder") == "Y":
+                    child = str(entry.get("id") or "")
+                    if child and child not in seen:
+                        queue.append(child)
+        return collected
+
+    async def _resolve_notebook_entry(self, target_name: str) -> dict[str, Any] | None:
+        """Find a .note file by name anywhere in the Note folder tree.
+
+        Returns the matching entry annotated with ``_directoryId`` (its folder),
+        or None when no folder contains it. Walks breadth-first and returns as
+        soon as the name matches, so a root hit costs a single root listing.
+        """
+        queue = [self.NOTE_FOLDER_ID]
+        seen: set[str] = set()
+        while queue:
+            directory_id = queue.pop(0)
+            if directory_id in seen:
+                continue
+            seen.add(directory_id)
+            entries = await self._list_folder(directory_id)
+            for entry in entries:
+                if entry.get("isFolder") == "N" and entry.get("fileName") == target_name:
+                    entry["_directoryId"] = directory_id
+                    return entry
+            for entry in entries:
+                if entry.get("isFolder") == "Y":
+                    child = str(entry.get("id") or "")
+                    if child and child not in seen:
+                        queue.append(child)
+        return None
+
+    async def _resolve_notebook_location(self, target_name: str) -> tuple[str | None, str]:
+        """Return ``(file_id, directory_id)`` for target_name in the tree.
+
+        ``directory_id`` is the folder the notebook currently lives in, so an
+        upload writes back to the same folder. When the notebook doesn't exist,
+        returns ``(None, NOTE_FOLDER_ID)`` so new notebooks upload to the root.
+        """
+        entry = await self._resolve_notebook_entry(target_name)
+        if entry is None:
+            return None, self.NOTE_FOLDER_ID
+        return str(entry["id"]), str(entry["_directoryId"])
+
     async def _find_blocking_sibling_names(self, target_name: str) -> list[str]:
-        """Return conflict or numbered copies for target_name in the Note folder."""
+        """Return conflict or numbered copies for target_name across the Note tree."""
         stem = target_name.removesuffix(".note")
-        files = await self._list_note_files()
+        files = await self.list_note_files_recursive()
         return sorted(
             {
                 str(f.get("fileName") or "")
@@ -484,12 +554,13 @@ class SupernoteUploader:
         return result.get("status") == 403
 
     async def _initiate_upload(
-        self, file_path: str, target_name: str
+        self, file_path: str, target_name: str, directory_id: str | None = None
     ) -> Dict[str, Any]:
         """POST /api/file/upload/apply — returns S3 presigned URL + auth headers."""
         if not self.page:
             raise RuntimeError("Browser not started")
 
+        directory_id = directory_id or self.NOTE_FOLDER_ID
         data = Path(file_path).read_bytes()
         md5 = hashlib.md5(data).hexdigest()
         size = len(data)
@@ -497,7 +568,7 @@ class SupernoteUploader:
         result = await self._api_call(
             "/api/file/upload/apply",
             {
-                "directoryId": self.NOTE_FOLDER_ID,
+                "directoryId": directory_id,
                 "fileName": target_name,
                 "md5": md5,
                 "size": size,
@@ -532,13 +603,14 @@ class SupernoteUploader:
         self,
         notebook_path: str,
         target_name: str,
+        directory_id: str | None = None,
     ) -> Dict[str, Any]:
         """Initiate upload with auth recovery and bounded sync-in-progress waits."""
         attempts = 0
         while True:
             attempts += 1
             try:
-                return await self._initiate_upload(notebook_path, target_name)
+                return await self._initiate_upload(notebook_path, target_name, directory_id)
             except UploadAuthError:
                 if attempts > 1:
                     raise
@@ -600,11 +672,13 @@ class SupernoteUploader:
         file_path: str,
         target_name: str,
         upload_info: Dict[str, Any],
+        directory_id: str | None = None,
     ) -> None:
         """POST /api/file/upload/finish to link S3 object to the account."""
         if not self.page:
             raise RuntimeError("Browser not started")
 
+        directory_id = directory_id or self.NOTE_FOLDER_ID
         data = Path(file_path).read_bytes()
         md5 = hashlib.md5(data).hexdigest()
         size = len(data)
@@ -621,7 +695,7 @@ class SupernoteUploader:
         result = await self._api_call(
             "/api/file/upload/finish",
             {
-                "directoryId": self.NOTE_FOLDER_ID,
+                "directoryId": directory_id,
                 "fileName": target_name,
                 "md5": md5,
                 "size": size,

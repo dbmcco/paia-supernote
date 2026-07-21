@@ -103,7 +103,7 @@ class TestSupernoteUploader:
                 uploader, "_ensure_authenticated", new_callable=AsyncMock
             ) as mock_auth,
             patch.object(
-                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+                uploader, "_resolve_notebook_location", new_callable=AsyncMock, return_value=(None, ROOT_ID)
             ),
             patch.object(
                 uploader,
@@ -239,7 +239,7 @@ class TestSupernoteUploader:
         with (
             patch.object(uploader, "_ensure_authenticated") as mock_auth,
             patch.object(
-                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+                uploader, "_resolve_notebook_location", new_callable=AsyncMock, return_value=(None, ROOT_ID)
             ),
             patch.object(
                 uploader,
@@ -268,7 +268,7 @@ class TestSupernoteUploader:
 
             assert result is True
             mock_auth.assert_called_once()
-            mock_apply.assert_called_once_with(mock_note_file, "Quick.note")
+            mock_apply.assert_called_once_with(mock_note_file, "Quick.note", ROOT_ID)
             mock_s3.assert_called_once()
             mock_finish.assert_called_once()
 
@@ -539,7 +539,7 @@ class TestSupernoteUploader:
 
         call_count = 0
 
-        async def mock_initiate(target_path, file_path):
+        async def mock_initiate(target_path, file_path, directory_id=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -549,7 +549,7 @@ class TestSupernoteUploader:
         with (
             patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
             patch.object(
-                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+                uploader, "_resolve_notebook_location", new_callable=AsyncMock, return_value=(None, ROOT_ID)
             ),
             patch.object(
                 uploader,
@@ -618,7 +618,7 @@ class TestSupernoteUploader:
         with (
             patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
             patch.object(
-                uploader, "_find_file_ids", new_callable=AsyncMock, return_value=[]
+                uploader, "_resolve_notebook_entry", new_callable=AsyncMock, return_value=None
             ),
         ):
             with pytest.raises(RuntimeError, match="not found"):
@@ -641,9 +641,9 @@ class TestSupernoteUploader:
         with (
             patch.object(
                 uploader,
-                "_find_file_ids",
+                "_resolve_notebook_entry",
                 new_callable=AsyncMock,
-                side_effect=[UploadAuthError("list/query returned 403"), [file_id]],
+                side_effect=[UploadAuthError("list/query returned 403"), {"id": file_id, "_directoryId": ROOT_ID}],
             ) as mock_find,
             patch.object(
                 uploader, "_restart_browser_session", new_callable=AsyncMock
@@ -685,9 +685,9 @@ class TestSupernoteUploader:
         with (
             patch.object(
                 uploader,
-                "_find_file_ids",
+                "_resolve_notebook_entry",
                 new_callable=AsyncMock,
-                return_value=[file_id],
+                return_value={"id": file_id, "_directoryId": ROOT_ID},
             ),
             patch("paia_supernote.uploader.httpx.AsyncClient") as mock_client_class,
         ):
@@ -717,7 +717,7 @@ class TestSupernoteUploader:
         uploader.page = mock_page
 
         with patch.object(
-            uploader, "_find_file_ids", new_callable=AsyncMock, return_value=["some-id"]
+            uploader, "_resolve_notebook_entry", new_callable=AsyncMock, return_value={"id": "some-id", "_directoryId": ROOT_ID}
         ):
             with pytest.raises(RuntimeError, match="No URL"):
                 await uploader.download_notebook("Quick.note")
@@ -863,3 +863,158 @@ class TestSupernoteUploader:
 
         with pytest.raises(UploadAuthError, match="list/query returned 401"):
             await uploader._list_note_files()
+
+
+# --- Folder support: resolve notebooks across Cloud subfolders ----------------
+
+COS_ID = "1283876382790647808"
+ROOT_ID = SupernoteUploader.NOTE_FOLDER_ID
+FOLDER_TREE = {
+    ROOT_ID: [
+        {"id": "mgmt-1", "fileName": "Mgmt.note", "isFolder": "N"},
+        {"id": COS_ID, "fileName": "cos", "isFolder": "Y"},
+    ],
+    COS_ID: [
+        {"id": "lfw-1", "fileName": "LFW.note", "isFolder": "N"},
+        {"id": "synth-1", "fileName": "Synth.note", "isFolder": "N"},
+        {"id": "nav-1", "fileName": "Navicyte.note", "isFolder": "N"},
+    ],
+}
+
+
+def _listing_api(tree):
+    async def _api(endpoint, body):
+        if endpoint == "/api/file/list/query":
+            return {
+                "status": 200,
+                "body": {"userFileVOList": list(tree.get(body["directoryId"], []))},
+            }
+        raise AssertionError(f"unexpected api call {endpoint}")
+
+    return _api
+
+
+class TestFolderSupport:
+    """Notebooks in Cloud subfolders (cos/, know/) must be resolvable by name."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_root_notebook_does_not_recurse(self, uploader):
+        seen = []
+
+        async def api(endpoint, body):
+            seen.append(body["directoryId"])
+            return {
+                "status": 200,
+                "body": {"userFileVOList": list(FOLDER_TREE.get(body["directoryId"], []))},
+            }
+
+        uploader._api_call = api
+        entry = await uploader._resolve_notebook_entry("Mgmt.note")
+        assert entry is not None and entry["id"] == "mgmt-1"
+        assert entry["_directoryId"] == ROOT_ID
+        assert seen == [ROOT_ID]  # root hit short-circuits; no subfolder queries
+
+    @pytest.mark.asyncio
+    async def test_resolve_recurses_into_subfolder(self, uploader):
+        uploader._api_call = _listing_api(FOLDER_TREE)
+        entry = await uploader._resolve_notebook_entry("LFW.note")
+        assert entry is not None and entry["id"] == "lfw-1"
+        assert entry["_directoryId"] == COS_ID
+
+    @pytest.mark.asyncio
+    async def test_resolve_returns_none_when_absent(self, uploader):
+        uploader._api_call = _listing_api(FOLDER_TREE)
+        assert await uploader._resolve_notebook_entry("Ghost.note") is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_location_defaults_new_notebook_to_root(self, uploader):
+        uploader._api_call = _listing_api(FOLDER_TREE)
+        file_id, directory_id = await uploader._resolve_notebook_location("NewBook.note")
+        assert file_id is None
+        assert directory_id == ROOT_ID  # new notebooks upload to the root Note folder
+
+    @pytest.mark.asyncio
+    async def test_download_notebook_resolves_subfolder_notebook(self, uploader):
+        uploader.page = Mock()
+
+        async def api(endpoint, body):
+            if endpoint == "/api/file/list/query":
+                return {
+                    "status": 200,
+                    "body": {"userFileVOList": list(FOLDER_TREE.get(body["directoryId"], []))},
+                }
+            if endpoint == "/api/file/download/url":
+                assert body["id"] == "lfw-1"  # resolved cos/ file id, not a root miss
+                return {"status": 200, "body": {"url": "https://s3.example.com/lfw"}}
+            raise AssertionError(endpoint)
+
+        uploader._api_call = api
+        with (
+            patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
+            patch("paia_supernote.uploader.httpx.AsyncClient") as mock_client_cls,
+        ):
+            client = AsyncMock()
+            resp = Mock()
+            resp.content = b"lfw-bytes"
+            resp.raise_for_status = Mock()
+            client.get = AsyncMock(return_value=resp)
+            client.__aenter__ = AsyncMock(return_value=client)
+            client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = client
+
+            data = await uploader.download_notebook("LFW.note")
+            assert data == b"lfw-bytes"
+
+    @pytest.mark.asyncio
+    async def test_upload_threads_subfolder_directory_into_apply_and_finish(
+        self, uploader, mock_note_file
+    ):
+        uploader.page = Mock()
+        with (
+            patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
+            patch.object(
+                uploader, "_find_blocking_sibling_names", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(
+                uploader, "_resolve_notebook_location", new_callable=AsyncMock, return_value=("lfw-1", COS_ID)
+            ),
+            patch.object(uploader, "_delete_by_ids", new_callable=AsyncMock) as mock_del,
+            patch.object(uploader, "_wait_for_target_absent", new_callable=AsyncMock),
+            patch.object(
+                uploader, "_initiate_upload_with_recovery", new_callable=AsyncMock, return_value={}
+            ) as mock_apply,
+            patch.object(uploader, "_upload_to_s3", new_callable=AsyncMock),
+            patch.object(uploader, "_finish_upload", new_callable=AsyncMock) as mock_finish,
+            patch.object(uploader, "_wait_for_stable_single_target", new_callable=AsyncMock),
+        ):
+            result = await uploader.upload_notebook(mock_note_file, "LFW.note")
+            assert result is True
+            mock_del.assert_awaited_once_with(["lfw-1"])  # deletes the cos/ copy by id
+            _, apply_kwargs = mock_apply.call_args
+            assert apply_kwargs.get("directory_id") == COS_ID
+            _, finish_kwargs = mock_finish.call_args
+            assert finish_kwargs.get("directory_id") == COS_ID
+
+    @pytest.mark.asyncio
+    async def test_upload_new_notebook_defaults_to_root_folder(self, uploader, mock_note_file):
+        uploader.page = Mock()
+        with (
+            patch.object(uploader, "_ensure_authenticated", new_callable=AsyncMock),
+            patch.object(
+                uploader, "_find_blocking_sibling_names", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(
+                uploader, "_resolve_notebook_location", new_callable=AsyncMock, return_value=(None, ROOT_ID)
+            ),
+            patch.object(uploader, "_delete_by_ids", new_callable=AsyncMock) as mock_del,
+            patch.object(
+                uploader, "_initiate_upload_with_recovery", new_callable=AsyncMock, return_value={}
+            ) as mock_apply,
+            patch.object(uploader, "_upload_to_s3", new_callable=AsyncMock),
+            patch.object(uploader, "_finish_upload", new_callable=AsyncMock) as mock_finish,
+            patch.object(uploader, "_wait_for_stable_single_target", new_callable=AsyncMock),
+        ):
+            await uploader.upload_notebook(mock_note_file, "NewBook.note")
+            mock_del.assert_not_awaited()  # nothing existing to delete
+            _, apply_kwargs = mock_apply.call_args
+            assert apply_kwargs.get("directory_id") == ROOT_ID

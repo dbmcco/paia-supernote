@@ -184,3 +184,76 @@ class TestAutoReauthSelfHeal:
 
         # A 500 is not an auth problem; no re-auth attempt is made.
         assert uploader.ensure_calls == 0
+
+
+class TreeFakeUploader:
+    """Uploader stub that serves a scripted folder tree per directoryId."""
+
+    NOTE_FOLDER_ID = "root"
+
+    def __init__(self, tree: dict) -> None:
+        self.tree = tree
+
+    async def _api_call(self, endpoint: str, body: dict) -> dict:
+        return {
+            "status": 200,
+            "body": {"userFileVOList": list(self.tree.get(body["directoryId"], []))},
+        }
+
+    async def ensure_authenticated(self) -> None:
+        return None
+
+
+class TestRecursiveNoteListing:
+    """The poller must see notebooks in Cloud subfolders (cos/, know/), not just root."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_note_listing_aggregates_subfolder_notebooks(self) -> None:
+        tree = {
+            "root": [
+                {"id": "mgmt-1", "fileName": "Mgmt.note", "isFolder": "N"},
+                {"id": "cos-1", "fileName": "cos", "isFolder": "Y"},
+            ],
+            "cos-1": [
+                {"id": "lfw-1", "fileName": "LFW.note", "isFolder": "N"},
+                {"id": "synth-1", "fileName": "Synth.note", "isFolder": "N"},
+            ],
+        }
+        poller = CloudPoller(
+            uploader=TreeFakeUploader(tree),
+            on_note_changed=_noop_changed,
+            on_poll_health=None,
+        )
+
+        result = await poller._fetch_note_listing()
+
+        names = {e["fileName"] for e in result["body"]["userFileVOList"]}
+        assert "Mgmt.note" in names  # root
+        assert "LFW.note" in names  # cos/ subfolder
+        assert "Synth.note" in names
+
+    @pytest.mark.asyncio
+    async def test_fetch_note_listing_does_not_recurse_into_files(self) -> None:
+        # A root-only tree (no folders) must cost exactly one listing call.
+        tree = {
+            "root": [
+                {"id": "mgmt-1", "fileName": "Mgmt.note", "isFolder": "N"},
+                {"id": "quick-1", "fileName": "Quick.note", "isFolder": "N"},
+            ],
+        }
+        uploader = TreeFakeUploader(tree)
+        calls: list[str] = []
+
+        original = uploader._api_call
+
+        async def counting(endpoint: str, body: dict) -> dict:
+            calls.append(body["directoryId"])
+            return await original(endpoint, body)
+
+        uploader._api_call = counting  # type: ignore[method-assign]
+        poller = CloudPoller(
+            uploader=uploader, on_note_changed=_noop_changed, on_poll_health=None
+        )
+
+        await poller._fetch_note_listing()
+        assert calls == ["root"]
