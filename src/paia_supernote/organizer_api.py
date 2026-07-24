@@ -4,12 +4,13 @@ import os
 import tempfile
 import hashlib
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from PIL import Image
 
 from paia_supernote import note_page_ops, note_reorder
 from paia_supernote.note_snapshot import NotebookSnapshot, PageRecord
+from paia_supernote.uploader import UploadAuthError
 
 
 SnapshotLoader = Callable[[str, bytes], NotebookSnapshot]
@@ -32,7 +33,7 @@ class OrganizerApi:
         self._snapshots: dict[tuple[str, str], NotebookSnapshot] = {}
 
     async def list_notebooks(self) -> list[dict[str, Any]]:
-        entries = await _list_note_entries(self.uploader)
+        entries = await self._call_with_reauth(lambda: _list_note_entries(self.uploader))
         notebooks: list[dict[str, Any]] = []
         for entry in entries:
             file_name = str(entry.get("fileName") or "")
@@ -48,8 +49,25 @@ class OrganizerApi:
             )
         return notebooks
 
+    async def _call_with_reauth(self, operation: Callable[[], Awaitable[Any]]) -> Any:
+        """Run a cloud operation, reloading the session once on auth failure.
+
+        The organizer holds its uploader session in memory. If another process
+        (poller, back-fill) refreshes session.json, or the session simply
+        expires, the next cloud call raises UploadAuthError. Re-authenticate
+        once and retry instead of surfacing a hard 500 to the browser.
+        """
+        try:
+            return await operation()
+        except UploadAuthError:
+            ensure = getattr(self.uploader, "ensure_authenticated", None)
+            if ensure is None:
+                raise
+            await ensure()
+            return await operation()
+
     async def get_snapshot(self, notebook_name: str) -> dict[str, Any]:
-        snapshot = await self._load_snapshot(notebook_name)
+        snapshot = await self._call_with_reauth(lambda: self._load_snapshot(notebook_name))
         return serialize_snapshot(snapshot)
 
     async def get_page_image(
@@ -60,7 +78,7 @@ class OrganizerApi:
         scale: float,
         revision: str | None = None,
     ) -> dict[str, Any]:
-        snapshot = await self._snapshot_for_image(notebook_name, revision)
+        snapshot = await self._call_with_reauth(lambda: self._snapshot_for_image(notebook_name, revision))
         if page_id not in snapshot.pages:
             raise KeyError(f"unknown page_id: {page_id}")
         cached = self.image_cache.get_or_render(

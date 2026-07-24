@@ -12,6 +12,7 @@ from paia_supernote.note_snapshot import (
     NotebookSnapshot,
     PageRecord,
 )
+from paia_supernote.uploader import UploadAuthError
 
 
 def _api_module():
@@ -209,6 +210,72 @@ async def test_list_notebooks_includes_subfolder_notebooks(tmp_path) -> None:
     # the cos/ notebook keeps its own cloud identity
     lfw = next(entry for entry in result if entry["name"] == "LFW")
     assert lfw["file_id"] == "cos-lfw"
+
+
+class _ReauthUploader:
+    """Simulates a cloud session that is stale on first read, fresh after reauth."""
+
+    def __init__(self) -> None:
+        self.list_calls = 0
+        self.ensure_calls = 0
+
+    async def list_note_files_recursive(self) -> list[dict]:
+        self.list_calls += 1
+        if self.list_calls == 1:
+            raise UploadAuthError("list/query returned 403")
+        return [{"fileName": "LFW.note", "isFolder": "N", "id": "cos-lfw", "updateTime": 3}]
+
+    async def ensure_authenticated(self) -> None:
+        self.ensure_calls += 1
+
+
+class _AlwaysDeadUploader:
+    """Session stays dead even after reauth — error must propagate, not loop."""
+
+    def __init__(self) -> None:
+        self.ensure_calls = 0
+
+    async def list_note_files_recursive(self) -> list[dict]:
+        raise UploadAuthError("list/query returned 403")
+
+    async def ensure_authenticated(self) -> None:
+        self.ensure_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_list_notebooks_reauths_on_403_then_retries(tmp_path) -> None:
+    organizer_api = _api_module()
+    uploader = _ReauthUploader()
+    api = organizer_api.OrganizerApi(
+        uploader=uploader,
+        snapshot_loader=lambda _name, _bytes: _snapshot(),
+        image_cache=_FakeCache(tmp_path / "page.png"),
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
+    )
+
+    result = await api.list_notebooks()
+
+    # first read 403'd, reauth ran once, second read succeeded
+    assert uploader.list_calls == 2
+    assert uploader.ensure_calls == 1
+    assert [entry["name"] for entry in result] == ["LFW"]
+
+
+@pytest.mark.asyncio
+async def test_reauth_propagates_when_retry_still_fails(tmp_path) -> None:
+    organizer_api = _api_module()
+    uploader = _AlwaysDeadUploader()
+    api = organizer_api.OrganizerApi(
+        uploader=uploader,
+        snapshot_loader=lambda _name, _bytes: _snapshot(),
+        image_cache=_FakeCache(tmp_path / "page.png"),
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
+    )
+
+    # reauth runs once, retry still 403s — the error surfaces instead of looping
+    with pytest.raises(UploadAuthError):
+        await api.list_notebooks()
+    assert uploader.ensure_calls == 1
 
 
 @pytest.mark.asyncio
