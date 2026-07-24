@@ -146,7 +146,13 @@ def _parse_pages(spec: str | None) -> list[int] | None:
 
 
 async def cmd_ls(uploader: Any) -> list[dict]:
-    files = await uploader.list_note_files()
+    # Prefer the recursive walker so notebooks filed in cloud subfolders (cos/)
+    # appear alongside root notebooks; fall back to the root listing otherwise.
+    list_recursive = getattr(uploader, "list_note_files_recursive", None)
+    if list_recursive is not None:
+        files = await list_recursive()
+    else:
+        files = await uploader.list_note_files()
     return [
         {"name": f.get("fileName"), "id": f.get("id")}
         for f in files

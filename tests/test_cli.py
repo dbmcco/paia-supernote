@@ -203,10 +203,28 @@ async def test_cmd_ls_lists_only_note_files(tmp_path: Path) -> None:
         {"fileName": "Mgmt.note", "isFolder": "N", "id": "2"},
         {"fileName": "Archive", "isFolder": "Y", "id": "3"},
     ]
+    # no recursive walker -> cmd_ls falls back to the root listing
+    uploader.list_note_files_recursive = None
 
     notebooks = await cmd_ls(uploader)
 
     assert [n["name"] for n in notebooks] == ["Quick.note", "Mgmt.note"]
+
+
+@pytest.mark.asyncio
+async def test_cmd_ls_includes_subfolder_notebooks(tmp_path: Path) -> None:
+    uploader = AsyncMock()
+    uploader.list_note_files_recursive.return_value = [
+        {"fileName": "Mgmt.note", "isFolder": "N", "id": "root-mgmt", "_directoryId": "ROOT"},
+        {"fileName": "cos", "isFolder": "Y", "id": "cos-folder", "_directoryId": "ROOT"},
+        {"fileName": "LFW.note", "isFolder": "N", "id": "cos-lfw", "_directoryId": "cos-folder"},
+    ]
+
+    notebooks = await cmd_ls(uploader)
+
+    # the cos/ subfolder notebook now appears; the folder entry is excluded
+    assert [n["name"] for n in notebooks] == ["Mgmt.note", "LFW.note"]
+    assert next(n for n in notebooks if n["name"] == "LFW.note")["id"] == "cos-lfw"
 
 
 def test_format_move_result_includes_backup_counts_and_next_command(
@@ -307,7 +325,7 @@ async def test_cmd_move_surfaces_auth_error_as_actionable(tmp_path: Path) -> Non
 
 def test_main_dispatches_ls_and_prints(tmp_path: Path, monkeypatch, capsys) -> None:
     fake_uploader = AsyncMock()
-    fake_uploader.list_note_files.return_value = [
+    fake_uploader.list_note_files_recursive.return_value = [
         {"fileName": "Quick.note", "isFolder": "N", "id": "1"}
     ]
     fake_uploader.SESSION_FILE = Path("~/.paia/supernote/session.json")
@@ -335,7 +353,7 @@ def test_main_returns_2_and_prints_recovery_on_auth_error(
     monkeypatch.delenv("SN_PHONE", raising=False)
     monkeypatch.delenv("SN_PASSWORD", raising=False)
     fake_uploader = AsyncMock()
-    fake_uploader.list_note_files.side_effect = UploadAuthError("403")
+    fake_uploader.list_note_files_recursive.side_effect = UploadAuthError("403")
     monkeypatch.setattr(
         "paia_supernote.cli.SupernoteUploader", lambda *a, **k: fake_uploader
     )
