@@ -283,7 +283,15 @@ async def _list_note_entries(uploader: Any) -> list[dict[str, Any]]:
     list_notebooks = getattr(uploader, "list_notebooks", None)
     if list_notebooks is not None:
         return list(await list_notebooks())
+    # Prefer the recursive walker so notebooks living in cloud subfolders
+    # (e.g. cos/) appear alongside root notebooks. Falls back to the root-only
+    # listing for uploaders that don't tree-walk.
+    list_note_files_recursive = getattr(uploader, "list_note_files_recursive", None)
+    if list_note_files_recursive is not None:
+        return list(await list_note_files_recursive())
     list_note_files = getattr(uploader, "list_note_files", None)
     if list_note_files is not None:
         return list(await list_note_files())
-    raise AttributeError("uploader must expose list_notebooks or list_note_files")
+    raise AttributeError(
+        "uploader must expose list_notebooks, list_note_files_recursive, or list_note_files"
+    )

@@ -170,6 +170,47 @@ async def test_list_notebooks_returns_cloud_note_files_only(tmp_path) -> None:
     ]
 
 
+class _RecursiveUploader:
+    """Mirrors SupernoteUploader's real surface: root + recursive listing."""
+
+    async def list_note_files(self) -> list[dict]:
+        # root only — misses notebooks living in cloud subfolders (e.g. cos/)
+        return [
+            {"fileName": "Mgmt.note", "isFolder": "N", "id": "root-mgmt", "updateTime": 1},
+        ]
+
+    async def list_note_files_recursive(self) -> list[dict]:
+        # walks the tree — includes subfolder notebooks plus folder entries
+        return [
+            {"fileName": "Mgmt.note", "isFolder": "N", "id": "root-mgmt",
+             "updateTime": 1, "_directoryId": "ROOT"},
+            {"fileName": "cos", "isFolder": "Y", "id": "cos-folder",
+             "updateTime": 2, "_directoryId": "ROOT"},
+            {"fileName": "LFW.note", "isFolder": "N", "id": "cos-lfw",
+             "updateTime": 3, "_directoryId": "cos-folder"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_list_notebooks_includes_subfolder_notebooks(tmp_path) -> None:
+    organizer_api = _api_module()
+    api = organizer_api.OrganizerApi(
+        uploader=_RecursiveUploader(),
+        snapshot_loader=lambda _name, _bytes: _snapshot(),
+        image_cache=_FakeCache(tmp_path / "page.png"),
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
+    )
+
+    result = await api.list_notebooks()
+
+    names = [entry["name"] for entry in result]
+    assert "Mgmt" in names and "LFW" in names
+    assert "cos" not in names  # folder entries must be filtered out
+    # the cos/ notebook keeps its own cloud identity
+    lfw = next(entry for entry in result if entry["name"] == "LFW")
+    assert lfw["file_id"] == "cos-lfw"
+
+
 @pytest.mark.asyncio
 async def test_get_snapshot_downloads_notebook_and_returns_page_metadata(tmp_path) -> None:
     organizer_api = _api_module()
