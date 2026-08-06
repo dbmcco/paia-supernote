@@ -17,13 +17,13 @@ Auth is **automatic**. You should almost never need to do anything by hand.
 - The session lives at `~/.paia/supernote/session.json` and refreshes itself.
 - The phone + password are read from environment variables **`SN_PHONE`** and
   **`SN_PASSWORD`**, defined in the workspace env file the daemon already
-  sources (`/Users/braydon/projects/.env`).
+  sources (`$HOME/projects/.env`).
 - When the session expires, the CLI logs back in silently using those env vars.
   You do nothing. The Supernote organizer/ingest daemons self-heal the same way.
 - For OCR (`read`, `show`) a vision key is also needed — `ZAI_API_KEY` (or set
   `SUPERNOTE_VISION_BACKEND=anthropic` + `ANTHROPIC_API_KEY`). These are already
   in the same workspace `.env`. If `read` returns empty/blank text, you almost
-  certainly forgot to source the env: `set -a; source /Users/braydon/projects/.env; set +a`.
+  certainly forgot to source the env: `set -a; source $HOME/projects/.env; set +a`.
 
 **Do not** open a browser or try to log in interactively. If the env vars are
 absent, `supernote auth login` opens a visible browser and waits for a human —
