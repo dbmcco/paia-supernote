@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": "2026-04-27T15:20:40.936627+00:00",
+    "actor": "agent-897",
+    "message": "Spawned by wg spawn --executor claude --model opus"
+  },
+  {
+    "timestamp": "2026-04-27T15:21:31.569640+00:00",
+    "actor": "agent-897",
+    "message": "Task marked as failed: Agent exited with code 1"
+  }
+]

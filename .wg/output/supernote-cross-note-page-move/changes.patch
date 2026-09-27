@@ -1,0 +1,689 @@
+diff --git a/src/paia_supernote/organizer_api.py b/src/paia_supernote/organizer_api.py
+index 1a4b454..48af685 100644
+--- a/src/paia_supernote/organizer_api.py
++++ b/src/paia_supernote/organizer_api.py
+@@ -8,7 +8,7 @@ from typing import Any, Callable
+ 
+ from PIL import Image
+ 
+-from paia_supernote import note_reorder
++from paia_supernote import note_page_ops, note_reorder
+ from paia_supernote.note_snapshot import NotebookSnapshot, PageRecord
+ 
+ 
+@@ -142,21 +142,87 @@ class OrganizerApi:
+             }
+ 
+         target_name = f"{notebook_name}.note"
+-        tmp_path = _write_temp_note(reordered_bytes)
+-        try:
+-            await self.uploader.upload_notebook(tmp_path, target_name)
+-        finally:
+-            if os.path.exists(tmp_path):
+-                os.unlink(tmp_path)
++        await self._upload_note_bytes(reordered_bytes, target_name)
+         return {
+             "ok": True,
+             "revision": hashlib.sha256(reordered_bytes).hexdigest(),
+         }
+ 
++    async def move_page_to_notebook(
++        self,
++        source_notebook: str,
++        page_id: str,
++        *,
++        source_revision: str,
++        target_notebook: str,
++    ) -> dict[str, Any]:
++        if source_notebook == target_notebook:
++            return {"ok": False, "reason": "same_notebook"}
++
++        source_bytes = await self.uploader.download_notebook(f"{source_notebook}.note")
++        source_snapshot = self.snapshot_loader(source_notebook, source_bytes)
++        if source_snapshot.revision != source_revision:
++            return {
++                "ok": False,
++                "reason": "stale_revision",
++                "current_revision": source_snapshot.revision,
++            }
++        if page_id not in source_snapshot.page_order:
++            return {
++                "ok": False,
++                "reason": "unknown_page_id",
++                "page_id": page_id,
++            }
++
++        source_page_index = source_snapshot.page_order.index(page_id)
++        target_bytes = await self.uploader.download_notebook(f"{target_notebook}.note")
++        target_bytes_with_page = note_page_ops.copy_pages_to_end(
++            source_bytes,
++            target_bytes,
++            source_pages=[source_page_index],
++        )
++        source_bytes_without_page = note_page_ops.remove_pages(
++            source_bytes,
++            pages=[source_page_index],
++        )
++
++        await self._upload_note_bytes(target_bytes_with_page, f"{target_notebook}.note")
++        try:
++            await self._upload_note_bytes(
++                source_bytes_without_page,
++                f"{source_notebook}.note",
++            )
++        except Exception as exc:
++            return {
++                "ok": False,
++                "reason": "partial_move_target_uploaded_source_failed",
++                "source_notebook": source_notebook,
++                "target_notebook": target_notebook,
++                "page_id": page_id,
++                "error": str(exc),
++            }
++
++        return {
++            "ok": True,
++            "source_notebook": source_notebook,
++            "target_notebook": target_notebook,
++            "page_id": page_id,
++            "source_revision": hashlib.sha256(source_bytes_without_page).hexdigest(),
++            "target_revision": hashlib.sha256(target_bytes_with_page).hexdigest(),
++        }
++
+     async def _load_snapshot(self, notebook_name: str) -> NotebookSnapshot:
+         note_bytes = await self.uploader.download_notebook(f"{notebook_name}.note")
+         return self.snapshot_loader(notebook_name, note_bytes)
+ 
++    async def _upload_note_bytes(self, note_bytes: bytes, target_name: str) -> None:
++        tmp_path = _write_temp_note(note_bytes)
++        try:
++            await self.uploader.upload_notebook(tmp_path, target_name)
++        finally:
++            if os.path.exists(tmp_path):
++                os.unlink(tmp_path)
++
+ 
+ def _write_temp_note(note_bytes: bytes) -> str:
+     fd, path = tempfile.mkstemp(suffix=".note")
+diff --git a/src/paia_supernote/organizer_server.py b/src/paia_supernote/organizer_server.py
+index c3bbd7c..b25d985 100644
+--- a/src/paia_supernote/organizer_server.py
++++ b/src/paia_supernote/organizer_server.py
+@@ -80,6 +80,28 @@ def make_organizer_handler(
+ 
+         def _route_post(self, path: str, payload: dict[str, Any]) -> None:
+             parts = [unquote(part) for part in path.strip("/").split("/") if part]
++            if (
++                len(parts) == 6
++                and parts[:2] == ["api", "notebooks"]
++                and parts[3] == "pages"
++                and parts[5] == "move"
++            ):
++                source_revision = str(payload.get("source_revision") or "")
++                target_notebook = str(payload.get("target_notebook") or "")
++                if not source_revision or not target_notebook:
++                    raise ValueError(
++                        "source_revision and target_notebook are required"
++                    )
++                result = self._run_async(
++                    self.organizer_api.move_page_to_notebook(
++                        parts[2],
++                        parts[4],
++                        source_revision=source_revision,
++                        target_notebook=target_notebook,
++                    )
++                )
++                self._send_move_result(result)
++                return
+             if (
+                 len(parts) == 5
+                 and parts[:2] == ["api", "notebooks"]
+@@ -150,6 +172,18 @@ def make_organizer_handler(
+                     status = HTTPStatus.UNPROCESSABLE_ENTITY
+             self._send_json(result, status=status)
+ 
++        def _send_move_result(self, result: dict[str, Any]) -> None:
++            status = HTTPStatus.OK
++            if result.get("ok") is False:
++                reason = result.get("reason")
++                if reason == "stale_revision":
++                    status = HTTPStatus.CONFLICT
++                elif reason in {"same_notebook", "unknown_page_id"}:
++                    status = HTTPStatus.UNPROCESSABLE_ENTITY
++                elif reason == "partial_move_target_uploaded_source_failed":
++                    status = HTTPStatus.INTERNAL_SERVER_ERROR
++            self._send_json(result, status=status)
++
+         def _send_file(self, path: Path, media_type: str) -> None:
+             body = path.read_bytes()
+             self.send_response(HTTPStatus.OK)
+diff --git a/src/paia_supernote/organizer_ui.py b/src/paia_supernote/organizer_ui.py
+index 97a8f90..6b68fb3 100644
+--- a/src/paia_supernote/organizer_ui.py
++++ b/src/paia_supernote/organizer_ui.py
+@@ -56,7 +56,7 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
+         name = str(notebook.get("name") or "")
+         active = " active" if name == current else ""
+         items.append(
+-            f'<a class="notebook{active}" href="/organizer?notebook={quote(name)}">{escape(name)}</a>'
++            f'<a class="notebook{active}" href="/organizer?notebook={quote(name)}" data-drop-target="notebook" data-notebook-name="{escape(name)}">{escape(name)}</a>'
+         )
+     return "\n".join(items)
+ 
+@@ -123,6 +123,7 @@ h2 { font-size: 12px; text-transform: uppercase; color: #69717c; margin-bottom:
+ .notebook-list, .sidebar section { display: flex; flex-direction: column; gap: 8px; }
+ .notebook { color: #26313d; text-decoration: none; padding: 7px 8px; border-radius: 6px; }
+ .notebook.active { background: #e8edf2; }
++.notebook.drop-hover { outline: 2px solid #6b8fab; outline-offset: 2px; background: #eef5f8; }
+ label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+ .workspace { min-width: 0; display: flex; flex-direction: column; }
+ .toolbar { height: 64px; border-bottom: 1px solid #d6d9dd; background: #ffffff; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 18px; }
+@@ -156,9 +157,11 @@ const zoom = document.querySelector('.zoom input');
+ const undoOrder = document.querySelector('#undo-order');
+ const applyOrder = document.querySelector('#apply-order');
+ const statusEl = document.querySelector('#organizer-status');
+-const originalOrder = currentOrder();
++let originalOrder = currentOrder();
+ let draggedTile = null;
+ let pointerDragging = false;
++let movingPage = false;
++let dragStartedDirty = false;
+ let dragSlots = [];
+ 
+ zoom?.addEventListener('input', () => {
+@@ -190,7 +193,7 @@ function isDirty() {
+ function updateOrderButtons() {
+   const dirty = isDirty();
+   if (undoOrder) undoOrder.disabled = !dirty;
+-  if (applyOrder) applyOrder.disabled = !dirty;
++  if (applyOrder) applyOrder.disabled = !dirty || movingPage;
+ }
+ 
+ function renumberTiles() {
+@@ -242,6 +245,7 @@ function moveDraggedTile(clientX, clientY) {
+ 
+ function startDrag(tile) {
+   draggedTile = tile;
++  dragStartedDirty = isDirty();
+   tile.classList.add('dragging');
+   buildInsertionSlots();
+ }
+@@ -249,6 +253,7 @@ function startDrag(tile) {
+ function clearDrag() {
+   draggedTile?.classList.remove('dragging');
+   draggedTile = null;
++  dragStartedDirty = false;
+   dragSlots = [];
+ }
+ 
+@@ -263,6 +268,15 @@ function restoreOriginalOrder() {
+   updateOrderButtons();
+ }
+ 
++function resetToOriginalOrderForMove() {
++  if (!grid) return;
++  const byId = Object.fromEntries([...grid.querySelectorAll('.page-tile')].map((tile) => [tile.dataset.pageId, tile]));
++  originalOrder.forEach((pageId) => {
++    if (byId[pageId]) grid.appendChild(byId[pageId]);
++  });
++  renumberTiles();
++}
++
+ function endpoint(action) {
+   const paths = {
+     preview: '/reorder/preview',
+@@ -302,6 +316,57 @@ async function applyReorder() {
+   }
+ }
+ 
++function moveEndpoint(pageId) {
++  return `/api/notebooks/${encodeURIComponent(grid.dataset.notebook)}/pages/${encodeURIComponent(pageId)}/move`;
++}
++
++async function postMove(pageId, targetNotebook) {
++  const response = await fetch(moveEndpoint(pageId), {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({
++      source_revision: grid.dataset.revision,
++      target_notebook: targetNotebook,
++    }),
++  });
++  const payload = await response.json();
++  if (!response.ok || payload.ok === false) {
++    const message = payload.reason === 'partial_move_target_uploaded_source_failed'
++      ? `Page may now exist in both notes: ${payload.error || payload.reason}`
++      : payload.error || payload.reason || 'move failed';
++    throw new Error(message);
++  }
++  return payload;
++}
++
++async function movePageToNotebook(tile, targetNotebook) {
++  if (!grid || !tile || movingPage) return;
++  if (targetNotebook === grid.dataset.notebook) return;
++  if (dragStartedDirty) {
++    setStatus('Apply or undo the current reorder before moving pages to another note.', 'error');
++    return;
++  }
++  movingPage = true;
++  updateOrderButtons();
++  setStatus(`Moving page to ${targetNotebook}...`);
++  try {
++    resetToOriginalOrderForMove();
++    const pageId = tile.dataset.pageId;
++    const payload = await postMove(pageId, targetNotebook);
++    tile.remove();
++    if (payload.source_revision) grid.dataset.revision = payload.source_revision;
++    originalOrder = currentOrder();
++    renumberTiles();
++    setStatus(`Moved page to ${targetNotebook}.`, 'success');
++  } catch (error) {
++    setStatus(error.message, 'error');
++  } finally {
++    movingPage = false;
++    clearDrag();
++    updateOrderButtons();
++  }
++}
++
+ grid?.addEventListener('dragstart', (event) => {
+   const handle = event.target.closest('.drag-handle');
+   const tile = handle?.closest('.page-tile');
+@@ -361,6 +426,28 @@ grid?.addEventListener('pointercancel', endPointerDrag);
+ undoOrder?.addEventListener('click', restoreOriginalOrder);
+ applyOrder?.addEventListener('click', applyReorder);
+ 
++document.querySelectorAll('[data-drop-target="notebook"]').forEach((target) => {
++  target.addEventListener('dragenter', (event) => {
++    if (!draggedTile || target.dataset.notebookName === grid?.dataset.notebook) return;
++    event.preventDefault();
++    target.classList.add('drop-hover');
++  });
++  target.addEventListener('dragover', (event) => {
++    if (!draggedTile || target.dataset.notebookName === grid?.dataset.notebook) return;
++    event.preventDefault();
++    event.dataTransfer.dropEffect = 'move';
++  });
++  target.addEventListener('dragleave', () => {
++    target.classList.remove('drop-hover');
++  });
++  target.addEventListener('drop', async (event) => {
++    if (!draggedTile || target.dataset.notebookName === grid?.dataset.notebook) return;
++    event.preventDefault();
++    target.classList.remove('drop-hover');
++    await movePageToNotebook(draggedTile, target.dataset.notebookName);
++  });
++});
++
+ function applyFilters() {
+   const active = [...document.querySelectorAll('[data-filter]:checked')].map((el) => el.dataset.filter);
+   document.querySelectorAll('.page-tile').forEach((tile) => {
+diff --git a/tests/test_organizer_api.py b/tests/test_organizer_api.py
+index 3142e9e..d097c5a 100644
+--- a/tests/test_organizer_api.py
++++ b/tests/test_organizer_api.py
+@@ -36,6 +36,8 @@ class _FakeUploader:
+         self.downloaded: list[str] = []
+         self.uploaded: list[tuple[str, str]] = []
+         self.uploaded_bytes: list[bytes] = []
++        self.download_payloads: dict[str, bytes] = {}
++        self.fail_upload_targets: set[str] = set()
+ 
+     async def list_notebooks(self) -> list[dict]:
+         return [
+@@ -46,11 +48,13 @@ class _FakeUploader:
+ 
+     async def download_notebook(self, target_name: str) -> bytes:
+         self.downloaded.append(target_name)
+-        return b"notebook-bytes"
++        return self.download_payloads.get(target_name, b"notebook-bytes")
+ 
+     async def upload_notebook(self, notebook_path: str, target_name: str) -> bool:
+         self.uploaded.append((notebook_path, target_name))
+         self.uploaded_bytes.append(Path(notebook_path).read_bytes())
++        if target_name in self.fail_upload_targets:
++            raise RuntimeError(f"upload failed for {target_name}")
+         return True
+ 
+ 
+@@ -104,6 +108,46 @@ def _snapshot() -> NotebookSnapshot:
+     )
+ 
+ 
++def _target_snapshot() -> NotebookSnapshot:
++    page = PageRecord(
++        page_id="target-page",
++        page_index=0,
++        starred=False,
++        page_metadata={"PAGEID": "target-page"},
++        content_hash="target",
++        image_width=1404,
++        image_height=1872,
++    )
++    return NotebookSnapshot(
++        notebook_name="Quick",
++        revision="target-rev",
++        page_order=["target-page"],
++        pages={"target-page": page},
++        metadata=NoteMetadataIndex(
++            headings_by_page_id={},
++            keywords_by_page_id={},
++            links_by_page_id={},
++            stars_by_page_id={},
++        ),
++    )
++
++
++def _move_api(tmp_path, uploader: _FakeUploader):
++    organizer_api = _api_module()
++    snapshots = {
++        ("LFW", b"source-bytes"): _snapshot(),
++        ("Quick", b"target-bytes"): _target_snapshot(),
++    }
++    return organizer_api.OrganizerApi(
++        uploader=uploader,
++        snapshot_loader=lambda name, note_bytes: snapshots.get(
++            (name, note_bytes), _snapshot()
++        ),
++        image_cache=_FakeCache(tmp_path / "page.png"),
++        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
++    )
++
++
+ @pytest.mark.asyncio
+ async def test_list_notebooks_returns_cloud_note_files_only(tmp_path) -> None:
+     organizer_api = _api_module()
+@@ -282,3 +326,145 @@ async def test_apply_reorder_uploads_reordered_bytes_without_second_download(
+     assert uploader.uploaded[0][1] == "LFW.note"
+     assert uploader.uploaded_bytes == [b"reordered-bytes"]
+     assert uploader.downloaded == ["LFW.note"]
++
++
++@pytest.mark.asyncio
++async def test_move_page_to_notebook_uploads_target_then_source(
++    tmp_path,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    organizer_api = _api_module()
++    uploader = _FakeUploader()
++    uploader.download_payloads = {
++        "LFW.note": b"source-bytes",
++        "Quick.note": b"target-bytes",
++    }
++    api = _move_api(tmp_path, uploader)
++    monkeypatch.setattr(
++        organizer_api.note_page_ops,
++        "copy_pages_to_end",
++        lambda source, target, *, source_pages: b"target-with-page",
++    )
++    monkeypatch.setattr(
++        organizer_api.note_page_ops,
++        "remove_pages",
++        lambda source, *, pages: b"source-without-page",
++    )
++
++    result = await api.move_page_to_notebook(
++        "LFW",
++        "page-b",
++        source_revision="rev-1",
++        target_notebook="Quick",
++    )
++
++    assert result["ok"] is True
++    assert result["source_notebook"] == "LFW"
++    assert result["target_notebook"] == "Quick"
++    assert result["page_id"] == "page-b"
++    assert result["source_revision"] == hashlib.sha256(b"source-without-page").hexdigest()
++    assert result["target_revision"] == hashlib.sha256(b"target-with-page").hexdigest()
++    assert uploader.downloaded == ["LFW.note", "Quick.note"]
++    assert [target for _path, target in uploader.uploaded] == ["Quick.note", "LFW.note"]
++    assert uploader.uploaded_bytes == [b"target-with-page", b"source-without-page"]
++
++
++@pytest.mark.asyncio
++async def test_move_page_to_notebook_rejects_stale_source_revision(tmp_path) -> None:
++    uploader = _FakeUploader()
++    uploader.download_payloads = {"LFW.note": b"source-bytes"}
++    api = _move_api(tmp_path, uploader)
++
++    result = await api.move_page_to_notebook(
++        "LFW",
++        "page-b",
++        source_revision="old-rev",
++        target_notebook="Quick",
++    )
++
++    assert result == {
++        "ok": False,
++        "reason": "stale_revision",
++        "current_revision": "rev-1",
++    }
++    assert uploader.downloaded == ["LFW.note"]
++    assert uploader.uploaded == []
++
++
++@pytest.mark.asyncio
++async def test_move_page_to_notebook_rejects_same_notebook(tmp_path) -> None:
++    uploader = _FakeUploader()
++    api = _move_api(tmp_path, uploader)
++
++    result = await api.move_page_to_notebook(
++        "LFW",
++        "page-b",
++        source_revision="rev-1",
++        target_notebook="LFW",
++    )
++
++    assert result == {"ok": False, "reason": "same_notebook"}
++    assert uploader.downloaded == []
++    assert uploader.uploaded == []
++
++
++@pytest.mark.asyncio
++async def test_move_page_to_notebook_rejects_unknown_source_page(tmp_path) -> None:
++    uploader = _FakeUploader()
++    uploader.download_payloads = {"LFW.note": b"source-bytes"}
++    api = _move_api(tmp_path, uploader)
++
++    result = await api.move_page_to_notebook(
++        "LFW",
++        "missing-page",
++        source_revision="rev-1",
++        target_notebook="Quick",
++    )
++
++    assert result == {
++        "ok": False,
++        "reason": "unknown_page_id",
++        "page_id": "missing-page",
++    }
++    assert uploader.downloaded == ["LFW.note"]
++    assert uploader.uploaded == []
++
++
++@pytest.mark.asyncio
++async def test_move_page_to_notebook_reports_partial_failure_after_target_upload(
++    tmp_path,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    organizer_api = _api_module()
++    uploader = _FakeUploader()
++    uploader.download_payloads = {
++        "LFW.note": b"source-bytes",
++        "Quick.note": b"target-bytes",
++    }
++    uploader.fail_upload_targets = {"LFW.note"}
++    api = _move_api(tmp_path, uploader)
++    monkeypatch.setattr(
++        organizer_api.note_page_ops,
++        "copy_pages_to_end",
++        lambda source, target, *, source_pages: b"target-with-page",
++    )
++    monkeypatch.setattr(
++        organizer_api.note_page_ops,
++        "remove_pages",
++        lambda source, *, pages: b"source-without-page",
++    )
++
++    result = await api.move_page_to_notebook(
++        "LFW",
++        "page-b",
++        source_revision="rev-1",
++        target_notebook="Quick",
++    )
++
++    assert result["ok"] is False
++    assert result["reason"] == "partial_move_target_uploaded_source_failed"
++    assert result["source_notebook"] == "LFW"
++    assert result["target_notebook"] == "Quick"
++    assert result["page_id"] == "page-b"
++    assert "upload failed for LFW.note" in result["error"]
++    assert [target for _path, target in uploader.uploaded] == ["Quick.note", "LFW.note"]
+diff --git a/tests/test_organizer_server.py b/tests/test_organizer_server.py
+index 9faf204..fb7cc4d 100644
+--- a/tests/test_organizer_server.py
++++ b/tests/test_organizer_server.py
+@@ -27,8 +27,10 @@ class _FakeOrganizerApi:
+         self.images: list[tuple[str, str, float]] = []
+         self.preview_result: dict = {"ok": True}
+         self.apply_result: dict = {"ok": True, "snapshot": {}}
++        self.move_result: dict = {"ok": True}
+         self.preview_requests: list[tuple[str, str, list[str]]] = []
+         self.apply_requests: list[tuple[str, str, list[str]]] = []
++        self.move_requests: list[tuple[str, str, str, str]] = []
+ 
+     async def list_notebooks(self) -> list[dict]:
+         return [
+@@ -89,6 +91,19 @@ class _FakeOrganizerApi:
+         self.apply_requests.append((notebook_name, expected_revision, page_order))
+         return self.apply_result
+ 
++    async def move_page_to_notebook(
++        self,
++        source_notebook: str,
++        page_id: str,
++        *,
++        source_revision: str,
++        target_notebook: str,
++    ) -> dict:
++        self.move_requests.append(
++            (source_notebook, page_id, source_revision, target_notebook)
++        )
++        return self.move_result
++
+ 
+ class _RunningServer:
+     def __init__(self, api: _FakeOrganizerApi, *, async_runner=None) -> None:
+@@ -227,6 +242,71 @@ def test_apply_reorder_post_route_returns_api_result(tmp_path: Path) -> None:
+     assert api.apply_requests == [("LFW", "rev-1", ["page-a"])]
+ 
+ 
++def test_move_page_post_route_returns_api_result(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    api.move_result = {
++        "ok": True,
++        "source_notebook": "LFW",
++        "target_notebook": "Quick",
++        "page_id": "page-a",
++    }
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/pages/page-a/move",
++            {"source_revision": "rev-1", "target_notebook": "Quick"},
++        )
++
++    assert status == 200
++    assert body == {
++        "ok": True,
++        "source_notebook": "LFW",
++        "target_notebook": "Quick",
++        "page_id": "page-a",
++    }
++    assert api.move_requests == [("LFW", "page-a", "rev-1", "Quick")]
++
++
++@pytest.mark.parametrize(
++    ("reason", "expected_status"),
++    [
++        ("stale_revision", 409),
++        ("same_notebook", 422),
++        ("unknown_page_id", 422),
++        ("partial_move_target_uploaded_source_failed", 500),
++    ],
++)
++def test_move_page_post_route_maps_domain_failures(
++    tmp_path: Path,
++    reason: str,
++    expected_status: int,
++) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    api.move_result = {"ok": False, "reason": reason, "error": "move failed"}
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/pages/page-a/move",
++            {"source_revision": "rev-1", "target_notebook": "Quick"},
++        )
++
++    assert status == expected_status
++    assert body["reason"] == reason
++
++
++def test_move_page_post_route_rejects_missing_payload_fields(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/pages/page-a/move",
++            {"source_revision": "rev-1"},
++        )
++
++    assert status == 400
++    assert "source_revision and target_notebook are required" in body["error"]
++
++
+ def test_reorder_post_route_maps_stale_revision_to_conflict(tmp_path: Path) -> None:
+     api = _FakeOrganizerApi(tmp_path / "page.png")
+     api.preview_result = {
+diff --git a/tests/test_organizer_ui.py b/tests/test_organizer_ui.py
+index 4c7c43f..2d54202 100644
+--- a/tests/test_organizer_ui.py
++++ b/tests/test_organizer_ui.py
+@@ -70,6 +70,9 @@ def test_render_index_sidebar_links_select_notebooks_through_organizer_route() -
+ 
+     assert 'href="/organizer?notebook=LFW"' in html
+     assert 'href="/organizer?notebook=Quick%20Note"' in html
++    assert 'data-drop-target="notebook"' in html
++    assert 'data-notebook-name="LFW"' in html
++    assert 'data-notebook-name="Quick Note"' in html
+     assert 'href="/notebooks/' not in html
+ 
+ 
+@@ -119,6 +122,25 @@ def test_render_index_includes_drag_apply_controls_and_contract() -> None:
+     assert "drop" in html
+ 
+ 
++def test_render_index_includes_cross_note_move_drop_contract() -> None:
++    organizer_ui = _ui_module()
++
++    html = organizer_ui.render_index(
++        notebooks=[{"name": "LFW"}, {"name": "Quick"}],
++        snapshot=_snapshot_payload(),
++    )
++
++    assert "movePageToNotebook" in html
++    assert "/move" in html
++    assert "Moving page to" in html
++    assert "Moved page to" in html
++    assert "Apply or undo the current reorder before moving pages to another note." in html
++    assert "partial_move_target_uploaded_source_failed" in html
++    assert "dragover" in html
++    assert "dragenter" in html
++    assert "dragleave" in html
++
++
+ def test_render_index_uses_deterministic_drag_slots_and_live_page_numbers() -> None:
+     organizer_ui = _ui_module()
+ 

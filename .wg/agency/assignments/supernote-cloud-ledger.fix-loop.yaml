@@ -1,0 +1,11 @@
+task_id: supernote-cloud-ledger.fix-loop
+agent_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+composition_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+timestamp: 2026-07-19T17:35:20.740495+00:00
+mode:
+  type: learning
+  dimension:
+    type: novel_composition
+  bizarre_ideation: false
+assignment_source:
+  type: native

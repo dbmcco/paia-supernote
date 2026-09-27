@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-112-2026-04-16T05-17-22.869763+00-00",
+  "task_id": ".user-braydon-112",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.76,
+  "dimensions": {
+    "semantic_match": 0.7,
+    "hallucination_rate": 0.1,
+    "requirement_coverage": 1.0,
+    "specificity_match": 0.45
+  },
+  "notes": "The inferred task captures all five acceptance criteria but reframes the intent from implementation ('build the user board with these requirements') to verification ('test that these requirements work'). The evaluator correctly identified all functional requirements but lost specificity: the actual task names specific commands (help, status, events, write, quit) while the inferred version generalizes to 'all commands are functional'. The actual task also includes workgraph constraints (max_files, max_loc, pit_stop_after) that don't appear in the reconstruction. Minimal hallucination—the inferred task adds only a procedural instruction to mark completion.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the existing user board implementation is working correctly. The user board is a terminal-based conversation interface with session persistence. Please test and confirm that: 1) The user board can be imported successfully, 2) The script runs and connects to paia-events properly, 3) The terminal UI displays correctly, 4) All commands are functional, and 5) Session persistence is working as expected. Mark the task as complete once all acceptance criteria have been verified.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:17:22.869763+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

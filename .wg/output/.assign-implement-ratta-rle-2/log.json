@@ -1,0 +1,37 @@
+[
+  {
+    "timestamp": "2026-04-14T19:10:48.920110+00:00",
+    "actor": "agent-29",
+    "user": "braydon",
+    "message": "Spawned assignment inline"
+  },
+  {
+    "timestamp": "2026-04-14T19:10:49.038131+00:00",
+    "user": "braydon",
+    "message": "Assign stderr: [assign] Auto-selecting agent: 31847164 for task 'implement-ratta-rle-2'\nError: No agent matching '3184716484e6f0ea08bb13539daf07686ee79d440505f1fdf2de0357707034c3'. Available agents: 31847164, 5bdc329d, ead7f530, eea940a6, f5143935\n\nCaused by:\n    0: YAML error: missing field `id`\n    1: missing field `id`"
+  },
+  {
+    "timestamp": "2026-04-14T19:10:49.049847+00:00",
+    "actor": "agent-29",
+    "user": "braydon",
+    "message": "Task marked as failed: wg assign exited with code 1\n---\n[assign] Auto-selecting agent: 31847164 for task 'implement-ratta-rle-2'\nError: No agent matching '3184716484e6f0ea08bb13539daf07686ee79d440505f1fdf2de0357707034c3'. Available agents: 31847164, 5bdc329d, ead7f530, eea940a6, f5143935\n\nCaused by:\n    0: YAML error: missing field `id`\n    1: missing field `id`"
+  },
+  {
+    "timestamp": "2026-04-14T19:10:51.363490+00:00",
+    "actor": "coordinator",
+    "user": "braydon",
+    "message": "Reopened for retry (was Failed, source task still needs assignment)"
+  },
+  {
+    "timestamp": "2026-04-14T19:11:21.788914+00:00",
+    "actor": "agent-30",
+    "user": "braydon",
+    "message": "Spawned assignment inline"
+  },
+  {
+    "timestamp": "2026-04-14T19:11:22.164032+00:00",
+    "actor": "agent-30",
+    "user": "braydon",
+    "message": "Task marked as done"
+  }
+]

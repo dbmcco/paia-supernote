@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-111-2026-04-16T05-12-05.893577+00-00",
+  "task_id": ".user-braydon-111",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.25,
+  "dimensions": {
+    "hallucination_rate": 0.75,
+    "requirement_coverage": 0.1,
+    "specificity_match": 0.25,
+    "semantic_match": 0.35
+  },
+  "notes": "The actual task is a minimal definition: 'User board: braydon — persistent conversation surface' with a workgraph contract. The inferred task assumes an existing implementation with bugs and adds requirements (fix auto_followups issue, ensure tests pass, CLI functionality) that do not appear in the original. The actual task has no acceptance criteria or explicit requirements—it's essentially a specification stub. The inferred version hallucinated ~75% of its content by adding implementation/testing concerns not present in the original minimalist task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Complete the user board implementation by fixing the auto_followups contract issue. Ensure all tests pass, the CLI functionality works properly, and the feature is fully operational. The user board should handle auto-followups correctly according to its contract specifications.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:12:05.893577+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-122-2026-04-16T05-53-56.548698+00-00",
+  "task_id": ".user-braydon-122",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.045,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "hallucination_rate": 0.95,
+    "specificity_match": 0.2,
+    "semantic_match": 0.0
+  },
+  "notes": "The actual task is simply to create/maintain a user board for braydon as a persistent conversation surface. The inferred task invents an entirely different objective about fixing coredrift quality issues, code churn warnings, and hardening problems. These are completely different domains—one is infrastructure/conversation surface, the other is code quality. The only minor overlaps are the codebase name (paia-supernote) and budget constraints (max_files, max_loc) that appear in the config but aren't part of the actual objective description. The inference hallucinated ~95% of its content.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Address the coredrift quality issues in the paia-supernote codebase, specifically the yellow-level warnings around code churn (churn_loc) and hardening in core modules (hardening_in_core). Review the affected files and implement necessary refactoring or code improvements to resolve these drift detection warnings while staying within the project's max_files and max_loc budget constraints.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:53:56.548698+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

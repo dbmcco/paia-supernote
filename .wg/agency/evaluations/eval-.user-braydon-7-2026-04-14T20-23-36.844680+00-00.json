@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-7-2026-04-14T20-23-36.844680+00-00",
+  "task_id": ".user-braydon-7",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.34,
+  "dimensions": {
+    "efficiency": 0.5,
+    "coordination_overhead": 0.25,
+    "blocking_impact": 0.4,
+    "correctness": 0.3,
+    "completeness": 0.4,
+    "downstream_usability": 0.15,
+    "intent_fidelity": 0.37,
+    "style_adherence": 0.35
+  },
+  "notes": "Task performance is Below Expectations due to critical signals: (1) FLIP verification failed (0.37)—the strongest indicator that work did not meet quality standards. (2) No artifacts recorded—critical organizational failure preventing downstream access or inspection. (3) Coredrift yellow on dependency_drift, hardening_in_core, churn_files, churn_loc—indicates non-compliant changes. (4) Task underspecified (no acceptance criteria)—made objective completion assessment impossible. (5) Mismatch between log claims ('fully functional') and verification results suggests inaccurate self-assessment or missed quality issues. The 2-minute execution appears rushed for feature work. Root cause: agent proceeded despite underspecified acceptance criteria and failed to resolve coredrift flags or record artifacts before marking complete. Recommendation: establish explicit acceptance criteria and verification standards before task execution.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T20:23:36.844680+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

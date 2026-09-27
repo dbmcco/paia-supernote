@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-104-2026-04-16T04-36-34.812742+00-00",
+  "task_id": ".user-braydon-104",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.18,
+  "dimensions": {
+    "correctness": 0.1,
+    "efficiency": 0.2,
+    "completeness": 0.1,
+    "style_adherence": 0.4,
+    "coordination_overhead": 0.2,
+    "intent_fidelity": 0.19,
+    "blocking_impact": 0.15,
+    "downstream_usability": 0.05
+  },
+  "notes": "Critical failure: Task marked complete with zero artifacts recorded. FLIP score 0.19 (well below 0.70 threshold) indicates fundamental intent fidelity problems. The task specification itself was flagged by coredrift as incomplete (lacking acceptance criteria), but the agent neither escalated this nor proposed acceptance criteria before marking done. Execution took only 87 seconds, suggesting no substantive work occurred. No role or motivation was assigned to the agent, which may have contributed to the failure. The task recovered from an orphaned state and should have either: (1) requested clarification on the underspecified acceptance criteria, (2) proposed concrete acceptance criteria, or (3) failed the task rather than marking it done with no deliverables. For a 'persistent conversation surface' user board task, deliverables should include code, configuration, or interface definitions—none are evident. This is unsuitable for downstream consumption.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:36:34.812742+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

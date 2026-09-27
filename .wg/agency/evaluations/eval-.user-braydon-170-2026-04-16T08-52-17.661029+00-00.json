@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-170-2026-04-16T08-52-17.661029+00-00",
+  "task_id": ".user-braydon-170",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.34,
+  "dimensions": {
+    "downstream_usability": 0.2,
+    "efficiency": 0.4,
+    "blocking_impact": 0.35,
+    "style_adherence": 0.5,
+    "coordination_overhead": 0.25,
+    "completeness": 0.3,
+    "intent_fidelity": 0.36,
+    "correctness": 0.35
+  },
+  "notes": "Critical failure: FLIP verification scored 0.36 (well below threshold 0.70), indicating fundamental issues with the delivered work. Task marked complete in ~50 seconds, but no artifacts are documented in the task log, making it impossible to assess what was actually delivered. The task itself is underspecified (empty acceptance criteria), which compounds evaluation difficulty, but the failed verification is a strong signal that the work does not meet requirements. Coredrift yellow flag (churn_loc, hardening_in_core) suggests budget/scope misalignment. Fast execution time appears to reflect insufficient work rather than efficiency. Downstream usability severely compromised by lack of artifact documentation and unclear deliverables. No explanation in task log of what 'user board: braydon persistent conversation surface' means or what was built. If this is meant to enable downstream tasks, the ambiguous completion state and missing documentation create rework overhead. For future attempts: clarify acceptance criteria before starting, document artifacts explicitly, ensure verification passes before marking done.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:52:17.661029+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

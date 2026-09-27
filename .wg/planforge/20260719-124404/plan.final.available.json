@@ -1,0 +1,1884 @@
+{
+  "schema_version": "planforge.v2",
+  "goal": "Implement the approved Supernote Cloud change ledger and agent read/write contracts: use an allowlist of Cloud notebooks, snapshot stable page IDs and content hashes, record added/updated/removed/reordered pages, OCR only new or changed pages, support explicit and per-agent cursors, make cached reads available, harden the existing write route with base-revision concurrency checks, and return Pydantic/Instructor-style structured error guidance across CLI/API/event surfaces. Preserve existing safe upload behavior and verify with focused unit/integration tests.",
+  "end_state": {
+    "contract": "The paia-supernote service has a durable SQLite-backed Cloud change ledger for allowlisted notebooks, exposes safe cached agent read/write contracts with cursor-based reads and base-revision guarded writes, and returns structured recoverable error guidance across existing CLI/event/API-like surfaces without weakening dry-run or upload safety.",
+    "acceptance_criteria": [
+      "Configuration supports an explicit allowlist of Cloud notebooks for ledger-backed ingest; non-allowlisted notebooks are ignored before download/OCR/mutation where existing Cloud metadata allows.",
+      "Ledger snapshots store notebook revision identity, stable page IDs, ordered page lists, page content hashes, and notebook content hashes in SQLite or the existing configured state store.",
+      "Diffing records added, updated, removed, and reordered pages with enough metadata for explicit-cursor and per-agent-cursor reads.",
+      "OCR is invoked only for pages whose stable ID is new or whose content hash changed; reorder-only diffs do not trigger OCR.",
+      "Cached reads return latest allowlisted notebook/page state and change batches without contacting Supernote Cloud.",
+      "Write routes require caller-supplied base revision or ledger revision and fail closed on stale, missing, or mismatched revisions before upload/apply/S3 calls.",
+      "CLI, event, and any in-repo API-like surfaces use Pydantic models with machine-readable code, message, retryability, next actions, and conflict details where applicable.",
+      "Existing safe upload behavior remains intact: dry-run paths do not mutate Cloud data, real notebook writes remain explicitly guarded, and tests do not touch production Supernote notebooks.",
+      "Focused unit tests, offline integration tests, ruff, git diff checks, roborev, and final pytest gates pass."
+    ],
+    "out_of_scope": [
+      "Real Supernote Cloud notebook mutations during test execution.",
+      "New browser organizer UI features or UI redesign.",
+      "Native Supernote cross-notebook links or generated index pages.",
+      "Dependency upgrades or uv.lock churn unless strictly required and explicitly reviewed.",
+      "Broad refactors unrelated to ledger, cached reads, write concurrency, and structured error propagation.",
+      "Automatic Quick.note triage or page moving."
+    ]
+  },
+  "assumptions": [
+    {
+      "statement": "The approved design is represented by recent docs commit d111038 and should be treated as the source of truth unless source inspection finds a conflict.",
+      "confidence": "high",
+      "validation": "Read the design document from docs during the root contract task and cite the exact file path in the task output."
+    },
+    {
+      "statement": "Existing state storage is SQLite-backed via state_db_path and can be extended without a new external service.",
+      "confidence": "high",
+      "validation": "Inspect src/paia_supernote/page_state.py and current tests before implementing the ledger store."
+    },
+    {
+      "statement": "Stable page IDs can be read from parsed .note page metadata or derived by a documented deterministic fallback only when the format lacks a durable page identifier.",
+      "confidence": "medium",
+      "validation": "Add unit tests covering native page IDs and deterministic fallback behavior before wiring ingest."
+    },
+    {
+      "statement": "The current dirty files uv.lock, _pull_ooda.py, and _pull_p29.py are pre-existing or unrelated unless the implementing agent confirms otherwise.",
+      "confidence": "medium",
+      "validation": "Run git status before editing and stage only scoped files."
+    },
+    {
+      "statement": "No local HTTP API server may exist in this repository; API obligations should bind only to in-repo API-like/event surfaces found during discovery, with absent surfaces recorded as follow-up rather than unverifiable acceptance.",
+      "confidence": "medium",
+      "validation": "Inspect src/paia_supernote/main.py, events.py, user_board.py, and cli.py during the surface-adapters task."
+    }
+  ],
+  "blocking_questions": [],
+  "speedrift_modules": [
+    {
+      "name": "coredrift",
+      "mode": "required",
+      "reason": "All tasks need Workgraph-ready execution contracts, scoped verification, and handoff discipline.",
+      "required_by": [
+        "all nodes"
+      ]
+    },
+    {
+      "name": "specdrift",
+      "mode": "required",
+      "reason": "The approved design defines shared ledger and read/write contracts that must be preserved.",
+      "required_by": [
+        "supernote-cloud-ledger.root",
+        "supernote-cloud-ledger.storage",
+        "supernote-cloud-ledger.read-contract",
+        "supernote-cloud-ledger.write-safety"
+      ]
+    },
+    {
+      "name": "datadrift",
+      "mode": "required",
+      "reason": "Snapshots, cursors, change events, and structured payloads are durable data contracts.",
+      "required_by": [
+        "supernote-cloud-ledger.storage",
+        "supernote-cloud-ledger.ingest-diff",
+        "supernote-cloud-ledger.read-contract",
+        "supernote-cloud-ledger.integration-tests"
+      ]
+    },
+    {
+      "name": "archdrift",
+      "mode": "recommended",
+      "reason": "The work spans storage, ingest, OCR, write routes, CLI, events, and possible API-like surfaces.",
+      "required_by": [
+        "supernote-cloud-ledger.root",
+        "supernote-cloud-ledger.surface-adapters",
+        "supernote-cloud-ledger.adversarial-review"
+      ]
+    },
+    {
+      "name": "qadrift",
+      "mode": "required",
+      "reason": "Focused unit and integration tests are required for diffing, OCR skip behavior, conflicts, and structured guidance.",
+      "required_by": [
+        "supernote-cloud-ledger.unit-tests",
+        "supernote-cloud-ledger.integration-tests",
+        "supernote-cloud-ledger.final-gates"
+      ]
+    },
+    {
+      "name": "secdrift",
+      "mode": "required",
+      "reason": "Write-route concurrency checks protect real notebooks from stale writes and accidental mutation.",
+      "required_by": [
+        "supernote-cloud-ledger.write-safety",
+        "supernote-cloud-ledger.structured-errors",
+        "supernote-cloud-ledger.final-gates"
+      ]
+    },
+    {
+      "name": "uxdrift",
+      "mode": "recommended",
+      "reason": "CLI/event structured error guidance is a human and agent-facing UX contract.",
+      "required_by": [
+        "supernote-cloud-ledger.structured-errors",
+        "supernote-cloud-ledger.surface-adapters"
+      ]
+    },
+    {
+      "name": "yagnidrift",
+      "mode": "required",
+      "reason": "The implementation must stay scoped and avoid broad organizer automation.",
+      "required_by": [
+        "supernote-cloud-ledger.cleanup-docs",
+        "supernote-cloud-ledger.adversarial-review"
+      ]
+    },
+    {
+      "name": "depsdrift",
+      "mode": "recommended",
+      "reason": "No dependency change is planned; uv.lock or dependency drift must be checked and blocked unless explicitly justified.",
+      "required_by": [
+        "supernote-cloud-ledger.cleanup-docs",
+        "supernote-cloud-ledger.final-gates"
+      ]
+    },
+    {
+      "name": "fixdrift",
+      "mode": "required",
+      "reason": "Test, review, and drift failures need bounded repair loops with replan conditions.",
+      "required_by": [
+        "supernote-cloud-ledger.fix-loop"
+      ]
+    },
+    {
+      "name": "reviewdrift",
+      "mode": "required",
+      "reason": "Cross-system write-safety and structured contracts require independent review before handoff.",
+      "required_by": [
+        "supernote-cloud-ledger.adversarial-review",
+        "supernote-cloud-ledger.handoff"
+      ]
+    },
+    {
+      "name": "agencydrift",
+      "mode": "recommended",
+      "reason": "Agency profiles are preferred for review when available, with Pi as execution runtime and manual fallback.",
+      "required_by": [
+        "all nodes"
+      ]
+    }
+  ],
+  "model_assignments": [
+    {
+      "role": "runtime",
+      "route": "pi",
+      "reason": "Policy evidence and user instruction specify Pi as the runtime for every Workgraph node.",
+      "fallback_policy": "ask_human"
+    },
+    {
+      "role": "architecture-critical",
+      "route": "pi:premium",
+      "reason": "Cross-system contract, write-safety, structured-error, surface integration, and adversarial review nodes require premium routing using openai-codex/gpt-5.5.",
+      "fallback_policy": "explicit_registry_fallback"
+    },
+    {
+      "role": "shared-contract-implementation",
+      "route": "pi:standard",
+      "reason": "Storage, tests, cleanup, drift, fix, and handoff are shared-contract or merge-sensitive work using zai/glm-5.2 with explicit escalation to openai-codex/gpt-5.5.",
+      "fallback_policy": "explicit_registry_fallback"
+    }
+  ],
+  "testing": {
+    "posture": "focused",
+    "unit_tests": [
+      {
+        "name": "ledger diff and snapshot unit tests",
+        "requirement": "Prove stable page ID tracking, page content hashes, notebook revisions, config allowlist behavior, migration idempotency, and added/updated/removed/reordered event generation.",
+        "command": "uv run pytest -q tests/test_cloud_change_ledger.py",
+        "required": true
+      },
+      {
+        "name": "legacy config and state migration unit tests",
+        "requirement": "Prove loading config with only legacy folio_sync_notebooks preserves behavior when no allowlist is set, and opening/migrating a pre-existing state_db_path fixture preserves prior page_state rows.",
+        "command": "uv run pytest -q tests/test_cloud_change_ledger.py tests/test_page_state.py",
+        "required": true
+      },
+      {
+        "name": "ingest OCR skip unit tests",
+        "requirement": "Prove allowlist skip before OCR/download where possible, OCR-only-new-or-changed behavior, and no OCR for reorder-only diffs.",
+        "command": "uv run pytest -q tests/test_ingest_change_ledger.py",
+        "required": true
+      },
+      {
+        "name": "cursor and cached read unit tests",
+        "requirement": "Prove explicit cursors, per-agent cursors, cached latest reads, empty-diff reads, and invalid cursor structured errors.",
+        "command": "uv run pytest -q tests/test_agent_read_contracts.py",
+        "required": true
+      },
+      {
+        "name": "write concurrency unit tests",
+        "requirement": "Prove stale, missing, and mismatched base revisions fail before upload and current base revisions preserve existing upload behavior.",
+        "command": "uv run pytest -q tests/test_write_concurrency.py",
+        "required": true
+      },
+      {
+        "name": "structured error unit tests",
+        "requirement": "Prove Pydantic error models serialize consistently for CLI/event/API-like callers with code, retryability, next actions, and details.",
+        "command": "uv run pytest -q tests/test_structured_errors.py tests/test_cli_structured_errors.py",
+        "required": true
+      }
+    ],
+    "integration_tests": [
+      {
+        "name": "offline cloud ledger integration",
+        "requirement": "Use mocked CloudPoller, reader, OCR spy, uploader spy, and temporary SQLite database to prove allowlist ingest, two-poll diffing, OCR-only-changed behavior, cached reads, and write conflict failure without real Cloud mutation.",
+        "command": "uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py",
+        "required": true
+      },
+      {
+        "name": "surface contract integration",
+        "requirement": "Exercise existing CLI/event/API-like entry points found in-repo against fixtures and assert structured error shapes and no unsafe uploads on conflict.",
+        "command": "uv run pytest -q -m integration tests/integration/test_agent_contract_surfaces.py",
+        "required": true
+      }
+    ],
+    "ux_tests": [
+      {
+        "name": "CLI structured guidance UX smoke",
+        "requirement": "Verify human-readable CLI output includes the structured error code, concise explanation, and next action while preserving JSON output for agents.",
+        "command": "uv run pytest -q tests/test_cli_structured_errors.py",
+        "required": true
+      }
+    ],
+    "waivers": [
+      {
+        "scope": "browser UI regression testing",
+        "reason": "The approved scope is storage, CLI, event, and API-like read/write contracts, not browser organizer UI changes.",
+        "approved_by": "planforge"
+      }
+    ],
+    "commands": [
+      {
+        "name": "repo and Workgraph orientation",
+        "command": "git status --short --branch && wg quickstart && wg status && driftdriver --dir /Users/braydon/projects/experiments/paia-supernote --json speedriftd status --refresh",
+        "when": "pre_edit",
+        "expected_signal": "Repo status, unrelated dirty files, Workgraph posture, and stale speedriftd lease state are visible before edits."
+      },
+      {
+        "name": "unit contract suite",
+        "command": "uv run pytest -q tests/test_cloud_change_ledger.py tests/test_ingest_change_ledger.py tests/test_agent_read_contracts.py tests/test_write_concurrency.py tests/test_structured_errors.py tests/test_cli_structured_errors.py tests/test_page_state.py",
+        "when": "per_task",
+        "expected_signal": "Focused unit tests pass for ledger, ingest, read, write, migration, and error contracts."
+      },
+      {
+        "name": "offline integration suite",
+        "command": "uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py tests/integration/test_agent_contract_surfaces.py",
+        "when": "per_task",
+        "expected_signal": "Fixture-backed integration tests pass without contacting or mutating real Supernote Cloud notebooks."
+      },
+      {
+        "name": "final quality gates",
+        "command": "uv run ruff check src/ tests/ && uv run pytest -q && uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py tests/integration/test_agent_contract_surfaces.py && git diff --check && git diff -- uv.lock",
+        "when": "pre_handoff",
+        "expected_signal": "Lint, default tests, scoped integration tests, whitespace checks, and dependency drift checks pass."
+      },
+      {
+        "name": "failure triage",
+        "command": "git diff --stat && uv run pytest -q -x",
+        "when": "on_failure",
+        "expected_signal": "First failing test and changed-file footprint are visible before repair."
+      }
+    ],
+    "evals": [
+      {
+        "name": "contract drift review",
+        "lane": "drift",
+        "reason": "Confirm implementation still matches the approved ledger and read/write contract design.",
+        "artifact": ".workgraph/planforge/20260719-124404/contract-drift-review.md"
+      },
+      {
+        "name": "dead-code and overbuild review",
+        "lane": "dead_code",
+        "reason": "Ensure no broad organizer automation, unused abstractions, or unnecessary dependencies were introduced.",
+        "artifact": ".workgraph/planforge/20260719-124404/yagni-review.md"
+      },
+      {
+        "name": "structured guidance UX review",
+        "lane": "ux",
+        "reason": "Validate CLI/event/API-like error payloads are actionable for both agents and humans.",
+        "artifact": ".workgraph/planforge/20260719-124404/structured-guidance-ux.md"
+      },
+      {
+        "name": "safe upload preservation review",
+        "lane": "custom",
+        "reason": "Verify stale write checks fail before upload and existing safe upload sequencing is unchanged for valid writes.",
+        "artifact": ".workgraph/planforge/20260719-124404/write-safety-review.md"
+      }
+    ],
+    "coverage_notes": [
+      "Tests must use fixtures, mocks, spies, and temporary SQLite databases; no real Supernote Cloud writes are allowed.",
+      "Coverage should emphasize ledger event semantics, OCR skip behavior, cursor contracts, conflict errors, and surface serialization rather than broad live Cloud tests.",
+      "If source inspection shows different existing file names, task outputs must record resolved modules while preserving behavioral acceptance criteria.",
+      "Write safety tests must document the residual TOCTOU window between last ledger poll and write if the approved design does not require live pre-write fetch."
+    ]
+  },
+  "workgraph": {
+    "root": "supernote-cloud-ledger.root",
+    "nodes": [
+      {
+        "id": "supernote-cloud-ledger.root",
+        "title": "Anchor approved Supernote ledger/read-write contract and Workgraph readiness",
+        "kind": "discovery",
+        "depends_on": [],
+        "description": "Read the approved design, current source modules, git state, and Workgraph/speedriftd state; resolve stale lease readiness before materializing implementation nodes.",
+        "touch_set": [
+          ".workgraph/planforge/20260719-124404/implementation-contract.md"
+        ],
+        "verify": [
+          "git status --short --branch",
+          "wg quickstart",
+          "wg status",
+          "driftdriver --dir /Users/braydon/projects/experiments/paia-supernote --json speedriftd status --refresh",
+          "find docs -maxdepth 3 -type f | sort | grep -i 'supernote\\|ledger\\|contract' || true"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "archdrift",
+          "agencydrift"
+        ],
+        "model_role": "contract architect",
+        "acceptance": [
+          "The approved design file from commit d111038 or current docs is identified by path.",
+          "Existing modules for state storage, ingest, OCR, uploader, CLI, events, and API-like surfaces are mapped.",
+          "The task output records unrelated dirty files and a policy not to commit them.",
+          "The stale April speedriftd lease is released or refreshed, daemon_state is confirmed non-stalled before dispatch, or this plan is explicitly recorded as manual/observe Pi execution.",
+          "Free worker capacity or manual-runtime fallback is recorded before materializing nodes."
+        ],
+        "read_first": [
+          "AGENTS.md",
+          "CLAUDE.md",
+          "README.md",
+          "pyproject.toml",
+          "docs/",
+          "src/paia_supernote/page_state.py",
+          "src/paia_supernote/cloud_poller.py",
+          "src/paia_supernote/ingest_service.py",
+          "src/paia_supernote/uploader.py",
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py"
+        ],
+        "implementation_steps": [
+          "Run repo, Workgraph, and speedriftd orientation commands.",
+          "If speedriftd is stalled with a stale lease, either refresh/release it for the scoped PlanForge session or record manual/observe Pi fallback before dispatch.",
+          "Confirm worker capacity or document that nodes will be executed manually through Pi rather than autonomous speedriftd.",
+          "Locate and summarize the approved cloud change-ledger design.",
+          "Map source files and tests that already implement adjacent behavior.",
+          "Record implementation order, non-goals, dirty-file guardrail, and API-surface availability."
+        ],
+        "edge_cases": [
+          "Design doc has moved or was renamed.",
+          "Workgraph service is running but speedriftd status is stalled.",
+          "Pre-existing dirty files overlap with intended touch set.",
+          "No in-repo API surface exists beyond CLI and events."
+        ],
+        "rollback_notes": "This task should only create a plan artifact; remove the artifact if inaccurate.",
+        "roborev_required": true,
+        "agency_profile": "agency:contract-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Approved design cannot be found.",
+          "Existing source lacks any identifiable write route or state store.",
+          "Dirty files overlap with ledger implementation files.",
+          "speedriftd cannot be recovered and manual fallback is not acceptable to the operator."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "medium",
+          "context_load": "large",
+          "verification_strength": "moderate",
+          "coordination": "shared_contract",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Shared contract discovery and Workgraph readiness require standard reasoning but do not mutate code or data.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Design and source conflict on core safety semantics.",
+            "The implementation requires changing multiple public contracts beyond approved scope."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.storage",
+        "title": "Implement durable Cloud change ledger storage",
+        "kind": "implementation",
+        "depends_on": [
+          "supernote-cloud-ledger.root"
+        ],
+        "description": "Add SQLite-backed storage for allowlisted notebook snapshots, stable page IDs, ordered page hashes, change events, and per-agent cursor state.",
+        "touch_set": [
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/page_state.py",
+          "src/paia_supernote/config.py",
+          "tests/test_cloud_change_ledger.py",
+          "tests/test_page_state.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_cloud_change_ledger.py tests/test_page_state.py",
+          "uv run ruff check src/paia_supernote/cloud_change_ledger.py src/paia_supernote/page_state.py src/paia_supernote/config.py tests/test_cloud_change_ledger.py tests/test_page_state.py"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "qadrift"
+        ],
+        "model_role": "shared-contract implementer",
+        "acceptance": [
+          "Ledger schema persists notebook snapshots, page snapshots, change events, and per-agent cursor state.",
+          "Diff logic distinguishes added, updated, removed, and reordered pages.",
+          "Reorder-only diffs preserve content hashes and do not mark pages as content-updated.",
+          "Configuration exposes an allowlist without breaking existing folio_sync_notebooks behavior.",
+          "Tests prove legacy folio_sync_notebooks config still works when allowlist is unset.",
+          "Tests prove migration/opening of an existing state_db_path fixture is idempotent and preserves prior page_state rows."
+        ],
+        "read_first": [
+          "src/paia_supernote/page_state.py",
+          "src/paia_supernote/config.py",
+          "tests/test_page_state.py",
+          "README.md"
+        ],
+        "implementation_steps": [
+          "Write failing tests for initial snapshot, unchanged snapshot, add, update, remove, reorder, cursor persistence, legacy config compatibility, and migration idempotency.",
+          "Implement minimal domain models for snapshots, page revisions, change events, and cursors.",
+          "Add SQLite DDL/migration logic compatible with temporary test databases and existing state_db_path.",
+          "Wire allowlist config parsing with defaults preserving folio_sync_notebooks behavior.",
+          "Run focused tests and ruff."
+        ],
+        "edge_cases": [
+          "Duplicate notebook names with different Cloud paths.",
+          "Page metadata lacks a stable page ID and requires deterministic fallback.",
+          "Notebook page count is zero.",
+          "Cursor points to a pruned or unknown ledger revision.",
+          "Existing state DB lacks new ledger tables."
+        ],
+        "rollback_notes": "Revert the ledger module and any page_state/config edits; no production database should be migrated during tests.",
+        "roborev_required": true,
+        "agency_profile": "agency:data-contract-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Existing state schema cannot be extended without destructive migration.",
+          "Stable page identity cannot be represented from available note parsing evidence."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "medium",
+          "context_load": "medium",
+          "verification_strength": "strong",
+          "coordination": "shared_contract",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Storage and cursor schemas are shared contracts requiring standard routing despite strong tests.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "The schema must support live migration of an existing user database.",
+            "Diff semantics become incompatible with the approved design."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.ingest-diff",
+        "title": "Wire allowlisted Cloud ingest to ledger diffs and OCR skip logic",
+        "kind": "implementation",
+        "depends_on": [
+          "supernote-cloud-ledger.storage"
+        ],
+        "description": "Integrate the ledger with Cloud polling and ingest so only allowlisted notebooks are snapshotted and only new or content-changed pages are OCRed.",
+        "touch_set": [
+          "src/paia_supernote/cloud_poller.py",
+          "src/paia_supernote/ingest_service.py",
+          "src/paia_supernote/reader.py",
+          "src/paia_supernote/cloud_change_ledger.py",
+          "tests/test_ingest_change_ledger.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_ingest_change_ledger.py tests/test_cloud_change_ledger.py",
+          "uv run ruff check src/paia_supernote/cloud_poller.py src/paia_supernote/ingest_service.py src/paia_supernote/reader.py src/paia_supernote/cloud_change_ledger.py tests/test_ingest_change_ledger.py"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "qadrift",
+          "archdrift"
+        ],
+        "model_role": "cross-system ingest implementer",
+        "acceptance": [
+          "Non-allowlisted Cloud notebooks are skipped before download/OCR where existing API data allows.",
+          "Allowlisted notebooks create ledger snapshots and change events.",
+          "OCR spy tests prove only new or content-updated pages are transcribed.",
+          "Reordered pages update ordering state without OCR."
+        ],
+        "read_first": [
+          "src/paia_supernote/cloud_poller.py",
+          "src/paia_supernote/ingest_service.py",
+          "src/paia_supernote/reader.py",
+          "src/paia_supernote/page_state.py",
+          "tests/test_ingest_service.py",
+          "tests/test_cloud_poller.py"
+        ],
+        "implementation_steps": [
+          "Add failing tests with mocked CloudPoller data and OCR spy readers.",
+          "Extract page stable IDs and content hashes during ingest using existing reader/parser boundaries.",
+          "Call ledger diffing before OCR and pass only changed pages to transcription.",
+          "Persist OCR results against the new page revision identity while preserving existing enrichment state behavior.",
+          "Run focused ingest and ledger tests."
+        ],
+        "edge_cases": [
+          "Cloud update_time changes but page hashes do not.",
+          "Notebook binary changes only in metadata.",
+          "Reader cannot extract one page image.",
+          "Allowlist uses notebook display name while Cloud uses filename or path."
+        ],
+        "rollback_notes": "Revert ingest wiring and leave storage tests only if still useful; do not alter Cloud auth or upload code from this task.",
+        "roborev_required": true,
+        "agency_profile": "agency:cross-system-implementation-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "OCR skip logic would require changing reader public APIs beyond approved scope.",
+          "Existing ingest pipeline cannot map OCR results to stable page identity."
+        ],
+        "routing": {
+          "blast_radius": "cross_system",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "high",
+          "context_load": "large",
+          "verification_strength": "moderate",
+          "coordination": "sequenced",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "premium",
+          "selected_route": "pi:premium",
+          "selected_model": "openai-codex/gpt-5.5",
+          "fallback_route": "pi:standard",
+          "fallback_model": "zai/glm-5.2",
+          "selection_reason": "Cross-system ingest, storage, and OCR behavior has user-data safety implications and requires premium routing.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Tests reveal hidden live Cloud dependencies.",
+            "The change requires redesigning enrichment or external event delivery."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.read-contract",
+        "title": "Implement cached agent read contract and cursors",
+        "kind": "implementation",
+        "depends_on": [
+          "supernote-cloud-ledger.storage"
+        ],
+        "description": "Add public read-contract functions for latest cached notebook state, changes since explicit cursor, and per-agent cursor advancement.",
+        "touch_set": [
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/cli.py",
+          "tests/test_agent_read_contracts.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_agent_read_contracts.py tests/test_cloud_change_ledger.py",
+          "uv run ruff check src/paia_supernote/agent_read_contracts.py src/paia_supernote/cloud_change_ledger.py src/paia_supernote/cli.py tests/test_agent_read_contracts.py"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "qadrift"
+        ],
+        "model_role": "agent contract implementer",
+        "acceptance": [
+          "Agents can read cached latest allowlisted notebook state without Cloud access.",
+          "Agents can request changes since an explicit cursor.",
+          "Per-agent cursors can be read, advanced, and isolated between agent IDs.",
+          "Invalid, stale, or unknown cursors produce structured contract errors rather than tracebacks."
+        ],
+        "read_first": [
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py",
+          "README.md"
+        ],
+        "implementation_steps": [
+          "Write tests for explicit cursor reads, per-agent cursor reads, cursor advancement, and cached latest reads.",
+          "Implement a small public contract module with Pydantic request/response models.",
+          "Wire minimal CLI access if an existing CLI read path exists; otherwise expose functions for surface adapters.",
+          "Ensure contract methods do not instantiate CloudPoller or perform network access.",
+          "Run focused tests."
+        ],
+        "edge_cases": [
+          "Agent ID contains spaces or path-like characters.",
+          "Cursor references an unknown notebook.",
+          "Notebook has no changes since cursor.",
+          "Requested notebook is not allowlisted."
+        ],
+        "rollback_notes": "Remove the new contract module and CLI wiring; ledger storage remains independently testable.",
+        "roborev_required": true,
+        "agency_profile": "agency:agent-contract-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "The approved design requires a different cursor shape than storage implemented.",
+          "Read contract needs network fallback, which is out of scope."
+        ],
+        "routing": {
+          "blast_radius": "cross_system",
+          "ambiguity": "medium",
+          "novelty": "new_pattern",
+          "risk": "high",
+          "context_load": "medium",
+          "verification_strength": "moderate",
+          "coordination": "shared_contract",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "premium",
+          "selected_route": "pi:premium",
+          "selected_model": "openai-codex/gpt-5.5",
+          "fallback_route": "pi:standard",
+          "fallback_model": "zai/glm-5.2",
+          "selection_reason": "The read contract is a cross-system agent-facing public API with cursor semantics, so premium routing is required.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Cursor semantics conflict with existing event or API contracts.",
+            "Contract must become backward-compatible with an undocumented external consumer."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.write-safety",
+        "title": "Harden write route with base-revision concurrency checks",
+        "kind": "implementation",
+        "depends_on": [
+          "supernote-cloud-ledger.storage"
+        ],
+        "description": "Require base revision validation before any notebook write/upload path and fail closed with conflict details when the cached ledger revision is stale or mismatched.",
+        "touch_set": [
+          "src/paia_supernote/uploader.py",
+          "src/paia_supernote/notebook_writer.py",
+          "src/paia_supernote/quick_filing_service.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "tests/test_write_concurrency.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_write_concurrency.py tests/test_cloud_change_ledger.py",
+          "uv run ruff check src/paia_supernote/uploader.py src/paia_supernote/notebook_writer.py src/paia_supernote/quick_filing_service.py src/paia_supernote/agent_write_contracts.py tests/test_write_concurrency.py"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "secdrift",
+          "qadrift"
+        ],
+        "model_role": "write-safety implementer",
+        "acceptance": [
+          "Write requests require base revision information unless an existing internal safe path is explicitly exempted and documented.",
+          "Stale, missing, or mismatched base revisions fail before upload/apply/S3 calls.",
+          "Valid current base revisions preserve existing upload sequencing and dry-run behavior.",
+          "Conflict errors include current revision, requested base revision, notebook identity, and next actions.",
+          "The output documents the residual TOCTOU window between last ledger poll and write if no live pre-write fetch is added."
+        ],
+        "read_first": [
+          "src/paia_supernote/uploader.py",
+          "src/paia_supernote/notebook_writer.py",
+          "src/paia_supernote/quick_filing_service.py",
+          "src/paia_supernote/note_page_ops.py",
+          "tests/test_uploader.py",
+          "tests/test_quick_filing_service.py"
+        ],
+        "implementation_steps": [
+          "Write failing tests with uploader spies proving conflict checks happen before upload calls.",
+          "Create minimal write request/response models if they do not already exist.",
+          "Thread base revision validation through existing write entry points without changing page operation semantics.",
+          "Preserve dry-run behavior and existing upload API signatures where possible with backward-compatible wrappers only when safe.",
+          "Document poll-interval bounded revision freshness and do not add live Cloud mutation checks unless the approved design requires them.",
+          "Run focused tests."
+        ],
+        "edge_cases": [
+          "Ledger has no snapshot for requested notebook.",
+          "Cloud notebook changed after agent cached a revision.",
+          "Dry-run write with stale base revision.",
+          "Older internal code path calls uploader directly without a write contract."
+        ],
+        "rollback_notes": "Revert write contract and uploader guard changes; never run live Cloud upload during rollback verification.",
+        "roborev_required": true,
+        "agency_profile": "agency:write-safety-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Base revision cannot be checked without contacting Cloud during writes.",
+          "Existing public uploader API would break for non-agent callers without a migration plan."
+        ],
+        "routing": {
+          "blast_radius": "cross_system",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "critical",
+          "context_load": "large",
+          "verification_strength": "moderate",
+          "coordination": "merge_sensitive",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "premium",
+          "selected_route": "pi:premium",
+          "selected_model": "openai-codex/gpt-5.5",
+          "fallback_route": "pi:standard",
+          "fallback_model": "zai/glm-5.2",
+          "selection_reason": "Write-route safety protects real user notebooks and is critical cross-system work.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Any test implies a stale write could reach upload.",
+            "Guarding writes requires changing live auth or Cloud API behavior."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.structured-errors",
+        "title": "Implement structured error guidance contract",
+        "kind": "implementation",
+        "depends_on": [
+          "supernote-cloud-ledger.read-contract",
+          "supernote-cloud-ledger.write-safety"
+        ],
+        "description": "Define Pydantic/Instructor-style structured errors and use them for ledger, cursor, allowlist, auth, and write-conflict failures.",
+        "touch_set": [
+          "src/paia_supernote/contract_errors.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py",
+          "tests/test_structured_errors.py",
+          "tests/test_cli_structured_errors.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_structured_errors.py tests/test_cli_structured_errors.py tests/test_agent_read_contracts.py tests/test_write_concurrency.py",
+          "uv run ruff check src/paia_supernote/contract_errors.py src/paia_supernote/agent_read_contracts.py src/paia_supernote/agent_write_contracts.py src/paia_supernote/cli.py src/paia_supernote/events.py tests/test_structured_errors.py tests/test_cli_structured_errors.py"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "uxdrift",
+          "secdrift",
+          "qadrift"
+        ],
+        "model_role": "structured error contract implementer",
+        "acceptance": [
+          "Error models include code, message, retryable, next_actions, and details.",
+          "Write conflicts include revision comparison details.",
+          "Allowlist and cursor errors are serializable as JSON for agents and readable in CLI output.",
+          "No surface emits raw tracebacks for expected contract failures."
+        ],
+        "read_first": [
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py",
+          "src/paia_supernote/user_board.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py"
+        ],
+        "implementation_steps": [
+          "Write tests for model serialization and expected failure classes.",
+          "Implement compact Pydantic models and helpers to convert exceptions into response payloads.",
+          "Replace expected contract exceptions in read and write paths with structured errors.",
+          "Wire CLI formatting so human output and JSON output remain deterministic.",
+          "Run focused error tests."
+        ],
+        "edge_cases": [
+          "Nested low-level exception should not leak secrets or auth cookies.",
+          "Multiple next actions for a conflict must remain ordered and deterministic.",
+          "CLI exits nonzero while still returning machine-readable JSON when requested."
+        ],
+        "rollback_notes": "Revert contract_errors and surface conversion changes; keep lower-level tests to ensure old behavior has not regressed before retrying.",
+        "roborev_required": true,
+        "agency_profile": "agency:structured-output-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Existing API framework requires a different response envelope.",
+          "Structured errors need to cross a service boundary not represented in current source."
+        ],
+        "routing": {
+          "blast_radius": "cross_system",
+          "ambiguity": "medium",
+          "novelty": "new_pattern",
+          "risk": "critical",
+          "context_load": "large",
+          "verification_strength": "moderate",
+          "coordination": "shared_contract",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "premium",
+          "selected_route": "pi:premium",
+          "selected_model": "openai-codex/gpt-5.5",
+          "fallback_route": "pi:standard",
+          "fallback_model": "zai/glm-5.2",
+          "selection_reason": "The structured-error node is cross-system and critical because it defines recoverability across CLI/event/API-like write-safety failures.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Pydantic models cannot represent required details without breaking consumers.",
+            "API-like and event surfaces disagree on response envelope semantics."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.surface-adapters",
+        "title": "Expose read/write contracts through existing CLI, event, and API-like surfaces",
+        "kind": "implementation",
+        "depends_on": [
+          "supernote-cloud-ledger.structured-errors"
+        ],
+        "description": "Wire cached read, cursor, and base-revision guarded write contracts into existing in-repo user-facing and agent-facing entry points without adding product scope.",
+        "touch_set": [
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py",
+          "src/paia_supernote/user_board.py",
+          "src/paia_supernote/main.py",
+          "tests/test_cli_structured_errors.py",
+          "tests/integration/test_agent_contract_surfaces.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_cli_structured_errors.py",
+          "uv run pytest -q -m integration tests/integration/test_agent_contract_surfaces.py",
+          "uv run ruff check src/paia_supernote/cli.py src/paia_supernote/events.py src/paia_supernote/user_board.py src/paia_supernote/main.py tests/test_cli_structured_errors.py tests/integration/test_agent_contract_surfaces.py"
+        ],
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "uxdrift",
+          "qadrift",
+          "archdrift"
+        ],
+        "model_role": "surface integration implementer",
+        "acceptance": [
+          "CLI exposes cached read/change/cursor behavior or updates existing commands to call the contract.",
+          "Existing in-repo event and API-like surfaces that actually exist can return contract responses and structured errors where applicable.",
+          "If no in-repo HTTP API exists, the task records that obligation as a follow-up instead of asserting unverifiable behavior.",
+          "No new broad organizer workflow or live Cloud mutation path is introduced."
+        ],
+        "read_first": [
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py",
+          "src/paia_supernote/user_board.py",
+          "src/paia_supernote/main.py",
+          "README.md"
+        ],
+        "implementation_steps": [
+          "Inspect current CLI/event/API-like entry points and choose minimal existing hooks.",
+          "Add fixture-backed tests for each reachable surface.",
+          "Wire commands or handlers to read/write contract modules.",
+          "Normalize expected failures through structured error rendering.",
+          "Record absent API surfaces as follow-up rather than adding a new server framework.",
+          "Run surface unit and integration tests."
+        ],
+        "edge_cases": [
+          "An expected API surface is absent or implemented outside paia_supernote.",
+          "Event service is unavailable in local tests.",
+          "CLI must preserve existing command names and exit codes."
+        ],
+        "rollback_notes": "Revert surface wiring only; leave core contract modules intact for isolated verification.",
+        "roborev_required": true,
+        "agency_profile": "agency:integration-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Surface wiring requires adding a new server framework.",
+          "Existing CLI/event semantics would be broken for current users."
+        ],
+        "routing": {
+          "blast_radius": "cross_system",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "high",
+          "context_load": "large",
+          "verification_strength": "moderate",
+          "coordination": "merge_sensitive",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "premium",
+          "selected_route": "pi:premium",
+          "selected_model": "openai-codex/gpt-5.5",
+          "fallback_route": "pi:standard",
+          "fallback_model": "zai/glm-5.2",
+          "selection_reason": "CLI/event/API-like integration is cross-system and merge-sensitive with user-facing guidance semantics.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Surface boundaries are outside this repository.",
+            "Integration tests require live services instead of offline fixtures."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.unit-tests",
+        "title": "Complete focused unit test suite for ledger, ingest, and contracts",
+        "kind": "test",
+        "depends_on": [
+          "supernote-cloud-ledger.ingest-diff",
+          "supernote-cloud-ledger.surface-adapters"
+        ],
+        "description": "Backfill and tighten unit tests for ledger diffing, ingest OCR skip, cursor reads, cached reads, write conflicts, migration compatibility, and structured error serialization.",
+        "touch_set": [
+          "tests/test_cloud_change_ledger.py",
+          "tests/test_ingest_change_ledger.py",
+          "tests/test_agent_read_contracts.py",
+          "tests/test_write_concurrency.py",
+          "tests/test_structured_errors.py",
+          "tests/test_cli_structured_errors.py",
+          "tests/test_page_state.py"
+        ],
+        "verify": [
+          "uv run pytest -q tests/test_cloud_change_ledger.py tests/test_ingest_change_ledger.py tests/test_agent_read_contracts.py tests/test_write_concurrency.py tests/test_structured_errors.py tests/test_cli_structured_errors.py tests/test_page_state.py"
+        ],
+        "modules": [
+          "coredrift",
+          "qadrift",
+          "specdrift",
+          "datadrift"
+        ],
+        "model_role": "contract test implementer",
+        "acceptance": [
+          "All required unit tests pass deterministically with temporary state.",
+          "Tests assert no OCR calls for reorder-only diffs.",
+          "Tests assert stale write conflicts happen before uploader calls.",
+          "Tests assert structured errors are stable JSON-compatible payloads.",
+          "Tests assert legacy config and state migration compatibility."
+        ],
+        "read_first": [
+          "tests/",
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/ingest_service.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "src/paia_supernote/contract_errors.py"
+        ],
+        "implementation_steps": [
+          "Review tests added by implementation nodes for missing edge cases.",
+          "Add focused tests only where behavior lacks coverage.",
+          "Use spies/mocks for OCR and upload boundaries.",
+          "Run the unit contract suite."
+        ],
+        "edge_cases": [
+          "Tests accidentally require live credentials.",
+          "Temporary SQLite files leak across tests.",
+          "Assertions are too coupled to implementation internals rather than contract behavior."
+        ],
+        "rollback_notes": "Revert only brittle or redundant test additions; do not weaken tests that encode approved safety contracts.",
+        "roborev_required": true,
+        "agency_profile": "agency:qa-contract-review-preferred-fallback-pi",
+        "handoff_detail_level": "medium",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Tests require major source rewrites to become deterministic.",
+          "A public contract behavior remains ambiguous after reading the design.",
+          "Tests uncover a possible unsafe live-upload path."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "low",
+          "novelty": "extension",
+          "risk": "medium",
+          "context_load": "medium",
+          "verification_strength": "strong",
+          "coordination": "shared_contract",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "These tests encode shared safety and data contracts, so standard routing is the minimum despite strong verification.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Test failures indicate contract ambiguity rather than a simple bug.",
+            "Tests uncover a possible unsafe live-upload path."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.integration-tests",
+        "title": "Add offline integration tests for Cloud ledger read/write contract",
+        "kind": "test",
+        "depends_on": [
+          "supernote-cloud-ledger.ingest-diff",
+          "supernote-cloud-ledger.unit-tests"
+        ],
+        "description": "Create fixture-backed integration tests for allowlist ingest, ledger diff, OCR skip, cached read, surface error, and write conflict flow without real Cloud mutation.",
+        "touch_set": [
+          "tests/integration/test_cloud_change_contract.py",
+          "tests/integration/test_agent_contract_surfaces.py",
+          "tests/fixtures/supernote_ledger/",
+          "tests/conftest.py"
+        ],
+        "verify": [
+          "uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py tests/integration/test_agent_contract_surfaces.py"
+        ],
+        "modules": [
+          "coredrift",
+          "qadrift",
+          "datadrift",
+          "secdrift"
+        ],
+        "model_role": "integration test implementer",
+        "acceptance": [
+          "Integration tests use mocks/fixtures and temporary databases only.",
+          "A two-poll scenario records added/updated/removed/reordered events correctly.",
+          "OCR spy call counts prove only new/changed pages are OCRed.",
+          "A stale write request returns structured conflict guidance and never calls uploader upload."
+        ],
+        "read_first": [
+          "tests/fixtures/README.md",
+          "tests/conftest.py",
+          "tests/integration/",
+          "src/paia_supernote/cloud_poller.py",
+          "src/paia_supernote/ingest_service.py",
+          "src/paia_supernote/uploader.py"
+        ],
+        "implementation_steps": [
+          "Create fixture factories for notebook/page metadata and page bytes rather than proprietary real .note files.",
+          "Build a mocked CloudPoller sequence for initial snapshot and changed snapshot.",
+          "Add OCR and uploader spies with explicit call-count assertions.",
+          "Exercise cached read and surface structured error responses.",
+          "Run the scoped integration command."
+        ],
+        "edge_cases": [
+          "Existing integration marker excludes tests from default pytest.",
+          "Fixture page identity does not match reader parsing assumptions.",
+          "Mocked upload path accidentally bypasses concurrency validation."
+        ],
+        "rollback_notes": "Remove integration fixtures and tests if invalid; do not alter production code from this task except tiny testability seams approved by prior nodes.",
+        "roborev_required": true,
+        "agency_profile": "agency:integration-qa-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Offline fixtures cannot represent required page identity semantics.",
+          "Integration requires live Supernote Cloud credentials."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "medium",
+          "context_load": "medium",
+          "verification_strength": "moderate",
+          "coordination": "sequenced",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Integration tests coordinate multiple contracts and have moderate verification, so standard routing is required.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Test design exposes real-data safety concerns.",
+            "Multiple subsystems fail in ways that require architecture changes."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.cleanup-docs",
+        "title": "Update docs and remove overbuild/dependency drift",
+        "kind": "cleanup",
+        "depends_on": [
+          "supernote-cloud-ledger.integration-tests"
+        ],
+        "description": "Document config and agent contracts, remove unused scaffolding introduced during implementation, and ensure uv.lock is unchanged unless justified.",
+        "touch_set": [
+          "README.md",
+          "docs/supernote-cloud-change-ledger-contracts.md",
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "src/paia_supernote/contract_errors.py",
+          "tests/test_cloud_change_ledger.py",
+          "tests/test_ingest_change_ledger.py",
+          "tests/test_agent_read_contracts.py",
+          "tests/test_write_concurrency.py",
+          "tests/test_structured_errors.py",
+          "tests/test_cli_structured_errors.py",
+          "tests/integration/test_cloud_change_contract.py",
+          "tests/integration/test_agent_contract_surfaces.py"
+        ],
+        "verify": [
+          "uv run ruff check src/ tests/",
+          "git diff --stat",
+          "git diff -- uv.lock"
+        ],
+        "modules": [
+          "coredrift",
+          "yagnidrift",
+          "specdrift",
+          "depsdrift"
+        ],
+        "model_role": "cleanup and docs implementer",
+        "acceptance": [
+          "README or design docs describe allowlist config, cached reads, cursors, base-revision writes, structured errors, and the poll-interval bounded TOCTOU window.",
+          "No unused temporary scaffolding, dead abstractions, or debug scripts are left in scoped source/tests.",
+          "uv.lock is unchanged unless a task output explains an unavoidable dependency reason."
+        ],
+        "read_first": [
+          "README.md",
+          "docs/",
+          "pyproject.toml",
+          "uv.lock",
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "src/paia_supernote/contract_errors.py",
+          "tests/"
+        ],
+        "implementation_steps": [
+          "Update only user-relevant docs for the implemented contract.",
+          "Search for unused helpers or TODO scaffolding introduced by prior tasks.",
+          "Remove dead code with tests still passing.",
+          "Inspect uv.lock diff and revert unrelated lockfile churn unless a dependency change is explicitly justified."
+        ],
+        "edge_cases": [
+          "Docs file from approved design should be amended, not duplicated.",
+          "A helper appears unused but is part of a public API.",
+          "uv.lock was dirty before the session."
+        ],
+        "rollback_notes": "Revert docs and cleanup edits separately from functional source changes if they obscure behavior.",
+        "roborev_required": true,
+        "agency_profile": "agency:yagni-review-preferred-fallback-pi",
+        "handoff_detail_level": "medium",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Cleanup would require changing behavior not covered by tests.",
+          "Lockfile changes appear necessary despite no dependency plan."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "low",
+          "novelty": "known_pattern",
+          "risk": "medium",
+          "context_load": "medium",
+          "verification_strength": "moderate",
+          "coordination": "merge_sensitive",
+          "requires_design_judgment": true,
+          "requires_domain_safety": false,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Cleanup is merge-sensitive and dependency-adjacent, so standard routing is the minimum.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Cleanup reveals architectural duplication across surfaces.",
+            "Docs and implementation disagree on safety-critical behavior."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.final-gates",
+        "title": "Run final drift, dependency, and quality gates",
+        "kind": "drift",
+        "depends_on": [
+          "supernote-cloud-ledger.cleanup-docs"
+        ],
+        "description": "Run lint, unit tests, integration tests, spec/sec/deps/YAGNI drift, and safe-upload preservation checks before review.",
+        "touch_set": [
+          ".workgraph/planforge/20260719-124404/final-gates.md"
+        ],
+        "verify": [
+          "uv run ruff check src/ tests/",
+          "uv run pytest -q",
+          "uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py tests/integration/test_agent_contract_surfaces.py",
+          "git diff --check",
+          "git diff -- uv.lock"
+        ],
+        "modules": [
+          "coredrift",
+          "qadrift",
+          "specdrift",
+          "datadrift",
+          "yagnidrift",
+          "secdrift",
+          "depsdrift"
+        ],
+        "model_role": "drift gate runner",
+        "acceptance": [
+          "All final verification commands pass or failures are captured for the fix-loop node.",
+          "Final gate artifact records commands, exit signals, unrelated dirty files, dependency drift, and unresolved risks.",
+          "No command mutates real Supernote Cloud notebooks.",
+          "Any secdrift/write-safety finding blocks handoff until fixed."
+        ],
+        "read_first": [
+          ".workgraph/planforge/20260719-124404/implementation-contract.md",
+          "pyproject.toml",
+          "README.md",
+          "tests/",
+          "src/paia_supernote/"
+        ],
+        "implementation_steps": [
+          "Run final quality commands exactly as listed.",
+          "Record outputs and first failures in the final gate artifact.",
+          "Check git diff for unrelated files, lockfile churn, and generated artifacts.",
+          "Create repair input for the fix-loop node if anything fails."
+        ],
+        "edge_cases": [
+          "Integration tests are skipped by default pytest marker and need explicit command.",
+          "Ruff reports pre-existing issues outside touched files.",
+          "Unrelated dirty files remain in the working tree."
+        ],
+        "rollback_notes": "This node should only write gate artifacts; delete inaccurate artifacts and rerun commands.",
+        "roborev_required": true,
+        "agency_profile": "agency:qa-drift-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Same failure class recurs after two repairs.",
+          "A final gate implies possible live-data mutation risk.",
+          "A secdrift finding suggests stale writes can reach upload."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "low",
+          "novelty": "known_pattern",
+          "risk": "medium",
+          "context_load": "medium",
+          "verification_strength": "strong",
+          "coordination": "merge_sensitive",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Final gates are merge-sensitive and safety-sensitive; standard routing is required even with strong command verification.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Gate output suggests a write-safety regression.",
+            "Failures require cross-system redesign."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.adversarial-review",
+        "title": "Bounded adversarial review of ledger and write safety",
+        "kind": "review",
+        "depends_on": [
+          "supernote-cloud-ledger.final-gates"
+        ],
+        "description": "Perform a bounded adversarial review focused on stale writes, cursor confusion, unsafe Cloud mutation, structured error recoverability, overbuild, dependency drift, and declared TOCTOU residual risk.",
+        "touch_set": [
+          ".workgraph/planforge/20260719-124404/adversarial-review.md",
+          ".workgraph/planforge/20260719-124404/roborev.md"
+        ],
+        "verify": [
+          "test -s .workgraph/planforge/20260719-124404/adversarial-review.md",
+          "test -s .workgraph/planforge/20260719-124404/roborev.md"
+        ],
+        "modules": [
+          "reviewdrift",
+          "secdrift",
+          "datadrift",
+          "yagnidrift",
+          "agencydrift"
+        ],
+        "model_role": "bounded adversarial reviewer",
+        "acceptance": [
+          "Review explicitly checks stale write race, invalid cursor, reorder-only OCR, allowlist bypass, structured error guidance, dependency drift, and absence of live mutation tests.",
+          "Review is bounded to two rounds and does not request broad rewrites outside approved scope.",
+          "Blocking findings are converted into fix-loop tasks or explicitly recorded as accepted residual risks.",
+          "The cached-ledger TOCTOU window is accepted, documented, or escalated if it violates the approved design."
+        ],
+        "read_first": [
+          ".workgraph/planforge/20260719-124404/final-gates.md",
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "src/paia_supernote/contract_errors.py",
+          "tests/"
+        ],
+        "implementation_steps": [
+          "Read final gate artifact and diffs.",
+          "Attack stale base revision, cursor replay, allowlist bypass, reorder-only OCR, dependency drift, and expected auth/conflict errors.",
+          "Run or cite focused commands where needed.",
+          "Write roborev and adversarial review artifacts with blocking, nonblocking, and no-op findings."
+        ],
+        "edge_cases": [
+          "Reviewer discovers issue requiring live Cloud validation.",
+          "Review proposes broad UI or organizer automation outside scope.",
+          "Review duplicates an already-tested scenario without new evidence."
+        ],
+        "rollback_notes": "Review artifacts can be superseded by a new round; do not modify code directly in this node.",
+        "roborev_required": true,
+        "agency_profile": "agency:adversarial-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "A blocking safety finding cannot be reproduced with fixtures.",
+          "Review identifies architectural contradiction with the approved design."
+        ],
+        "routing": {
+          "blast_radius": "cross_system",
+          "ambiguity": "high",
+          "novelty": "architecture",
+          "risk": "critical",
+          "context_load": "large",
+          "verification_strength": "moderate",
+          "coordination": "shared_contract",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "premium",
+          "selected_route": "pi:premium",
+          "selected_model": "openai-codex/gpt-5.5",
+          "fallback_route": "pi:standard",
+          "fallback_model": "zai/glm-5.2",
+          "selection_reason": "Critical cross-system adversarial safety review requires premium reasoning.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Review cannot determine if a Cloud mutation path is safe.",
+            "Two review rounds fail to converge."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.fix-loop",
+        "title": "Repair blocking test, drift, or review findings",
+        "kind": "fix",
+        "depends_on": [
+          "supernote-cloud-ledger.adversarial-review"
+        ],
+        "description": "Address blocking findings from tests, drift gates, or adversarial review with bounded repairs, then rerun exact failing commands.",
+        "touch_set": [
+          "src/paia_supernote/cloud_change_ledger.py",
+          "src/paia_supernote/agent_read_contracts.py",
+          "src/paia_supernote/agent_write_contracts.py",
+          "src/paia_supernote/contract_errors.py",
+          "src/paia_supernote/uploader.py",
+          "src/paia_supernote/notebook_writer.py",
+          "src/paia_supernote/quick_filing_service.py",
+          "src/paia_supernote/ingest_service.py",
+          "src/paia_supernote/cloud_poller.py",
+          "src/paia_supernote/reader.py",
+          "src/paia_supernote/cli.py",
+          "src/paia_supernote/events.py",
+          "src/paia_supernote/config.py",
+          "src/paia_supernote/page_state.py",
+          "README.md",
+          "docs/supernote-cloud-change-ledger-contracts.md",
+          "tests/test_cloud_change_ledger.py",
+          "tests/test_ingest_change_ledger.py",
+          "tests/test_agent_read_contracts.py",
+          "tests/test_write_concurrency.py",
+          "tests/test_structured_errors.py",
+          "tests/test_cli_structured_errors.py",
+          "tests/test_page_state.py",
+          "tests/integration/test_cloud_change_contract.py",
+          "tests/integration/test_agent_contract_surfaces.py",
+          "tests/conftest.py",
+          ".workgraph/planforge/20260719-124404/fix-loop.md"
+        ],
+        "verify": [
+          "uv run ruff check src/ tests/",
+          "uv run pytest -q",
+          "uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py tests/integration/test_agent_contract_surfaces.py"
+        ],
+        "modules": [
+          "fixdrift",
+          "coredrift",
+          "qadrift",
+          "reviewdrift",
+          "secdrift"
+        ],
+        "model_role": "bounded repair implementer",
+        "acceptance": [
+          "All blocking findings are fixed or escalated with evidence.",
+          "Exact failing commands from the gate or review pass after repair.",
+          "No repair expands scope beyond named contract modules, tests, docs, or artifacts.",
+          "Any touch outside the named touch set requires explicit authorization recorded in fix-loop.md."
+        ],
+        "read_first": [
+          ".workgraph/planforge/20260719-124404/final-gates.md",
+          ".workgraph/planforge/20260719-124404/adversarial-review.md",
+          ".workgraph/planforge/20260719-124404/roborev.md",
+          "git diff --stat output captured by prior nodes"
+        ],
+        "implementation_steps": [
+          "Classify findings as blocking, advisory, duplicate, or out of scope.",
+          "Patch only the smallest named source/test/doc set needed for blocking findings.",
+          "For write-safety or secdrift findings, escalate to premium after one failed repair attempt.",
+          "Rerun the exact command that failed before running broad gates.",
+          "Record repair attempts and remaining risks."
+        ],
+        "edge_cases": [
+          "Finding requires live Cloud validation.",
+          "Fix conflicts with approved design.",
+          "Same failure recurs after two attempts.",
+          "A needed file is outside the bounded touch set."
+        ],
+        "rollback_notes": "Use git diff to revert unsuccessful repair patches; do not revert unrelated successful contract implementation.",
+        "roborev_required": true,
+        "agency_profile": "agency:repair-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "One repair attempt fails for a write-safety/security finding.",
+          "Two repair attempts fail for any non-security issue class.",
+          "Repair requires new dependency, migration, or live Cloud access.",
+          "Fix would weaken write-route safety or allowlist enforcement."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "medium",
+          "novelty": "extension",
+          "risk": "high",
+          "context_load": "medium",
+          "verification_strength": "moderate",
+          "coordination": "merge_sensitive",
+          "requires_design_judgment": true,
+          "requires_domain_safety": true,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Repairs are merge-sensitive shared-contract work; standard is sufficient unless write-safety/security escalation triggers premium.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "The same non-security failure repeats after two repair attempts.",
+            "A write-safety or security finding fails after one repair attempt.",
+            "The repair touches write-safety architecture."
+          ]
+        }
+      },
+      {
+        "id": "supernote-cloud-ledger.handoff",
+        "title": "Final status, commit, push, and handoff",
+        "kind": "handoff",
+        "depends_on": [
+          "supernote-cloud-ledger.fix-loop"
+        ],
+        "description": "Verify final state, isolate unrelated dirty files, commit scoped changes, pull --rebase, push, update Workgraph status when dispatch was confirmed, and hand off residual risks.",
+        "touch_set": [
+          ".workgraph/planforge/20260719-124404/handoff.md",
+          "git index",
+          "Workgraph task statuses"
+        ],
+        "verify": [
+          "git status --short --branch",
+          "uv run ruff check src/ tests/",
+          "uv run pytest -q",
+          "uv run pytest -q -m integration tests/integration/test_cloud_change_contract.py tests/integration/test_agent_contract_surfaces.py",
+          "git pull --rebase",
+          "git push",
+          "git status --short --branch"
+        ],
+        "modules": [
+          "coredrift",
+          "reviewdrift",
+          "qadrift",
+          "secdrift"
+        ],
+        "model_role": "release handoff operator",
+        "acceptance": [
+          "Only scoped implementation, tests, docs, and plan artifacts are committed.",
+          "Pre-existing unrelated dirty files are preserved or explicitly excluded from the commit.",
+          "Quality gates pass immediately before commit.",
+          "git push succeeds and final status reports branch up to date with origin or records any remote policy blocker.",
+          "Handoff artifact lists commands run, changed files, follow-up issues, residual risks, and the cached-ledger TOCTOU note.",
+          "Workgraph status is updated only if dispatch was confirmed; otherwise manual-runtime fallback is recorded."
+        ],
+        "read_first": [
+          ".workgraph/planforge/20260719-124404/final-gates.md",
+          ".workgraph/planforge/20260719-124404/adversarial-review.md",
+          ".workgraph/planforge/20260719-124404/fix-loop.md",
+          "AGENTS.md",
+          "git status --short --branch"
+        ],
+        "implementation_steps": [
+          "Run final verification commands.",
+          "Review git diff and stage only scoped files.",
+          "Create follow-up Workgraph tasks or issues for accepted residual work.",
+          "Commit with a concise supernote-scoped message.",
+          "Run git pull --rebase, resolve conflicts without touching unrelated files, then git push.",
+          "Record final status, Workgraph update status, and handoff notes."
+        ],
+        "edge_cases": [
+          "Repository is already ahead of origin before this plan.",
+          "Unrelated dirty files remain in worktree.",
+          "Remote rebase conflicts with concurrent changes.",
+          "Push is rejected by remote policy.",
+          "Workgraph was executed manually because speedriftd remained stalled."
+        ],
+        "rollback_notes": "Before commit, unstage with git restore --staged; after a failed rebase, use git rebase --abort and replan if conflicts affect unrelated dirty files.",
+        "roborev_required": true,
+        "agency_profile": "agency:release-review-preferred-fallback-pi",
+        "handoff_detail_level": "high",
+        "small_model_ready": false,
+        "escalation_conditions": [
+          "Final tests fail after a passing fix loop.",
+          "git pull --rebase conflicts with unrelated dirty files.",
+          "Push fails for credentials or remote policy."
+        ],
+        "routing": {
+          "blast_radius": "shared_module",
+          "ambiguity": "low",
+          "novelty": "known_pattern",
+          "risk": "medium",
+          "context_load": "medium",
+          "verification_strength": "strong",
+          "coordination": "merge_sensitive",
+          "requires_design_judgment": true,
+          "requires_domain_safety": false,
+          "route_tier": "standard",
+          "selected_route": "pi:standard",
+          "selected_model": "zai/glm-5.2",
+          "fallback_route": "pi:premium",
+          "fallback_model": "openai-codex/gpt-5.5",
+          "selection_reason": "Final handoff is merge-sensitive and includes commit/push decisions, so standard routing is required rather than cheap.",
+          "escalation_route": "pi:premium",
+          "escalation_conditions": [
+            "Rebase conflict touches write-safety or ledger contracts.",
+            "Remote state suggests another agent changed the same contract files."
+          ]
+        }
+      }
+    ]
+  },
+  "agency_plan": {
+    "default_runtime": "pi",
+    "required": false,
+    "fallback_runtime": "manual",
+    "profiles": [
+      "agency:contract-review-preferred-fallback-pi",
+      "agency:data-contract-review-preferred-fallback-pi",
+      "agency:cross-system-implementation-preferred-fallback-pi",
+      "agency:agent-contract-review-preferred-fallback-pi",
+      "agency:write-safety-review-preferred-fallback-pi",
+      "agency:structured-output-review-preferred-fallback-pi",
+      "agency:integration-review-preferred-fallback-pi",
+      "agency:qa-contract-review-preferred-fallback-pi",
+      "agency:integration-qa-review-preferred-fallback-pi",
+      "agency:yagni-review-preferred-fallback-pi",
+      "agency:qa-drift-review-preferred-fallback-pi",
+      "agency:adversarial-review-preferred-fallback-pi",
+      "agency:repair-review-preferred-fallback-pi",
+      "agency:release-review-preferred-fallback-pi"
+    ],
+    "constraints": [
+      "Pi remains the Workgraph runtime for every node.",
+      "Agency profiles are preferred for review support when available but must not dispatch broad autonomous backlog work.",
+      "If Agency is unavailable, continue with Pi-selected models or manual Pi execution and record the fallback in the node output.",
+      "Agency review must respect the approved scope and must not request live Supernote Cloud mutations.",
+      "Agency fallback discipline is checked post-task via agencydrift and cannot silently switch to Codex or Claude defaults.",
+      "Available execution models for this run are limited to openai-codex/gpt-5.5 and zai/glm-5.2."
+    ]
+  },
+  "review_plan": {
+    "roborev_required": true,
+    "agency_review_required": true,
+    "review_rounds": 2,
+    "required_artifacts": [
+      ".workgraph/planforge/20260719-124404/roborev.md",
+      ".workgraph/planforge/20260719-124404/adversarial-review.md",
+      ".workgraph/planforge/20260719-124404/final-gates.md",
+      ".workgraph/planforge/20260719-124404/handoff.md"
+    ],
+    "closeout_policy": "address_or_record_followup"
+  },
+  "adversarial_review": {
+    "enabled": true,
+    "boundary": "Review only the approved Cloud change ledger, cached read/cursor contract, base-revision write safety including documented poll-interval TOCTOU risk, structured errors, existing CLI/event/API-like surfaces found in repo, tests, docs, dependency drift, Workgraph readiness, and preservation of existing safe upload behavior.",
+    "max_rounds": 2,
+    "stop_conditions": [
+      "All blocking stale-write, allowlist, cursor, OCR-skip, structured-error, dependency-drift, and Workgraph-readiness findings are fixed.",
+      "Remaining findings are advisory and have documented follow-up tasks or residual-risk acceptance.",
+      "Two rounds complete without new blocking evidence."
+    ],
+    "must_not": [
+      "Do not request real Supernote Cloud writes or production notebook mutations.",
+      "Do not broaden scope into organizer UI redesign, native links, or automatic Quick.note triage.",
+      "Do not introduce new dependencies or lockfile changes unless a blocking implementation need is proven.",
+      "Do not weaken dry-run behavior, upload sequencing, or base-revision checks to satisfy tests.",
+      "Do not require live Cloud validation to close an offline fixture-backed safety review without explicit human approval."
+    ]
+  },
+  "handoff_quality": {
+    "target_models": [
+      "openai-codex/gpt-5.5",
+      "zai/glm-5.2"
+    ],
+    "detail_level": "high",
+    "require_read_first": true,
+    "require_stepwise_tasks": true,
+    "require_escalation_conditions": true
+  },
+  "fix_loops": [
+    {
+      "trigger": "Focused unit or integration test failure",
+      "action": "Create or use the fix-loop node, patch the smallest failing contract area, and rerun the exact failing command before broad gates.",
+      "max_attempts": 2,
+      "escalation": "If the same non-security failure class recurs twice, stop and replan with premium routing."
+    },
+    {
+      "trigger": "Write-safety, secdrift, or unsafe-upload finding",
+      "action": "Block handoff, repair the finding, add regression coverage, and rerun the exact write-safety command before broader gates.",
+      "max_attempts": 1,
+      "escalation": "Escalate to premium review and ask the human if repair requires live Cloud validation or broader architecture change."
+    },
+    {
+      "trigger": "Unrelated dirty files, lockfile drift, or merge conflict threatens scoped commit",
+      "action": "Do not stage unrelated files; isolate the intended diff, document unresolved dirty state, and re-run git status.",
+      "max_attempts": 1,
+      "escalation": "Ask the human before touching unrelated uv.lock, _pull_ooda.py, or _pull_p29.py changes."
+    },
+    {
+      "trigger": "Any path would require real Supernote Cloud mutation during verification",
+      "action": "Stop that path, replace with fixture-backed validation, and record the live-validation gap as a residual risk or follow-up.",
+      "max_attempts": 1,
+      "escalation": "Ask the human for explicit approval before any production-like Cloud operation."
+    }
+  ],
+  "drift_gates": [
+    {
+      "name": "pre-task contract drift",
+      "when": "pre_task",
+      "modules": [
+        "coredrift",
+        "specdrift"
+      ],
+      "response_policy": "block_until_fixed"
+    },
+    {
+      "name": "post-task data, UX, and Agency fallback drift",
+      "when": "post_task",
+      "modules": [
+        "datadrift",
+        "qadrift",
+        "uxdrift",
+        "agencydrift"
+      ],
+      "response_policy": "create_followup"
+    },
+    {
+      "name": "post-task dependency and YAGNI drift",
+      "when": "post_task",
+      "modules": [
+        "yagnidrift",
+        "depsdrift"
+      ],
+      "response_policy": "block_until_fixed"
+    },
+    {
+      "name": "final safety handoff gate",
+      "when": "pre_handoff",
+      "modules": [
+        "qadrift",
+        "reviewdrift",
+        "coredrift",
+        "secdrift"
+      ],
+      "response_policy": "block_until_fixed"
+    },
+    {
+      "name": "repeated failure replan gate",
+      "when": "on_failure",
+      "modules": [
+        "fixdrift",
+        "archdrift"
+      ],
+      "response_policy": "replan"
+    }
+  ],
+  "handoff": {
+    "completion_policy": "Complete only after scoped changes are verified, reviewed, committed, pushed, Workgraph status is updated when dispatch was confirmed, manual fallback is documented when used, and residual risks/follow-ups are recorded.",
+    "commit_policy": "commit_and_push_after_verification",
+    "push_policy": "push_after_commit",
+    "artifacts": [
+      ".workgraph/planforge/20260719-124404/implementation-contract.md",
+      ".workgraph/planforge/20260719-124404/final-gates.md",
+      ".workgraph/planforge/20260719-124404/roborev.md",
+      ".workgraph/planforge/20260719-124404/adversarial-review.md",
+      ".workgraph/planforge/20260719-124404/fix-loop.md",
+      ".workgraph/planforge/20260719-124404/handoff.md"
+    ]
+  },
+  "risks": [
+    {
+      "risk": "Stable page IDs may not exist in all parsed .note fixtures or older notebook formats.",
+      "impact": "high",
+      "mitigation": "Implement and document a deterministic fallback hash strategy only after tests prove reorder stability; escalate if impossible.",
+      "owner": "storage implementer"
+    },
+    {
+      "risk": "Base-revision validation against cached ledger state leaves a TOCTOU window if Cloud changes after the last poll and before write.",
+      "impact": "high",
+      "mitigation": "Document the poll_interval-bounded freshness window in write-safety output and handoff; do not claim live Cloud conflict prevention unless approved design adds a live pre-write fetch.",
+      "owner": "write-safety implementer"
+    },
+    {
+      "risk": "Base-revision checks might be bypassed by an older direct uploader call path.",
+      "impact": "high",
+      "mitigation": "Use uploader spies and integration tests to prove conflict checks happen before upload and review direct upload APIs in roborev.",
+      "owner": "write-safety implementer"
+    },
+    {
+      "risk": "Structured error envelopes may diverge across CLI, event, and API-like surfaces.",
+      "impact": "medium",
+      "mitigation": "Centralize Pydantic models and test every reachable surface against the same serialized fields.",
+      "owner": "structured error implementer"
+    },
+    {
+      "risk": "Pre-existing dirty files or ahead-of-origin state may complicate final commit/push.",
+      "impact": "medium",
+      "mitigation": "Inspect git status before edits, stage only scoped paths, and escalate before touching unrelated uv.lock or pull helper scripts.",
+      "owner": "handoff operator"
+    },
+    {
+      "risk": "Workgraph and speedriftd evidence conflict, with service running but speedriftd stalled under a stale April lease.",
+      "impact": "medium",
+      "mitigation": "Root task must refresh/release the stale lease or explicitly record manual Pi execution before materializing nodes; handoff Workgraph update is conditional on confirmed dispatch.",
+      "owner": "root contract task"
+    }
+  ],
+  "decision_log": [
+    {
+      "decision": "Use Pi as the runtime for every Workgraph node.",
+      "reason": "Policy evidence and the user request both specify Pi as the default execution route.",
+      "evidence": [
+        "policy.default_execution_route=pi",
+        "user instruction: Use Pi as the runtime"
+      ],
+      "owner": "policy"
+    },
+    {
+      "decision": "Use only openai-codex/gpt-5.5 and zai/glm-5.2 for this run.",
+      "reason": "The user explicitly limited available execution models and critic finding F10 blocks Anthropic assignments.",
+      "evidence": [
+        "user instruction: Available execution models for this run are only openai-codex/gpt-5.5 and zai/glm-5.2",
+        "critic finding F10"
+      ],
+      "owner": "policy"
+    },
+    {
+      "decision": "Route cross-system ingest, read/write, surface, structured-error, and adversarial review nodes to premium.",
+      "reason": "These nodes affect multiple subsystems and user notebook safety; the validator requires route_tier not lower than premium for cross-system or critical work.",
+      "evidence": [
+        "goal includes Cloud ledger, OCR, read/write contracts, CLI/event/API-like surfaces",
+        "user instruction: structured-error contract node route_tier=premium if cross-system/critical"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Route storage, shared tests, cleanup, drift, fix, and handoff nodes to standard.",
+      "reason": "They are shared-contract, merge-sensitive, dependency-adjacent, or safety-adjacent tasks and should not be cheap despite focused verification.",
+      "evidence": [
+        "schema and user instructions require standard minimum for shared contracts, storage/API changes, review, and drift tasks",
+        "repo has pre-existing dirty/ahead state"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Do not include live Supernote Cloud writes in verification.",
+      "reason": "The repo guidance requires conservative notebook mutation behavior and the goal asks to preserve safe upload behavior.",
+      "evidence": [
+        "AGENTS.md manual move process forbids mutation without dry-run proof",
+        "goal says preserve existing safe upload behavior"
+      ],
+      "owner": "policy"
+    },
+    {
+      "decision": "Treat browser UI testing as waived while requiring CLI structured guidance UX tests.",
+      "reason": "The approved scope is CLI/event/API-like and storage contract work, not a web UI feature.",
+      "evidence": [
+        "goal names CLI/API/event surfaces",
+        "no requested browser UI change"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Make ingest-diff a required dependency of unit and integration tests.",
+      "reason": "OCR-skip and two-poll diff assertions are invalid unless the ingest integration work has completed.",
+      "evidence": [
+        "critic finding F1",
+        "integration acceptance requires OCR spy and two-poll diff behavior"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Enable depsdrift as recommended and block dependency drift post-task.",
+      "reason": "The plan checks uv.lock and forbids unplanned dependency changes, so depsdrift must be active rather than excluded.",
+      "evidence": [
+        "critic finding F2",
+        "uv.lock is dirty in git status"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Make secdrift block pre-handoff.",
+      "reason": "Write safety is the highest-risk area; any secdrift finding must block release.",
+      "evidence": [
+        "critic finding F3",
+        "end-state acceptance requires preservation of safe upload behavior"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Bound fix-loop touch set to named contract modules, tests, docs, and artifact files.",
+      "reason": "Whole-tree repair touch sets undermine scoped review and unrelated-file protection.",
+      "evidence": [
+        "critic finding F4",
+        "repo guidance: keep edits minimal and scoped"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Set small_model_ready=false on all current nodes.",
+      "reason": "All current nodes are shared-contract, merge-sensitive, safety-adjacent, or cross-system; none are isolated cheap/local leaves.",
+      "evidence": [
+        "critic finding F5",
+        "per-node routing reasons require standard or premium"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Declare every Agency profile referenced by a node and preserve Pi fallback.",
+      "reason": "Agency is optional but referenced profiles must be resolvable for review/fallback discipline.",
+      "evidence": [
+        "critic finding F6",
+        "agency_plan.required=false"
+      ],
+      "owner": "model"
+    },
+    {
+      "decision": "Add concrete Workgraph/speedriftd readiness handling before dispatch.",
+      "reason": "A stalled daemon and stale supervise lease make Workgraph handoff unverifiable unless resolved or manual fallback is documented.",
+      "evidence": [
+        "critic finding F7",
+        "speedriftd daemon_state=stalled with lease_owner=planforge from 2026-04-14"
+      ],
+      "owner": "model"
+    }
+  ]
+}

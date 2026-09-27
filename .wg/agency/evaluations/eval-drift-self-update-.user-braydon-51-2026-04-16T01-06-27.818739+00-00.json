@@ -1,0 +1,19 @@
+{
+  "id": "flip-drift-self-update-.user-braydon-51-2026-04-16T01-06-27.818739+00-00",
+  "task_id": "drift-self-update-.user-braydon-51",
+  "agent_id": "3184716484e6f0ea08bb13539daf07686ee79d440505f1fdf2de0357707034c3",
+  "role_id": "75d2fab8c1f8e0378e335701132a3b68ef9aa32b78841ce73f558116b725b68b",
+  "tradeoff_id": "ac9bc242305c7e5db07436618e9d3a6ce26b484d1103bc0d45b96035f5c260f3",
+  "score": 0.5,
+  "dimensions": {
+    "requirement_coverage": 0.5,
+    "hallucination_rate": 0.75,
+    "semantic_match": 0.6,
+    "specificity_match": 0.4
+  },
+  "notes": "The inferred version captures the high-level intent (ecosystem self-update involving c46f26a) but diverges significantly from the actual task. The actual task is explicitly a DECISION-making exercise (review commits → decide now vs defer → log rationale → conditionally rerun drifts check), while the inferred version presupposes the decision has been made and focuses on execution/verification. The inferred version halluccinates detailed acceptance criteria (documentation fixes, coredrift violations, date updates, etc.) that don't appear in the original contract. Missing specifics: version source hash (663070b), the decision vs defer choice, logging rationale requirement, and the specific `drifts check --task .user-braydon-51 --write-log --create-followups` command to run conditionally.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Apply commit c46f26a to fix documentation issues in the Speedrift ecosystem. The commit addresses non-existent file references and updates outdated dates. Review coredrift status and determine if the self-update should proceed. Acceptance criteria: (1) Documentation sync completed successfully, (2) Non-existent file references are fixed, (3) Dates are updated to current values, (4) No functional changes are introduced, (5) Coredrift contract violations are resolved. The update should be low-risk and limited to documentation changes only.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:06:27.818739+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

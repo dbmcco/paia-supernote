@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-35-2026-04-15T23-15-21.741956+00-00",
+  "task_id": ".user-braydon-35",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.56,
+  "dimensions": {
+    "specificity_match": 0.3,
+    "hallucination_rate": 0.45,
+    "requirement_coverage": 0.35,
+    "semantic_match": 0.85
+  },
+  "notes": "The ACTUAL task is intentionally minimal—just 'User board for braydon — persistent conversation surface'—with empty acceptance criteria. The INFERRED task reconstructs this as a comprehensive feature specification including terminal UI, session persistence, events integration, conversation history, and test coverage. While semantic alignment is good (both describe a persistent conversation interface), the inferred version adds significant elaboration not present in the original, particularly the events system integration and real-time updates, which are not mentioned in the actual task. The inferred task's high specificity diverges from the original's deliberate brevity, and only ~35% of inferred requirements are explicitly stated or directly implied by the original task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a UserBoard component that provides a persistent conversation interface for the PAIA system. Requirements: 1) Create a comprehensive terminal-based UI that allows interactive user sessions, 2) Implement session persistence so conversations can be saved and restored across sessions, 3) Integrate with the existing events system for real-time updates, 4) Ensure all commands are functional and properly tested, 5) Provide conversation history functionality, 6) Maintain full test coverage with passing tests. The implementation should serve as a persistent conversation surface that users can interact with through a terminal interface.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T23:15:21.741956+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

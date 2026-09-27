@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-175-2026-04-16T09-21-22.803153+00-00",
+  "task_id": ".user-braydon-175",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.82,
+  "dimensions": {
+    "semantic_match": 0.95,
+    "requirement_coverage": 0.75,
+    "hallucination_rate": 0.15,
+    "specificity_match": 0.65
+  },
+  "notes": "Both descriptions target the same core task: implementing/validating a UserBoard for the paia-supernote project. The inferred version captures the main acceptance criteria (starts without errors, tests pass, interactive terminal interface) and correctly identifies specific commands (status, write) but omits mention of 'events' and 'help' commands. The inferred version adds minor details not in the original (conversation tracking, contract violation framing) and loses specificity around concrete constraints (file paths, max_files/LOC, pit_stop_after). The semantic match is very high, requirement coverage is good but incomplete, and there are minor interpretive additions rather than egregious hallucinations.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Fix and validate the UserBoard implementation in the paia-supernote project. Ensure that: 1) UserBoard class imports and initializes correctly, 2) All existing tests pass (8 tests total), 3) Interactive terminal commands are properly implemented with conversation tracking, status monitoring, and write functionality, 4) Resolve the contract violation by fixing the auto_followups configuration and adding proper acceptance criteria. The UserBoard should provide a comprehensive terminal interface for the Supernote integration system.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T09:21:22.803153+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "eval-.user-braydon-190-2026-04-16T10-16-26.738335+00-00",
+  "task_id": ".user-braydon-190",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.63,
+  "dimensions": {
+    "style_adherence": 0.5,
+    "downstream_usability": 0.68,
+    "completeness": 0.7,
+    "efficiency": 0.55,
+    "coordination_overhead": 0.6,
+    "blocking_impact": 0.65,
+    "correctness": 0.75
+  },
+  "notes": "The agent successfully implemented the user board for braydon with verified functionality (startup, paia-events connectivity, braydon configuration, non-interactive handling). However, the work violated explicit task constraints: coredrift warnings flagged churn_loc, hardening_in_core, and scope_drift—indicating the agent exceeded the max_loc=800 budget and modified files outside the touch specification. The task log shows 9 modified files (main.py, reader.py, task_curator.py, test_*.py) beyond the 3 files in the touch list. The system correctly flagged this with 'Revert out-of-scope file changes or expand touch globs.' While the end state is functionally correct, the execution lacked discipline in scope management and created coordination overhead (coredrift requires acknowledgment/correction). The 2.4-minute completion time suggests the agent moved quickly without carefully respecting constraints. Strengths: correct functionality, clean verification. Weaknesses: scope drift, budget violations, constraint adherence.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:16:26.738335+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

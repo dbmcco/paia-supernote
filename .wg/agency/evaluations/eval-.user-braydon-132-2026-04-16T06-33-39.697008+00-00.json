@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-132-2026-04-16T06-33-39.697008+00-00",
+  "task_id": ".user-braydon-132",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.26,
+  "dimensions": {
+    "correctness": 0.15,
+    "downstream_usability": 0.2,
+    "style_adherence": 0.4,
+    "intent_fidelity": 0.04,
+    "completeness": 0.25,
+    "efficiency": 0.3,
+    "blocking_impact": 0.3,
+    "coordination_overhead": 0.5
+  },
+  "notes": "Task marked complete but verification failed critically. FLIP score of 0.04 (vs 0.70 threshold) is a strong signal of fundamental issues. Coredrift flagged yellow with churn_loc and hardening_in_core issues, suggesting code quality/scope problems. No artifacts recorded despite files being created (run_user_board.py, user_board.py modifications). The task objective is underspecified (no acceptance criteria), making verification unclear, but the system's own verification mechanisms indicate the delivered work is broken or incomplete. Agent completed in ~1m 29s but speed is irrelevant given the quality signals. Files were modified but their correctness and completeness are in serious doubt. Without visible artifacts and with verification failure this severe, downstream tasks inheriting this work will be blocked or face major rework.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:33:39.697008+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

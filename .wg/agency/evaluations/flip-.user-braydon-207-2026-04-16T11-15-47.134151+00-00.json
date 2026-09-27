@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-207-2026-04-16T11-15-47.134151+00-00",
+  "task_id": ".user-braydon-207",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.28,
+  "dimensions": {
+    "semantic_match": 0.45,
+    "hallucination_rate": 0.87,
+    "specificity_match": 0.25,
+    "requirement_coverage": 0.12
+  },
+  "notes": "The actual task is extremely sparse—just 'User board: braydon' with minimal description ('persistent conversation surface'). It specifies WHAT (a user board) but not WHAT TO DO. The inferred reconstruction assumes a complete review/assessment workflow (review, assess, identify improvements, analyze codebase, suggest next steps) that is not stated in the original. Almost all inferred requirements are reasonable assumptions but fabricated—the actual task could mean create, implement, maintain, or review. The inferred version is more specific and actionable, but diverges significantly from the vague, artifact-focused original.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Review the current user board implementation in the paia-supernote project and assess its state. Identify any areas that need improvement or enhancement. Analyze the existing codebase to understand what's already working and what might be missing or could be optimized. Provide an assessment of the current implementation quality and suggest next steps if improvements are needed.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T11:15:47.134151+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

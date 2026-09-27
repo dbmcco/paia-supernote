@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-83-2026-04-16T03-17-28.989708+00-00",
+  "task_id": ".user-braydon-83",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.15,
+  "dimensions": {
+    "efficiency": 0.2,
+    "style_adherence": 0.3,
+    "downstream_usability": 0.1,
+    "blocking_impact": 0.1,
+    "intent_fidelity": 0.1,
+    "completeness": 0.1,
+    "correctness": 0.1,
+    "coordination_overhead": 0.2
+  },
+  "notes": "Verification failure is the primary signal here. FLIP score of 0.10 (well below the 0.70 threshold) indicates the work does not meet acceptance criteria. Critical issues: (1) No artifacts were recorded despite task being marked complete, (2) FLIP verification explicitly failed, (3) Task spec is underspecified—no clear rubric for what constitutes a finished 'user board' or 'persistent conversation surface', (4) Task was marked done after ~1.5 minutes but failed post-hoc verification, suggesting premature completion claim. Without artifacts or clear specification, cannot assess actual output quality. The combination of verification failure + absent artifacts suggests either the work was not properly completed, not properly captured, or the task itself needs clarification. Per evaluation guidance, verification failure significantly reduces the overall score. This work is in 'Failing' territory and would require restart/rework.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:17:28.989708+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

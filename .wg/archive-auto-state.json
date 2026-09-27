@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "retention_days": 7,
+  "last_confirmed_cutoff": null,
+  "acknowledged_build_id": null,
+  "pending": {
+    "created_at": "2026-08-14T19:40:07.673838+00:00",
+    "evaluated_cutoff": "2026-08-07T19:40:07.673838+00:00",
+    "retention_days": 7,
+    "build_id": "0.1.0+266db2e1d9b4",
+    "reason": "daemon build changed from 0.1.0+ccb303b2e948 to 0.1.0+266db2e1d9b4 while archival was held",
+    "tasks": []
+  },
+  "last_receipt": null
+}

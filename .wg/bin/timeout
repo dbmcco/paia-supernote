@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Minimal timeout shim for environments without GNU timeout."""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+import time
+
+
+def _usage() -> int:
+    sys.stderr.write("usage: timeout [--signal=SIG] [--kill-after=SECS] DURATION COMMAND...\n")
+    return 125
+
+
+def _parse_seconds(raw: str) -> float:
+    text = raw.strip()
+    if not text:
+        raise ValueError("empty duration")
+    suffix = text[-1].lower()
+    scale = 1.0
+    if suffix in {"s", "m", "h"}:
+        text = text[:-1]
+        scale = {"s": 1.0, "m": 60.0, "h": 3600.0}[suffix]
+    return float(text) * scale
+
+
+def _parse_signal(raw: str) -> int:
+    name = raw.strip()
+    if not name:
+        raise ValueError("empty signal")
+    if name.isdigit():
+        return int(name)
+    if not name.startswith("SIG"):
+        name = f"SIG{name}"
+    return int(getattr(signal, name))
+
+
+def main(argv: list[str]) -> int:
+    signal_num = signal.SIGTERM
+    kill_after = 0.0
+    idx = 0
+
+    while idx < len(argv):
+        arg = argv[idx]
+        if not arg.startswith("--"):
+            break
+        if arg.startswith("--signal="):
+            signal_num = _parse_signal(arg.split("=", 1)[1])
+        elif arg == "--signal":
+            idx += 1
+            if idx >= len(argv):
+                return _usage()
+            signal_num = _parse_signal(argv[idx])
+        elif arg.startswith("--kill-after="):
+            kill_after = _parse_seconds(arg.split("=", 1)[1])
+        elif arg == "--kill-after":
+            idx += 1
+            if idx >= len(argv):
+                return _usage()
+            kill_after = _parse_seconds(argv[idx])
+        else:
+            return _usage()
+        idx += 1
+
+    if idx >= len(argv):
+        return _usage()
+
+    duration = _parse_seconds(argv[idx])
+    idx += 1
+    if idx >= len(argv):
+        return _usage()
+
+    proc = subprocess.Popen(argv[idx:], start_new_session=True)
+    try:
+        return proc.wait(timeout=duration)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal_num)
+        except ProcessLookupError:
+            return 124
+        if kill_after > 0:
+            deadline = time.monotonic() + kill_after
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    return 124
+                time.sleep(0.1)
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        proc.wait()
+        return 124
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except Exception as exc:  # pragma: no cover - defensive CLI guard
+        sys.stderr.write(f"timeout shim error: {exc}\n")
+        raise SystemExit(125)

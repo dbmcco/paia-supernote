@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-52-2026-04-16T01-07-29.886224+00-00",
+  "task_id": ".user-braydon-52",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.16,
+  "dimensions": {
+    "efficiency": 0.25,
+    "style_adherence": 0.3,
+    "correctness": 0.08,
+    "blocking_impact": 0.2,
+    "completeness": 0.15,
+    "downstream_usability": 0.1,
+    "coordination_overhead": 0.15,
+    "intent_fidelity": 0.04
+  },
+  "notes": "Task marked complete but verification failed catastrophically (FLIP 0.04/0.70). No artifacts recorded despite task completion. Coredrift flagged churn and hardening issues during execution. The 2-minute execution suggests minimal work was performed. No acceptance criteria were specified in the contract, but the complete absence of recorded artifacts and verification failure indicate the agent did not successfully deliver a functional 'user board' surface for braydon. The task appears to have been abandoned in an orphaned state and marked done prematurely. Critical failures: (1) zero downstream usability—nothing to consume, (2) verification failed by massive margin, (3) no visible deliverables despite task completion claim. Per evaluation guidance, verification failure is a strong signal and should significantly reduce scoring.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:07:29.886224+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

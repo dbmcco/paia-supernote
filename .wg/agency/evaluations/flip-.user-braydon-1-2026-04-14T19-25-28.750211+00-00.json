@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-1-2026-04-14T19-25-28.750211+00-00",
+  "task_id": ".user-braydon-1",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.04,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.2,
+    "hallucination_rate": 1.0,
+    "semantic_match": 0.0
+  },
+  "notes": "The actual task is a minimal, vague specification for 'User board: braydon' — a persistent conversation surface (likely a workgraph/system board). The inferred task describes an entirely different goal: drift monitoring of paia-supernote with dependency and file-churn checks. These are unrelated tasks with no semantic overlap. The inferred version has fabricated all of its requirements (drift monitoring, pyproject.toml checks, file limits, status reporting) from no mention in the original. The only slight partial credit is that specificity doesn't heavily penalize the inference — it's just wrong rather than vague.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Monitor the paia-supernote project for drift and detect any concerning changes to dependencies or excessive file modifications. Check for dependency changes in pyproject.toml and monitor file churn against established limits. If drift is detected, report the status and prepare a user session for review and confirmation of whether the changes are intentional.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T19:25:28.750211+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-114-2026-04-16T05-25-33.784304+00-00",
+  "task_id": ".user-braydon-114",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.18,
+  "dimensions": {
+    "intent_fidelity": 0.445,
+    "style_adherence": 0.15,
+    "downstream_usability": 0.0,
+    "blocking_impact": 0.25,
+    "coordination_overhead": 0.1,
+    "completeness": 0.08,
+    "correctness": 0.2,
+    "efficiency": 0.3
+  },
+  "notes": "Critical failure: The task was fundamentally underspecified (empty acceptance criteria array), and the system flagged a contract violation. The agent marked the task as done without producing any artifacts or meaningfully addressing the contract violation. FLIP verification failed (0.45 vs 0.70 threshold), confirming significant issues. No output was recorded—no deliverable for a 'persistent conversation surface' was created. The agent spent 2m 41s encountering a known problem state and exiting without resolution, clarification, or documentation. The proper response to missing acceptance criteria should have been to produce an artifact documenting the specification gap or to escalate the issue, not to silently mark the task complete. This represents a fundamental failure in task execution, verification, and coordination. The only non-failing dimension (efficiency) is misleading—the speed reflects task abandonment, not productive work.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:25:33.784304+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

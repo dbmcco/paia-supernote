@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-44-2026-04-16T00-24-10.949603+00-00",
+  "task_id": ".user-braydon-44",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.24,
+  "dimensions": {
+    "requirement_coverage": 0.05,
+    "semantic_match": 0.45,
+    "specificity_match": 0.2,
+    "hallucination_rate": 0.95
+  },
+  "notes": "The actual task is extremely minimal: 'User board for braydon — persistent conversation surface' with no explicit acceptance criteria or requirements. The inferred description completely restructures the work as a verification/testing task focused on production readiness, paia-events integration, and UI validation. These are fundamentally different scopes: the actual task appears to be about implementation/maintenance of the user board itself, while the inferred task assumes an existing implementation requiring QA validation. Almost all specific requirements in the inferred version (paia-events testing, UI rendering checks, production readiness confirmation) are hallucinated rather than derived from the original task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board implementation is fully functional and ready for production use. Test the current functionality to ensure: 1) it properly connects to paia-events, 2) the UI renders correctly, and 3) it's ready for interactive use by users. Report on the current state and confirm whether the implementation meets production readiness criteria.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T00:24:10.949603+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

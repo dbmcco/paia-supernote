@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-127-2026-04-16T06-10-47.244036+00-00",
+  "task_id": ".user-braydon-127",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.37,
+  "dimensions": {
+    "hallucination_rate": 0.8,
+    "requirement_coverage": 0.3,
+    "semantic_match": 0.5,
+    "specificity_match": 0.3
+  },
+  "notes": "The actual task is minimal and vague ('User board: braydon — persistent conversation surface') with no explicit acceptance criteria or file specs. The inferred task is highly specific, adding requirements about Supernote integration review, file modifications, run scripts, and coredrift assessment that appear nowhere in the original contract. While both involve 'user boards' and conversation surfaces (semantic overlap ~0.5), the inferred version substantially elaborates with details inferred from project context (modified files, new run_user_board.py script) rather than stated requirements. This represents ~80% hallucination of specific requirements.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Run a user board session to review the current state of the Supernote integration project. Check the progress of file modifications and the new run script, assess any quality issues or coredrift concerns, and provide a status update on the integration work in progress.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:10:47.244036+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

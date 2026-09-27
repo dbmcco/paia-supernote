@@ -1,0 +1,545 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 4681105..e58313a 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -12,7 +12,7 @@ authors = [
+ readme = "README.md"
+ requires-python = ">=3.12"
+ dependencies = [
+-    "supernotelib>=0.3.0",
++    "supernotelib==0.7.1",
+     "Pillow>=10.0.0",
+     "anthropic>=0.25.0",
+     "playwright>=1.40.0",
+diff --git a/src/paia_supernote/cloud_poller.py b/src/paia_supernote/cloud_poller.py
+index 767686b..5aa6664 100644
+--- a/src/paia_supernote/cloud_poller.py
++++ b/src/paia_supernote/cloud_poller.py
+@@ -169,6 +169,13 @@ class CloudPoller:
+             "sequence": "desc",
+             "filterType": 0,
+         })
++        if result["status"] in (401, 403):
++            log.warning(
++                "cloud_session_expired",
++                status=result["status"],
++                hint="Run 'paia-supernote login' to re-authenticate",
++            )
++            return []
+         if result["status"] != 200 or not isinstance(result["body"], dict):
+             log.warning("cloud_list_failed", status=result["status"])
+             return []
+diff --git a/src/paia_supernote/ingest_service.py b/src/paia_supernote/ingest_service.py
+index 0cef5b6..f00c294 100644
+--- a/src/paia_supernote/ingest_service.py
++++ b/src/paia_supernote/ingest_service.py
+@@ -1,4 +1,8 @@
+-"""Ingest service — polls Supernote Cloud, OCRs pages, writes durable page state."""
++"""Ingest service — OCRs pages and writes durable page state.
++
++Uses the Supernote Partner app local sync folder (FSEvents) when available,
++falling back to cloud polling when not. The local path requires no auth.
++"""
+ 
+ from __future__ import annotations
+ 
+@@ -7,14 +11,16 @@ import inspect
+ from contextlib import suppress
+ import hashlib
+ from pathlib import Path
+-from typing import Any
++from typing import Any, Optional
+ 
+ import structlog
+ 
+ from .cloud_poller import CloudPoller
++from .events import EventsClient
+ from .page_state import PageStateStore
+ from .reader import SupernoteReader
+ from .uploader import SupernoteUploader
++from .watcher import SupernoteWatcher
+ 
+ log = structlog.get_logger(__name__)
+ 
+@@ -39,18 +45,48 @@ class IngestService:
+             zai_vision_model=self.config["zai_vision_model"],
+             zai_text_model=self.config["zai_text_model"],
+         )
+-        self.uploader = uploader or SupernoteUploader()
++        self.events = EventsClient(base_url=self.config["events_url"])
+         self.page_state = PageStateStore(Path(self.config["state_db_path"]))
+         self.page_state.init_schema()
+-        self.cloud_poller = cloud_poller or CloudPoller(
+-            uploader=self.uploader,
+-            on_note_changed=self._on_note_changed,
+-            poll_interval=self.config["poll_interval"],
+-            watched_notebooks=self.config.get("folio_sync_notebooks"),
+-            process_existing_on_start=False,
+-        )
++        self._watched_notebook_keys = self._build_watched_notebook_keys()
++
++        # Cloud poller path (used only when Partner app sync unavailable)
++        self._uploader: Optional[SupernoteUploader] = uploader
++        self._cloud_poller: Optional[CloudPoller] = cloud_poller
++        self._local_watcher: Optional[SupernoteWatcher] = None
++
+         self._shutdown_event = asyncio.Event()
+ 
++    def _build_watched_notebook_keys(self) -> set[str]:
++        """Notebooks to watch: Walk + tasks always, plus folio_sync_notebooks."""
++        keys = {"walk", "tasks"}
++        keys.update(
++            str(name).strip().casefold()
++            for name in self.config.get("folio_sync_notebooks") or []
++            if str(name).strip()
++        )
++        return keys
++
++    def _partner_sync_path_available(self) -> bool:
++        """True only when the sync folder exists AND has a recently-modified note file.
++
++        Uses a single stat() on a known file rather than iterdir() to avoid
++        InterruptedError from signals hitting os.listdir() during startup.
++        """
++        import time
++        path = SupernoteWatcher.DEFAULT_SYNC_PATH
++        if not path.exists():
++            return False
++        cutoff = time.time() - 7 * 24 * 3600  # 7 days
++        for name in ("Quick.note", "Walk.note", "LFW.note", "tasks.note"):
++            try:
++                mtime = (path / name).stat().st_mtime
++                if mtime > cutoff:
++                    return True
++            except OSError:
++                continue
++        return False
++
+     async def _on_note_changed(
+         self,
+         notebook_name: str,
+@@ -82,27 +118,89 @@ class IngestService:
+                 continue
+             await persist_result(result)
+ 
++        if notebook_name.casefold() == "walk":
++            for result in results:
++                await self.events.publish_walk_feedback_detected(
++                    notebook=result.notebook,
++                    page=result.page_num,
++                    text=result.text,
++                )
++
+     async def start(self) -> None:
+         log.info("ingest_service_starting")
+-        await self.uploader.start()
+-        self.cloud_poller.start()
++        await self.events.start()
++        try:
++            if self._partner_sync_path_available():
++                log.info(
++                    "ingest_using_local_watcher",
++                    path=str(SupernoteWatcher.DEFAULT_SYNC_PATH),
++                )
++                await self._run_with_local_watcher()
++            else:
++                log.info("ingest_using_cloud_poller")
++                await self._run_with_cloud_poller()
++        finally:
++            await self.events.stop()
++
++    async def _run_with_local_watcher(self) -> None:
++        loop = asyncio.get_running_loop()
++
++        def on_file_changed(path: Path, notebook_name: str) -> None:
++            if notebook_name.casefold() not in self._watched_notebook_keys:
++                return
++            try:
++                note_bytes = path.read_bytes()
++            except OSError as exc:
++                log.warning("local_read_failed", path=str(path), error=str(exc))
++                return
++            asyncio.run_coroutine_threadsafe(
++                self._on_note_changed(notebook_name, note_bytes),
++                loop,
++            )
++
++        self._local_watcher = SupernoteWatcher(on_note_changed=on_file_changed)
++        self._local_watcher.start()
++        log.info("ingest_local_watcher_started")
++        try:
++            await self._shutdown_event.wait()
++        finally:
++            self._local_watcher.stop()
++            self._local_watcher = None
++            log.info("ingest_local_watcher_stopped")
++
++    async def _run_with_cloud_poller(self) -> None:
++        uploader = self._uploader or SupernoteUploader()
++        cloud_poller = self._cloud_poller or CloudPoller(
++            uploader=uploader,
++            on_note_changed=self._on_note_changed,
++            poll_interval=self.config["poll_interval"],
++            watched_notebooks=self._watched_notebook_keys,
++            process_existing_on_start=False,
++        )
++        self._uploader = uploader
++        self._cloud_poller = cloud_poller
++        await uploader.start()
++        cloud_poller.start()
+         try:
+             await self._wait_until_shutdown_or_poller_exit()
+         except Exception as exc:
+             log.error("ingest_service_exiting_after_poller_failure", error=str(exc))
++            raise
++        finally:
+             with suppress(Exception):
+-                await self.cloud_poller.stop()
++                await cloud_poller.stop()
+             with suppress(Exception):
+-                await self.uploader.stop()
+-            raise
++                await uploader.stop()
+ 
+     async def stop(self) -> None:
+-        await self.cloud_poller.stop()
+-        await self.uploader.stop()
+         self._shutdown_event.set()
+ 
+     async def _wait_until_shutdown_or_poller_exit(self) -> None:
+-        poller_wait = getattr(self.cloud_poller, "wait", None)
++        if self._cloud_poller is None:
++            await self._shutdown_event.wait()
++            return
++
++        poller_wait = getattr(self._cloud_poller, "wait", None)
+         if poller_wait is None or not inspect.iscoroutinefunction(poller_wait):
+             await self._shutdown_event.wait()
+             return
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index 1b4e024..6783b91 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -920,9 +920,24 @@ def build_parser() -> argparse.ArgumentParser:
+     subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
+     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
+     subparsers.add_parser("status", help="Show pipeline queue counts")
++    subparsers.add_parser("login", help="Re-authenticate with Supernote Cloud (opens browser)")
+     return parser
+ 
+ 
++async def _run_login() -> None:
++    """Open a visible browser to refresh the Supernote Cloud session."""
++    from .uploader import SupernoteUploader
++
++    print("Opening Supernote Cloud in browser — log in, then close the tab or press Ctrl+C here.")
++    uploader = SupernoteUploader(headless=False)
++    await uploader.start()
++    try:
++        await uploader._ensure_authenticated()
++        print(f"Session saved to {uploader.SESSION_FILE}")
++    finally:
++        await uploader.stop()
++
++
+ def main(argv: list[str] | None = None) -> None:
+     """Main entry point for paia-supernote service."""
+     parser = build_parser()
+@@ -937,6 +952,10 @@ def main(argv: list[str] | None = None) -> None:
+         print(render_status(Path(config["state_db_path"])))
+         return
+ 
++    if mode == "login":
++        asyncio.run(_run_login())
++        return
++
+     if mode == "service":
+         service: Any = SupernoteService(config)
+     elif mode == "enrich":
+diff --git a/src/paia_supernote/note_page_ops.py b/src/paia_supernote/note_page_ops.py
+index e9cee1e..050f2da 100644
+--- a/src/paia_supernote/note_page_ops.py
++++ b/src/paia_supernote/note_page_ops.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import copy
+ import os
+ import tempfile
++from typing import Any
+ 
+ import supernotelib.manipulator as sn_manip
+ import supernotelib.parser as sn_parser
+@@ -49,6 +50,29 @@ def remove_pages(source_bytes: bytes, *, pages: list[int]) -> bytes:
+     return sn_manip.reconstruct(source)
+ 
+ 
++def reorder_pages(source_bytes: bytes, *, page_order: list[str]) -> bytes:
++    source = _load_from_bytes(source_bytes)
++    existing_page_ids = [_page_id(page, index) for index, page in enumerate(source.pages)]
++    _validate_page_order(existing_page_ids, page_order)
++
++    old_index_by_page_id = {
++        page_id: page_index for page_index, page_id in enumerate(existing_page_ids)
++    }
++    page_by_id = {
++        page_id: page for page_id, page in zip(existing_page_ids, source.pages, strict=True)
++    }
++    new_index_by_old_index = {
++        old_index_by_page_id[page_id]: new_index
++        for new_index, page_id in enumerate(page_order)
++    }
++
++    _clear_all_recognition_metadata(source)
++    source.pages = [page_by_id[page_id] for page_id in page_order]
++    _remap_footer_page_numbers(source, new_index_by_old_index)
++    _sync_metadata_pages(source)
++    return sn_manip.reconstruct(source)
++
++
+ def _load_from_bytes(note_bytes: bytes):
+     fd, path = tempfile.mkstemp(suffix=".note")
+     try:
+@@ -69,6 +93,67 @@ def _sync_metadata_pages(notebook) -> None:
+     notebook.metadata.pages = [page.metadata for page in notebook.pages]
+ 
+ 
++def _validate_page_order(existing_page_ids: list[str], page_order: list[str]) -> None:
++    if len(set(existing_page_ids)) != len(existing_page_ids):
++        raise ValueError("notebook contains duplicate PAGEID values")
++    if len(set(page_order)) != len(page_order):
++        raise ValueError("page_order must include each existing PAGEID exactly once")
++
++    existing = set(existing_page_ids)
++    requested = set(page_order)
++    unknown = sorted(requested - existing)
++    if unknown:
++        raise ValueError(f"page_order contains unknown PAGEID values: {', '.join(unknown)}")
++    if requested != existing:
++        raise ValueError("page_order must include each existing PAGEID exactly once")
++
++
++def _page_id(page: Any, page_index: int) -> str:
++    method = getattr(page, "get_pageid", None)
++    page_id = method() if method is not None else None
++    if page_id is None:
++        page_id = getattr(page, "metadata", {}).get("PAGEID")
++    if page_id is None:
++        page_id = f"page-{page_index}"
++    return str(page_id)
++
++
++def _remap_footer_page_numbers(
++    notebook: Any, new_index_by_old_index: dict[int, int]
++) -> None:
++    for record in _footer_records(notebook, "get_titles"):
++        _remap_footer_record(record, new_index_by_old_index)
++    for record in _footer_records(notebook, "get_keywords"):
++        new_index = _remap_footer_record(record, new_index_by_old_index)
++        if new_index is not None and "KEYWORDPAGE" in getattr(record, "metadata", {}):
++            record.metadata["KEYWORDPAGE"] = new_index + 1
++    for record in _footer_records(notebook, "get_links"):
++        _remap_footer_record(record, new_index_by_old_index)
++
++
++def _footer_records(notebook: Any, method_name: str) -> list[Any]:
++    method = getattr(notebook, method_name, None)
++    return list(method() or []) if method is not None else []
++
++
++def _remap_footer_record(
++    record: Any, new_index_by_old_index: dict[int, int]
++) -> int | None:
++    method = getattr(record, "get_page_number", None)
++    if method is None:
++        return None
++    old_index = int(method())
++    new_index = new_index_by_old_index.get(old_index)
++    if new_index is None:
++        return None
++    setter = getattr(record, "set_page_number", None)
++    if setter is not None:
++        setter(new_index)
++    else:
++        record.page_number = new_index
++    return new_index
++
++
+ def _blank_page_like(page):
+     blank = copy.deepcopy(page)
+     clear_recognition_metadata(blank)
+diff --git a/src/paia_supernote/uploader.py b/src/paia_supernote/uploader.py
+index 0dbf0e8..d4957d3 100644
+--- a/src/paia_supernote/uploader.py
++++ b/src/paia_supernote/uploader.py
+@@ -57,17 +57,18 @@ class SupernoteUploader:
+         "Application Support/com.ratta.supernote/908410628964298752/Supernote/Note"
+     ).expanduser()
+ 
+-    def __init__(self) -> None:
++    def __init__(self, headless: bool = True) -> None:
+         self.browser: Optional[Browser] = None
+         self.context: Optional[BrowserContext] = None
+         self.page: Optional[Page] = None
+         self._playwright = None
+         self._recovery_lock = asyncio.Lock()
++        self._headless = headless
+ 
+     async def start(self) -> None:
+         """Launch browser and restore session if available."""
+         self._playwright = await async_playwright().start()
+-        self.browser = await self._playwright.chromium.launch(headless=True)
++        self.browser = await self._playwright.chromium.launch(headless=self._headless)
+ 
+         if self.SESSION_FILE.exists():
+             self.context = await self.browser.new_context(
+diff --git a/tests/test_note_page_ops.py b/tests/test_note_page_ops.py
+index 2f361e3..d45d73c 100644
+--- a/tests/test_note_page_ops.py
++++ b/tests/test_note_page_ops.py
+@@ -21,6 +21,9 @@ class _FakeNotebook:
+     def __init__(self, page_ids: list[str]) -> None:
+         self.pages = [_FakePage(page_id) for page_id in page_ids]
+         self.metadata = SimpleNamespace(pages=[page.metadata for page in self.pages])
++        self.titles = []
++        self.keywords = []
++        self.links = []
+ 
+     def get_page(self, index: int) -> _FakePage:
+         return self.pages[index]
+@@ -28,6 +31,27 @@ class _FakeNotebook:
+     def get_total_pages(self) -> int:
+         return len(self.pages)
+ 
++    def get_titles(self) -> list:
++        return self.titles
++
++    def get_keywords(self) -> list:
++        return self.keywords
++
++    def get_links(self) -> list:
++        return self.links
++
++
++class _FakeFooterRecord:
++    def __init__(self, page_number: int, metadata: dict | None = None) -> None:
++        self.page_number = page_number
++        self.metadata = metadata or {}
++
++    def get_page_number(self) -> int:
++        return self.page_number
++
++    def set_page_number(self, page_number: int) -> None:
++        self.page_number = page_number
++
+ 
+ def test_copy_pages_to_end_increases_destination_count(
+     monkeypatch: pytest.MonkeyPatch,
+@@ -102,3 +126,75 @@ def test_remove_pages_leaves_blank_placeholder_when_all_pages_removed(
+     assert updated.get_total_pages() == 1
+     assert updated.get_page(0).metadata["PAGEID"] == "source-0"
+     assert updated.get_page(0).metadata["RECOGNTEXT"] == "0"
++
++
++def test_reorder_pages_reorders_by_page_id_and_syncs_metadata(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    source = _FakeNotebook(["page-a", "page-b", "page-c"])
++    monkeypatch.setattr(note_page_ops, "_load_from_bytes", lambda _bytes: source)
++    monkeypatch.setattr(
++        note_page_ops.sn_manip,
++        "reconstruct",
++        lambda notebook: notebook,
++    )
++
++    updated = note_page_ops.reorder_pages(
++        b"source", page_order=["page-c", "page-a", "page-b"]
++    )
++
++    assert [page.metadata["PAGEID"] for page in updated.pages] == [
++        "page-c",
++        "page-a",
++        "page-b",
++    ]
++    assert updated.metadata.pages == [page.metadata for page in updated.pages]
++    assert updated.get_page(0).metadata["RECOGNTEXT"] == "0"
++
++
++def test_reorder_pages_remaps_heading_keyword_and_link_source_pages(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    source = _FakeNotebook(["page-a", "page-b", "page-c"])
++    title = _FakeFooterRecord(0)
++    keyword = _FakeFooterRecord(1, {"KEYWORDPAGE": "2"})
++    link = _FakeFooterRecord(2, {"PAGEID": "page-a"})
++    source.titles = [title]
++    source.keywords = [keyword]
++    source.links = [link]
++    monkeypatch.setattr(note_page_ops, "_load_from_bytes", lambda _bytes: source)
++    monkeypatch.setattr(
++        note_page_ops.sn_manip,
++        "reconstruct",
++        lambda notebook: notebook,
++    )
++
++    note_page_ops.reorder_pages(
++        b"source", page_order=["page-c", "page-a", "page-b"]
++    )
++
++    assert title.get_page_number() == 1
++    assert keyword.get_page_number() == 2
++    assert keyword.metadata["KEYWORDPAGE"] == 3
++    assert link.get_page_number() == 0
++    assert link.metadata["PAGEID"] == "page-a"
++
++
++def test_reorder_pages_rejects_missing_duplicate_or_unknown_page_ids(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    source = _FakeNotebook(["page-a", "page-b", "page-c"])
++    monkeypatch.setattr(note_page_ops, "_load_from_bytes", lambda _bytes: source)
++
++    with pytest.raises(ValueError, match="exactly once"):
++        note_page_ops.reorder_pages(b"source", page_order=["page-a", "page-b"])
++
++    with pytest.raises(ValueError, match="exactly once"):
++        note_page_ops.reorder_pages(
++            b"source", page_order=["page-a", "page-b", "page-b"]
++        )
++
++    with pytest.raises(ValueError, match="unknown"):
++        note_page_ops.reorder_pages(
++            b"source", page_order=["page-a", "page-b", "page-x"]
++        )
+diff --git a/uv.lock b/uv.lock
+index 9f54280..2f5a25d 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1061,7 +1061,7 @@ requires-dist = [
+     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+     { name = "structlog", specifier = ">=23.0.0" },
+-    { name = "supernotelib", specifier = ">=0.3.0" },
++    { name = "supernotelib", specifier = "==0.7.1" },
+     { name = "watchdog", specifier = ">=3.0.0" },
+ ]
+ provides-extras = ["dev"]
+@@ -1667,7 +1667,7 @@ wheels = [
+ 
+ [[package]]
+ name = "supernotelib"
+-version = "0.7.0"
++version = "0.7.1"
+ source = { registry = "https://pypi.org/simple" }
+ dependencies = [
+     { name = "colour" },
+@@ -1680,9 +1680,9 @@ dependencies = [
+     { name = "svglib" },
+     { name = "svgwrite" },
+ ]
+-sdist = { url = "https://files.pythonhosted.org/packages/ac/1b/3c46ce33d37c33cadabc3acae510f6fd666fa9e85b5d9bce6d20e2d36288/supernotelib-0.7.0.tar.gz", hash = "sha256:78d832a5b6d619b3a6f5b8f8341ebdc9348cb01e5b4a3b1c19756a53ca84ca39", size = 27945, upload-time = "2026-02-08T07:41:35.731Z" }
++sdist = { url = "https://files.pythonhosted.org/packages/71/d5/b50ce5df0b6a8f3bead25207dacfd9ff2986a58f3241c4a1d0d9ad734ace/supernotelib-0.7.1.tar.gz", hash = "sha256:566ff148104a7db97d8528eb84bd5cd8912fe8363e08e57597594089cf44703b", size = 27963, upload-time = "2026-05-23T06:04:47.08Z" }
+ wheels = [
+-    { url = "https://files.pythonhosted.org/packages/ce/34/9b2f2d7d619550f388e8a98909fbd7b57f238f238fe4b6cf01424018e85a/supernotelib-0.7.0-py3-none-any.whl", hash = "sha256:5ae5175c1464ebad43f1105866c0c7aa82c76395e4a39625227921613ccdcf0f", size = 38672, upload-time = "2026-02-08T07:41:33.918Z" },
++    { url = "https://files.pythonhosted.org/packages/a1/52/acec144898698c13cd93174c5b11d74f7e00a443675be68b97d62dcf2369/supernotelib-0.7.1-py3-none-any.whl", hash = "sha256:e79d7fed0b111636a63078e194f06adde4b7e508e42452ddf51346d1162e4bb1", size = 38687, upload-time = "2026-05-23T06:04:45.811Z" },
+ ]
+ 
+ [[package]]

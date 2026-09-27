@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-219-2026-04-16T12-06-01.214227+00-00",
+  "task_id": ".user-braydon-219",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.75,
+  "dimensions": {
+    "semantic_match": 0.95,
+    "requirement_coverage": 0.7,
+    "hallucination_rate": 0.33,
+    "specificity_match": 0.45
+  },
+  "notes": "Strong semantic alignment: both describe implementing a persistent terminal-based conversation interface for the user board in PAIA Supernote with events integration. However, the inferred version lacks critical specificity—missing the exact interactive commands (help, status, events, write, refresh), the 30-second auto-refresh interval, and explicit paia-events service details. The inferred version also adds meta-commentary (e.g., 'add proper acceptance criteria to the task definition') that isn't part of the actual requirements, and lacks mention of the technical constraints (max files, LOC limits, pit stop guidance) that define the task's scope.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement the user board component for the PAIA Supernote system. This should be a comprehensive terminal-based conversation interface with events integration. Requirements: 1) Create a terminal interface that allows user interaction, 2) Integrate with the events system for real-time updates, 3) Ensure all tests pass (target: 8 tests), 4) Implement core functionality including conversation handling, 5) Add proper acceptance criteria to the task definition, 6) Verify dependency changes are intentional and within scope. The implementation should be complete with all required features working and properly tested.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T12:06:01.214227+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

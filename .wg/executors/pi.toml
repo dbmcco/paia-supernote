@@ -1,0 +1,107 @@
+[executor]
+type = "claude"
+command = ".workgraph/executors/pi-run.sh"
+args = []
+
+[executor.env]
+WG_TASK_ID = "{{task_id}}"
+
+[executor.prompt_template]
+template = """
+# Task Assignment
+**Task ID**: `{{task_id}}`
+**Title**: {{task_title}}
+**Description**: {{task_description}}
+
+## Context from dependencies
+{{task_context}}
+
+## Required Protocol
+1. Run pre-check: ./.workgraph/drifts check --task {{task_id}} --write-log
+2. Implement the task following TDD (RED->GREEN->REFACTOR)
+3. Run post-check: ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+4. Mark complete: commit, push, then wg done {{task_id}} (push is required)
+
+## Autonomous Execution
+You are running non-interactively (`pi -p`). Do NOT invoke interactive skills or
+ask questions. Make decisions autonomously, log key decisions with
+`wg log {{task_id}} "..."`, and prefer editing existing files over creating new ones.
+
+## Speedrift vNext Envelope
+- Treat Agency as the preferred composition layer when the task declares an `agencydrift` block; if Agency is unavailable and fallback is safe, record the fallback with `wg log {{task_id}}`.
+- Before implementation, confirm the task is Small Model Ready: read-first context, ordered implementation steps, edge cases, rollback notes, acceptance criteria, and escalation conditions are present. If not, stop and create or request a planning fix task.
+- Unit tests, integration tests, and UX/e2e tests are required when applicable. If a class is not applicable, log the explicit waiver and reason.
+- Run roborev for material code, runtime, policy, schema, or executor diffs; docs-only or mechanical changes may log an explicit waiver.
+- Keep adversarial review bounded to the task contract or diff: one critic pass by default, two max after repair, then convert remaining findings into Workgraph follow-ups.
+- Convert drift, test, roborev, or review findings into scoped Workgraph tasks instead of leaving them only in chat.
+
+## Workgraph Rules
+- Stay focused on this task.
+- Log progress: wg log {{task_id}} "message"
+- When complete: commit and push your work, then run wg done {{task_id}} — a successful git push is required. If wg done rejects with a push error, fix the push and re-run.
+- If blocked: wg fail {{task_id}} --reason "description"
+
+## Coredrift Protocol
+- Treat the `wg-contract` block (in the task description) as binding.
+- At start and just before completion, run:
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- If you need to change scope, update touch globs:
+  ./.workgraph/coredrift contract set-touch --task {{task_id}} <globs...>
+- If `hardening_in_core` is flagged, avoid adding guardrails in the core task; do/complete the `harden:` follow-up task instead.
+
+## Superpowers Protocol
+- If Superpowers-style skills are available in this environment, use:
+  /brainstorming before code
+  /test-driven-development for behavior changes
+  /verification-before-completion before `wg done`
+- If not available, follow the same phases explicitly.
+
+## Model-Mediated Protocol
+- Separate pipes vs decisions (facts/execution vs judgment).
+- If a Model-Mediated Architecture skill is available, apply it (model decides; code executes).
+- Log key decisions/deviations in `wg log`, and prefer follow-up tasks over bloating the current task.
+
+## archdrift Protocol
+- If this task includes an `archdrift` block (in the description), run:
+  ./.workgraph/archdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (auto/all strategy can include archdrift):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.archdrift/`.
+
+## uxdrift Protocol
+- If this task includes a `uxdrift` block (in the description), run:
+  ./.workgraph/uxdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs uxdrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- If it fails due to missing URL, set `url = "..."` in the `uxdrift` block or pass --url.
+- Artifacts live under `.workgraph/.uxdrift/`.
+
+## therapydrift Protocol
+- If this task includes a `therapydrift` block (in the description), run:
+  ./.workgraph/therapydrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs therapydrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.therapydrift/`.
+
+## fixdrift Protocol
+- If this task includes a `fixdrift` block (in the description), run:
+  ./.workgraph/fixdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs fixdrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.fixdrift/`.
+
+## yagnidrift Protocol
+- If this task includes a `yagnidrift` block (in the description), run:
+  ./.workgraph/yagnidrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs yagnidrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.yagnidrift/`.
+
+## redrift Protocol
+- If this task includes a `redrift` block (in the description), run:
+  ./.workgraph/redrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs redrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.redrift/`.
+
+"""

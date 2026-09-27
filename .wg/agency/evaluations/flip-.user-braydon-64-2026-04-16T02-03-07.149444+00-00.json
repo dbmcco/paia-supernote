@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-64-2026-04-16T02-03-07.149444+00-00",
+  "task_id": ".user-braydon-64",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.465,
+  "dimensions": {
+    "hallucination_rate": 0.25,
+    "semantic_match": 0.55,
+    "specificity_match": 0.25,
+    "requirement_coverage": 0.4
+  },
+  "notes": "The actual task is minimal and abstract ('persistent conversation surface'), while the inferred version adds substantial technical specificity (starting service, paia-events integration, interface verification). There's semantic overlap—both address the user board—but the inferred task introduces concrete requirements not present in the original, particularly the paia-events connection which appears fabricated. The actual task contains no acceptance criteria or detailed acceptance requirements, making it difficult to evaluate whether the inferred requirements are justified. The inferred version reflects plausible implementation steps but diverges significantly from the vague, minimal original task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Start the user board service for the paia-supernote system. Ensure it connects successfully to the paia-events service and verify that the interface is functional and ready for use.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:03:07.149444+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

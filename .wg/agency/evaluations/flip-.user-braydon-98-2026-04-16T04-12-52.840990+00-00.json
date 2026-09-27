@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-98-2026-04-16T04-12-52.840990+00-00",
+  "task_id": ".user-braydon-98",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.51,
+  "dimensions": {
+    "requirement_coverage": 0.5,
+    "semantic_match": 0.65,
+    "hallucination_rate": 0.7,
+    "specificity_match": 0.3
+  },
+  "notes": "The inferred version correctly identifies the core task (implement a user board for braydon) but diverges significantly in emphasis and specificity. The actual task focuses on the PURPOSE ('persistent conversation surface') while the inferred version adds substantial implementation details (tests, events service connection, UI functionality) that are not present in the original contract. The inferred description is much more specific than the minimal actual description, and approximately 70% of its requirements (tests, event service integration, success criteria) appear to be hallucinated from the implementation history rather than derived from the task contract itself. The 'persistent conversation surface' aspect—the defining characteristic of the original task—is largely missing from the reconstruction.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board component that displays and manages user interface functionality. The user board should be fully functional with passing tests, able to start successfully, and connect to the events service. Ensure the implementation is complete, tested, and operational.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:12:52.840990+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

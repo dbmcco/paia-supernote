@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-144-2026-04-16T07-18-31.943023+00-00",
+  "task_id": ".user-braydon-144",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.835,
+  "dimensions": {
+    "hallucination_rate": 0.1,
+    "semantic_match": 0.95,
+    "specificity_match": 0.7,
+    "requirement_coverage": 0.75
+  },
+  "notes": "Both describe the same core task: implementing a user board for paia-supernote. The inferred version captures all four acceptance criteria (runs without errors, paia-events connection, core commands, session persistence) but omits some contextual features from the original (status monitoring/health checks, event viewing/transcription history, natural language command interpretation). The inferred version adds reasonable but unstated requirements (PAIA ecosystem integration, architecture patterns, existing codebase compatibility) which are minor inferences rather than hallucinations. The actual task is more specific about implementation details and file touches, while the inferred version is slightly more generic in its feature descriptions.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board component for the paia-supernote project that integrates with the PAIA ecosystem. The user board must: 1) Run without errors, 2) Successfully connect to the paia-events service, 3) Implement all core commands (status, events, help, write) with proper functionality, and 4) Support session persistence that works across restarts. Ensure the implementation follows the project's architecture patterns and maintains compatibility with the existing codebase.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:18:31.943023+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

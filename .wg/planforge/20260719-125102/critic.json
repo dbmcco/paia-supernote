@@ -1,0 +1,111 @@
+{
+  "findings": [
+    {
+      "category": "write_route_concurrency_safety",
+      "id": "F1",
+      "issue": "The base-revision check is treated as a one-shot preflight, but no contract or test covers the time-of-check-to-time-of-use race between the preflight and the actual apply->S3 PUT->finish upload. If the Supernote Cloud apply step is not server-gated by revision, a second writer can land between preflight and PUT, defeating the concurrency guarantee the goal requires.",
+      "location": "write-concurrency-contract (acceptance, edge_cases, tests/test_write_concurrency.py, integration-contract-tests)",
+      "repair": "Add a unit + integration assertion that the preflight revision is re-checked at the upload apply boundary (or that uploader.apply exposes/forwards a revision token), and either prove the apply step rejects stale writes or record the residual TOCTOU as an explicit, tracked risk in adversarial-review.md. Do not leave preflight as the sole gate.",
+      "severity": "high"
+    },
+    {
+      "category": "real_user_data_safety",
+      "id": "F2",
+      "issue": "The node reuses PageStateStore conventions and touches page_state.py/config.py, but no acceptance criterion or test requires the ledger to live in a database path distinct from the user's real ~/.paia/supernote/supernote-state.db. 'Idempotent for an empty or existing SQLite database' does not prevent migrating/writing the legacy PageStateStore DB. This directly conflicts with the repo's do-not-mutate-real-data posture in AGENTS.md/CLAUDE.md.",
+      "location": "ledger-storage-contract (acceptance, touch_set src/paia_supernote/page_state.py, config.py), tests/test_cloud_change_ledger.py",
+      "repair": "Add an acceptance criterion and a test asserting the ledger uses its own DB path (e.g., cloud-change-ledger.db via config), that no ledger schema migration touches the existing state_db_path, and that opening a legacy state DB does not trigger ledger table writes without explicit opt-in.",
+      "severity": "high"
+    },
+    {
+      "category": "ocr_overrun_via_unstable_hash",
+      "id": "F3",
+      "issue": "Content-hash determinism is not specified or tested. If the hash is computed over a re-serialized supernotelib page object or re-encoded bitmap, identical pages can hash differently across reads, causing false change detection and re-OCR of unchanged pages (the exact overrun the goal says to prevent).",
+      "location": "ledger-storage-contract, ingest-diff-ocr-contract, tests/test_cloud_change_ledger.py",
+      "repair": "Pin the hash input to a canonical byte form (raw page bytes or RATTA_RLE bytes) and add a test that re-extracting/re-reading the same page yields a stable hash across two ingest cycles, and that an unchanged page produces zero OCR calls.",
+      "severity": "medium"
+    },
+    {
+      "category": "model_fit_under_routing",
+      "id": "F4",
+      "issue": "repair-findings is merge-sensitive and its touch_set grants edits to critical write-safety files (uploader.py, quick_filing_service.py), but it routes at standard. The plan's own model policy escalates write-safety/domain-safety work to premium, so a standard route for repairs that can weaken stale-write protection is inconsistent.",
+      "location": "repair-findings (route_tier standard, selected_model claude-sonnet-4-5, touch_set includes src/paia_supernote/uploader.py and write-safety code)",
+      "repair": "Either raise repair-findings route_tier/selected_route to premium (anthropic/claude-opus-4-8) with the opus fallback, or split write-safety repairs out of its touch_set into a premium sub-task and keep repair-findings on non-safety contract files only.",
+      "severity": "medium"
+    },
+    {
+      "category": "model_fit_safety_access",
+      "id": "F5",
+      "issue": "A cheap-routed stabilization leaf has write access to uploader.py (write-safety). Even with bounded fix rules, giving a cheap model edit access to the upload path contradicts the domain-safety escalation rule and risks a silent safe-upload regression.",
+      "location": "unit-regression-suite (route_tier cheap, selected_model claude-haiku-4-5, touch_set includes src/paia_supernote/uploader.py)",
+      "repair": "Remove src/paia_supernote/uploader.py (and tests/test_uploader.py if it implies uploader source edits) from unit-regression-suite's touch_set; route any uploader fix through repair-findings at premium. Keep the cheap node on non-safety test/source leaves only.",
+      "severity": "medium"
+    },
+    {
+      "category": "agency_and_dispatch_integrity",
+      "id": "F6",
+      "issue": "Agency is declared the default runtime, but live evidence shows the Workgraph dispatcher is executor=pi with a default model of pi:zai/glm-5.2 and no active Agency agents. The plan defines no concrete Agency-unavailable detection, and no gate verifies that wg add --model actually overrides the dispatcher default. If the dispatcher ignores per-node models, every premium node silently runs on glm-5.2.",
+      "location": "agency_plan, supernote-cloud-contracts-root (verify), evidence.workgraph.status (executor=pi, model=pi:zai/glm-5.2)",
+      "repair": "Add a root-node verification step that dispatches/inspects one sample node and confirms the executing model equals the assigned selected_model (e.g., via wg show / agent log / pi -p --model dry check), and define a concrete Agency-availability probe with a hard fallback to Pi per-node execution. Block implementation nodes until model pass-through is proven.",
+      "severity": "medium"
+    },
+    {
+      "category": "default_floor_cost_drift",
+      "id": "F7",
+      "issue": "The Pi model catalog sets the default floor to local/free (zai/glm-5.2) for small, strongly verified leaf work and says escalate only when the rubric demands it. Both leaf nodes self-report risk=low, ambiguity=low, verification_strength=strong, coordination=independent, yet route cheap (haiku). The plan's rationale does not justify the paid escalation.",
+      "location": "model_assignments (strongly-verified-test-leaf -> pi-cheap), unit-regression-suite, dead-code-yagni-cleanup",
+      "repair": "Downgrade unit-regression-suite and dead-code-yagni-cleanup selected_model to zai/glm-5.2 (local) with a cheap/standard fallback, or add explicit justification per node that meets the catalog's 'demands it' clause (e.g., shared-contract touch).",
+      "severity": "low"
+    },
+    {
+      "category": "drift_gate_binding_gap",
+      "id": "F8",
+      "issue": "archdrift and uxdrift are declared in speedrift_modules but are not bound to any drift_gate, so they only run as ad-hoc node modules and cannot block handoff. Separately, plandrift is referenced in the on_failure gate but is not declared in speedrift_modules.",
+      "location": "drift_gates, speedrift_modules",
+      "repair": "Either bind archdrift to the pre_handoff gate for this cross-system change and add plandrift to speedrift_modules, or drop archdrift/uxdrift from speedrift_modules to keep declarations and gates consistent.",
+      "severity": "low"
+    },
+    {
+      "category": "missing_integration_and_regression_coverage",
+      "id": "F9",
+      "issue": "Integration coverage exists for ledger and agent_contracts, but the events surface (events.py structured error publishing) has no integration test, and there is no explicit quick_filing_service safe-upload regression assertion even though quick_filing_service.py is in the write node touch_set and the goal requires preserving existing safe upload behavior.",
+      "location": "integration-contract-tests, write-concurrency-contract, tests/test_uploader.py",
+      "repair": "Add an integration assertion that errors published via events carry the structured payload (code/suggested_action/correlation_id) and a regression test that the existing quick-filing dry-run/backup/upload ordering still holds after the base-revision preflight is threaded in.",
+      "severity": "low"
+    },
+    {
+      "category": "allowlist_write_enforcement",
+      "id": "F10",
+      "issue": "Allowlist enforcement is asserted for ingest and read contracts, and the structured-error UX test mentions a non-allowlisted code, but the write node's own acceptance/edge_cases do not require writes targeting non-allowlisted notebooks to be rejected before uploader invocation. A write route not gated by the allowlist would bypass the configured scope.",
+      "location": "write-concurrency-contract (acceptance, edge_cases)",
+      "repair": "Add a write-concurrency-contract acceptance criterion and test: a write request for a non-allowlisted notebook returns the non-allowlisted structured error and never invokes SupernoteUploader.upload or its lower-level steps.",
+      "severity": "low"
+    }
+  ],
+  "pass": false,
+  "required_repairs": [
+    {
+      "finding_id": "F1",
+      "repair": "Close the preflight->apply TOCTOU: re-check revision at the upload boundary in contract + tests, or prove server-side gating, else record residual risk in adversarial-review.md."
+    },
+    {
+      "finding_id": "F2",
+      "repair": "Require and test a distinct ledger DB path with zero writes/migration against the existing ~/.paia/supernote/supernote-state.db."
+    },
+    {
+      "finding_id": "F3",
+      "repair": "Pin and test content-hash determinism on a canonical byte form so unchanged pages never trigger re-OCR."
+    },
+    {
+      "finding_id": "F4",
+      "repair": "Route repair-findings write-safety edits at premium, or remove uploader/quick_filing from its touch_set."
+    },
+    {
+      "finding_id": "F5",
+      "repair": "Remove uploader.py from unit-regression-suite touch_set or escalate its route; keep cheap models off write-safety source."
+    },
+    {
+      "finding_id": "F6",
+      "repair": "Add a root-node model pass-through verification gate and a concrete Agency-unavailable detection/fallback before implementation nodes run."
+    }
+  ]
+}

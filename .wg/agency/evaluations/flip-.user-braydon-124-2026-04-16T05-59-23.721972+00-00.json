@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-124-2026-04-16T05-59-23.721972+00-00",
+  "task_id": ".user-braydon-124",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.41,
+  "dimensions": {
+    "hallucination_rate": 0.6,
+    "requirement_coverage": 0.3,
+    "specificity_match": 0.2,
+    "semantic_match": 0.6
+  },
+  "notes": "The actual task is extremely minimal—just 'User board for braydon — persistent conversation surface'—while the inferred task reconstructs a detailed code review with specific features (terminal interface, status monitoring, events display, write capabilities, code/architecture assessment). Both reference 'user board' and 'braydon', and persistent conversation surface maps to session persistence, but the inferred version adds ~60% details not present in the original task description. The inferred task appears to have reverse-engineered implementation details from the code rather than extracting stated requirements.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Review the user board implementation to ensure it provides a comprehensive interactive terminal interface with status monitoring, events display, write capabilities, and session persistence. Verify that the implementation meets the requirements for the paia-supernote project and assess the code quality, architecture, and functionality of the user board component.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:59:23.721972+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

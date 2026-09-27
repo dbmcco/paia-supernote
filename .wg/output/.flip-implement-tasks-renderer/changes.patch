@@ -1,0 +1,140 @@
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index e57cae1..b35b405 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -36,7 +36,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
+     "ollama_url": "http://localhost:11434",
+     "events_url": "http://localhost:3511",
+     "folio_url": "http://localhost:3512",
+-    "work_url": "http://localhost:3513",
++    "work_url": "http://localhost:3560",
+     "agent_mappings": {
+         "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
+         "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
+@@ -217,9 +217,8 @@ class SupernoteService:
+         task_id = match.group(1)
+         try:
+             async with httpx.AsyncClient() as client:
+-                resp = await client.patch(
+-                    f"{self.config['work_url']}/v1/tasks/{task_id}",
+-                    json={"status": "done"},
++                resp = await client.post(
++                    f"{self.config['work_url']}/api/tasks/{task_id}/done",
+                     timeout=5.0,
+                 )
+                 resp.raise_for_status()
+diff --git a/src/paia_supernote/tasks_sync.py b/src/paia_supernote/tasks_sync.py
+index 67eb624..156a98d 100644
+--- a/src/paia_supernote/tasks_sync.py
++++ b/src/paia_supernote/tasks_sync.py
+@@ -81,22 +81,35 @@ class TasksSync:
+             await asyncio.sleep(self._poll_interval)
+ 
+     async def _poll_once(self) -> None:
+-        """Fetch all lanes, detect changes, rebuild tasks.note if needed."""
+-        lanes_data: Dict[str, List[Dict[str, Any]]] = {}
++        """Fetch all tasks from paia-work, bucket by board tag, detect changes."""
++        lanes_data: Dict[str, List[Dict[str, Any]]] = {lane: [] for lane in LANES}
+ 
+         async with httpx.AsyncClient() as client:
++            try:
++                resp = await client.get(
++                    f"{self._work_url}/api/tasks",
++                    timeout=10.0,
++                )
++                resp.raise_for_status()
++                payload = resp.json()
++                # paia-work returns a list or {"tasks": [...]}
++                all_tasks: List[Dict[str, Any]] = (
++                    payload if isinstance(payload, list) else payload.get("tasks", [])
++                )
++            except httpx.HTTPError as exc:
++                log.warning("tasks_fetch_failed", error=str(exc))
++                return  # Don't rebuild on partial data
++
++        # Bucket by board tag, open tasks only (done/failed/cancelled are noise).
++        CLOSED_STATUSES = {"done", "failed", "cancelled", "completed", "closed"}
++        for task in all_tasks:
++            if task.get("status") in CLOSED_STATUSES:
++                continue
++            tags: List[str] = task.get("tags") or []
+             for lane in LANES:
+-                try:
+-                    resp = await client.get(
+-                        f"{self._work_url}/v1/tasks",
+-                        params={"lane": lane},
+-                        timeout=10.0,
+-                    )
+-                    resp.raise_for_status()
+-                    lanes_data[lane] = resp.json().get("tasks", [])
+-                except httpx.HTTPError as exc:
+-                    log.warning("tasks_lane_fetch_failed", lane=lane, error=str(exc))
+-                    return  # Don't rebuild on partial data
++                if f"board:{lane}" in tags:
++                    lanes_data[lane].append(task)
++                    break  # A task belongs to at most one board lane
+ 
+         # Detect any lane change by MD5 hash
+         changed = False
+diff --git a/src/paia_supernote/writer.py b/src/paia_supernote/writer.py
+index 0f18404..2b154d7 100644
+--- a/src/paia_supernote/writer.py
++++ b/src/paia_supernote/writer.py
+@@ -298,8 +298,21 @@ class SupernoteWriter:
+         rand = "".join(secrets.choice(chars) for _ in range(12))
+         return f"P{ts}{rand}"
+ 
++    # System fonts tried (in order) when no agent font is requested.
++    # These have good Unicode coverage including □/☑ glyphs.
++    _FALLBACK_FONTS = (
++        "Arial",
++        "Helvetica",
++        "/System/Library/Fonts/Helvetica.ttc",
++        "/System/Library/Fonts/Arial.ttf",
++        "/Library/Fonts/Arial.ttf",
++        "/System/Library/Fonts/Supplemental/Arial.ttf",
++        "/System/Library/Fonts/SFNSDisplay.ttf",
++        "/System/Library/Fonts/SF-Pro-Display-Regular.otf",
++    )
++
+     def _load_font(self, agent: Optional[str], size: int) -> ImageFont.FreeTypeFont:
+-        """Load font for agent, falling back to default if not available."""
++        """Load font for agent, falling back to system font then PIL default."""
+         font_name = self.AGENT_FONTS.get(agent, "") if agent else ""
+         if font_name:
+             # Try name variants (e.g. "Bradley Hand" -> "Bradley Hand Bold")
+@@ -320,6 +333,12 @@ class SupernoteWriter:
+                         return ImageFont.truetype(path, size)
+                     except OSError:
+                         continue
++        # No agent font (or agent font failed) — try system fonts with Unicode coverage
++        for path in self._FALLBACK_FONTS:
++            try:
++                return ImageFont.truetype(path, size)
++            except OSError:
++                continue
+         return ImageFont.load_default(size=size)
+ 
+     @staticmethod
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 61c7ec4..344edae 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -29,7 +29,7 @@ class TestLoadConfig:
+         config = load_config(config_path=tmp_path / "nonexistent.toml")
+         assert config["events_url"] == "http://localhost:3511"
+         assert config["folio_url"] == "http://localhost:3512"
+-        assert config["work_url"] == "http://localhost:3513"
++        assert config["work_url"] == "http://localhost:3560"
+         assert "agent_mappings" in config
+ 
+     def test_loads_toml_file(self, tmp_path: Path) -> None:
+@@ -48,7 +48,7 @@ class TestLoadConfig:
+         assert config["events_url"] == "http://events:9000"
+         assert config["folio_url"] == "http://folio:9001"
+         # Unset keys keep defaults
+-        assert config["work_url"] == "http://localhost:3513"
++        assert config["work_url"] == "http://localhost:3560"
+ 
+     def test_env_vars_override_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+         cfg_file = tmp_path / "config.toml"

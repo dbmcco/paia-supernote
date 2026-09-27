@@ -1,0 +1,27 @@
+[
+  {
+    "timestamp": "2026-06-08T19:09:23.581914+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-06-08T19:09:24.020877+00:00",
+    "user": "braydon",
+    "message": "Coredrift: OK (no findings)"
+  },
+  {
+    "timestamp": "2026-06-08T19:12:51.893029+00:00",
+    "user": "braydon",
+    "message": "Coredrift: OK (no findings)"
+  },
+  {
+    "timestamp": "2026-06-08T19:12:59.581715+00:00",
+    "user": "braydon",
+    "message": "Implemented per-card move menu. Validation: organizer UI tests 10 passed; organizer API/server/UI tests 41 passed; full suite 301 passed, 4 deselected; live tailnet /organizer returns 200 and includes move-menu/data-move-target markup."
+  },
+  {
+    "timestamp": "2026-06-08T19:13:14.614602+00:00",
+    "user": "braydon",
+    "message": "Task marked as done"
+  }
+]

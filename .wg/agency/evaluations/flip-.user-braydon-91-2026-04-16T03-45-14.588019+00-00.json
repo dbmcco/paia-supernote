@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-91-2026-04-16T03-45-14.588019+00-00",
+  "task_id": ".user-braydon-91",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.25,
+  "dimensions": {
+    "semantic_match": 0.35,
+    "hallucination_rate": 0.85,
+    "requirement_coverage": 0.15,
+    "specificity_match": 0.25
+  },
+  "notes": "The ACTUAL task is minimal and vague: 'User board: braydon — persistent conversation surface' with no explicit acceptance criteria. The INFERRED task assumes a testing/verification workflow with 5+ specific test items (connection to events service, UI display, non-interactive mode handling, etc.). These represent fundamentally different task types: the actual appears to be about creating or working on a user board feature, while the inferred interprets it as validating an existing implementation. Almost all the inferred requirements (testing focus, events service connection, UI verification, health reporting) are not mentioned in the original and represent hallucination rather than inference.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board functionality is working correctly. Test and confirm that it: 1) starts properly, 2) connects to the events service, 3) displays the UI correctly, 4) handles non-interactive mode gracefully, and 5) all existing tests pass. Report on the overall health and functionality of the user board component.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:45:14.588019+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

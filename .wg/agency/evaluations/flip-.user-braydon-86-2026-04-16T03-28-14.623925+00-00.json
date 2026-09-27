@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-86-2026-04-16T03-28-14.623925+00-00",
+  "task_id": ".user-braydon-86",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.27,
+  "dimensions": {
+    "requirement_coverage": 0.2,
+    "specificity_match": 0.2,
+    "semantic_match": 0.35,
+    "hallucination_rate": 0.7
+  },
+  "notes": "The ACTUAL task is a minimal, vague objective ('User board: braydon' as a persistent conversation surface) with no explicit acceptance criteria or technical requirements. The INFERRED task reconstructs a verification/testing scenario with specific technical details (CLI operational, tests passing, paia-events connection) that are not present in the original. While both concern the user board component, they represent different task types: the actual is creation-oriented with no clear goals, while the inferred is validation-oriented with fabricated technical requirements. Most of the inferred specificity (CLI checks, test verification, paia-events validation) appears hallucinated from context assumptions rather than derived from the actual task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board component is functioning correctly. Check that the CLI interface is operational, all tests are passing, and the connection to paia-events is working properly. Confirm the current status and report whether the user board is ready for use.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:28:14.623925+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

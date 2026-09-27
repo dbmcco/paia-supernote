@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-137-2026-04-16T06-50-37.870594+00-00",
+  "task_id": ".user-braydon-137",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.67,
+  "dimensions": {
+    "requirement_coverage": 0.65,
+    "specificity_match": 0.35,
+    "semantic_match": 0.9,
+    "hallucination_rate": 0.5
+  },
+  "notes": "Both describe implementing a user board feature for paia-supernote, so semantic match is strong. However, the actual task is extremely minimal (just 'User board for braydon — persistent conversation surface') with no explicit acceptance criteria, while the inferred version adds substantial specifics: events integration, import verification, and test passing. These inferred requirements are reasonable engineering practices but not explicitly stated in the ground truth. The inferred version is significantly more specific than the actual, creating a mismatch in detail level. About 50% of the inferred specifics (events integration, imports, tests) are not mentioned in the original task.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board feature for the paia-supernote project. The implementation should include proper events integration, ensure all imports are working correctly, and verify that all tests pass. The user board should be fully functional and ready for use upon completion.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:50:37.870594+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

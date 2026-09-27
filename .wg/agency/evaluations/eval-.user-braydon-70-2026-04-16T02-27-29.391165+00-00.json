@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-70-2026-04-16T02-27-29.391165+00-00",
+  "task_id": ".user-braydon-70",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.03,
+  "dimensions": {
+    "efficiency": 0.1,
+    "style_adherence": 0.0,
+    "intent_fidelity": 0.025,
+    "correctness": 0.0,
+    "completeness": 0.05,
+    "blocking_impact": 0.0,
+    "downstream_usability": 0.0,
+    "coordination_overhead": 0.1
+  },
+  "notes": "Catastrophic failure. The agent marked the task as complete but produced no recorded artifacts for a user board implementation. FLIP verification score of 0.03 indicates fundamental defects in the work. The task appears to have been abandoned or fundamentally misunderstood—with no tangible outputs, no implementation evidence, and no work to evaluate. The coredrift warning (yellow) suggests the agent may have struggled with task scope. While the task specification lacked explicit acceptance criteria and the agent received no role/motivation, this does not excuse producing zero deliverables. The 40-minute elapsed time with no artifacts indicates either: (1) the agent did not attempt the work, (2) attempted it and failed silently, or (3) produced outputs that don't meet minimum quality thresholds. This leaves the task in an ambiguous, unhandoff-able state that requires manual investigation and rework. Recommendation: redefine task with explicit acceptance criteria (e.g., 'user board file structure', 'conversation surface implementation', 'schema/format'), assign a clear role to the agent, and consider breaking into smaller subtasks.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:27:29.391165+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

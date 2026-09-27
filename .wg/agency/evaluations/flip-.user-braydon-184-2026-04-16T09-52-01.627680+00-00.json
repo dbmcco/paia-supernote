@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-184-2026-04-16T09-52-01.627680+00-00",
+  "task_id": ".user-braydon-184",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.56,
+  "dimensions": {
+    "semantic_match": 0.65,
+    "hallucination_rate": 0.45,
+    "specificity_match": 0.25,
+    "requirement_coverage": 0.65
+  },
+  "notes": "The actual task is extremely minimal—just 'User board: braydon' as a 'persistent conversation surface' with no explicit acceptance criteria. The inferred task substantially expands this into a full implementation spec with many technical details (CLI entry point, paia-events integration, terminal UI, offline handling, etc.). Semantic overlap exists (both describe a user board for conversation), but at very different abstraction levels. The inferred version is far more specific than the original, and about 45% of its detailed requirements (CLI entry point, terminal interface specifics, natural language interpretation, offline handling) are not explicitly mentioned in the original task. The core concepts (persistent, conversation surface, user board) are captured, but the scope expansion is substantial.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement and verify the user board component for the paia-supernote project. Ensure the user board has proper CLI integration with entry point 'paia-supernote-board', handles all dependencies and imports correctly, integrates with paia-events and Supernote sync functionality, provides a rich terminal interface with conversation history, supports natural language command interpretation, and gracefully handles offline/missing services scenarios. Verify the implementation is fully functional and ready for use, including proper session persistence and executable run scripts.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T09:52:01.627680+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

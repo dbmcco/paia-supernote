@@ -1,0 +1,12 @@
+{
+  "actor": {
+    "id": "session-78547",
+    "actor_class": "interactive",
+    "name": "claude-code",
+    "repo": "paia-supernote"
+  },
+  "started_at": "2026-04-16T06:41:57.142013+00:00",
+  "last_heartbeat": "2026-04-16T06:41:57.142013+00:00",
+  "current_task": "",
+  "status": "active"
+}

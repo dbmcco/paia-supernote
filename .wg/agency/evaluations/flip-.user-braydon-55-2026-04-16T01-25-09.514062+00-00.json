@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-55-2026-04-16T01-25-09.514062+00-00",
+  "task_id": ".user-braydon-55",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.065,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.3,
+    "semantic_match": 0.0,
+    "hallucination_rate": 0.95
+  },
+  "notes": "The inferred task is fundamentally misaligned with the actual task. The ACTUAL task is about creating/maintaining a persistent conversation surface (user board for braydon), while the INFERRED task describes a coredrift analysis of code churn metrics and hardening status—an entirely different domain and objective. The superficial overlap (mode='core', max_loc constraint) appears to have triggered a misinterpretation where the evaluator conflated technical metadata with task intent. Nearly all inferred requirements (coredrift analysis, churn_loc metrics, hardening_in_core checks, drift thresholds) are hallucinated and absent from the original specification. The only minor alignment is that both mention 'core', but used in completely different contexts.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Perform a coredrift analysis on the current codebase to evaluate code churn metrics and core hardening status. Check if recent changes fall within acceptable drift parameters for lines of code churn (churn_loc) and hardening practices in core modules (hardening_in_core). Report the analysis results and any recommendations for task splitting or budget adjustments if drift thresholds are exceeded. Complete the analysis and mark task as done regardless of findings.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:25:09.514062+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

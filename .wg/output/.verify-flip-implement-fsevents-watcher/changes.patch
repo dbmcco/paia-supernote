@@ -1,0 +1,3350 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 6ea055d..304ad7f 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -41,7 +41,7 @@ where = ["src"]
+ 
+ [project.scripts]
+ paia-supernote = "paia_supernote.main:main"
+-paia-supernote-board = "paia_supernote.user_board:main"
++paia-supernote-board = "paia_supernote.user_board:cli"
+ 
+ [tool.pytest.ini_options]
+ testpaths = ["tests"]
+diff --git a/scripts/service.sh b/scripts/service.sh
+index 2a92a6c..73c0845 100755
+--- a/scripts/service.sh
++++ b/scripts/service.sh
+@@ -1,38 +1,47 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ 
++SERVICE_LABEL="com.paia.supernote.service"
+ INGEST_LABEL="com.paia.supernote.ingest"
+ ENRICH_LABEL="com.paia.supernote.enrich"
+ PLIST_DIR="$HOME/Library/LaunchAgents"
+ LOG_DIR="$HOME/Library/Logs/paia-supernote"
++LAUNCH_DOMAIN="gui/$(id -u)"
+ 
+ case "${1:-help}" in
+   install)
+     mkdir -p "$PLIST_DIR" "$LOG_DIR"
++    cp "$(dirname "$0")/paia-supernote-service.plist" "$PLIST_DIR/$SERVICE_LABEL.plist"
+     cp "$(dirname "$0")/paia-supernote-ingest.plist" "$PLIST_DIR/$INGEST_LABEL.plist"
+     cp "$(dirname "$0")/paia-supernote-enrich.plist" "$PLIST_DIR/$ENRICH_LABEL.plist"
++    launchctl load "$PLIST_DIR/$SERVICE_LABEL.plist"
+     launchctl load "$PLIST_DIR/$INGEST_LABEL.plist"
+     launchctl load "$PLIST_DIR/$ENRICH_LABEL.plist"
+     ;;
+   uninstall)
++    launchctl unload "$PLIST_DIR/$SERVICE_LABEL.plist" 2>/dev/null || true
+     launchctl unload "$PLIST_DIR/$INGEST_LABEL.plist" 2>/dev/null || true
+     launchctl unload "$PLIST_DIR/$ENRICH_LABEL.plist" 2>/dev/null || true
+-    rm -f "$PLIST_DIR/$INGEST_LABEL.plist" "$PLIST_DIR/$ENRICH_LABEL.plist"
++    rm -f "$PLIST_DIR/$SERVICE_LABEL.plist" "$PLIST_DIR/$INGEST_LABEL.plist" "$PLIST_DIR/$ENRICH_LABEL.plist"
+     ;;
+   start)
++    launchctl start "$SERVICE_LABEL"
+     launchctl start "$INGEST_LABEL"
+     launchctl start "$ENRICH_LABEL"
+     ;;
+   stop)
++    launchctl stop "$SERVICE_LABEL"
+     launchctl stop "$INGEST_LABEL"
+     launchctl stop "$ENRICH_LABEL"
+     ;;
+   status)
+-    launchctl list "$INGEST_LABEL" || true
+-    launchctl list "$ENRICH_LABEL" || true
++    launchctl print "$LAUNCH_DOMAIN/$SERVICE_LABEL" || true
++    launchctl print "$LAUNCH_DOMAIN/$INGEST_LABEL" || true
++    launchctl print "$LAUNCH_DOMAIN/$ENRICH_LABEL" || true
+     ;;
+   logs)
+-    tail -f "$LOG_DIR/ingest.stdout.log" "$LOG_DIR/ingest.stderr.log" \
++    tail -f "$LOG_DIR/service.stdout.log" "$LOG_DIR/service.stderr.log" \
++            "$LOG_DIR/ingest.stdout.log" "$LOG_DIR/ingest.stderr.log" \
+             "$LOG_DIR/enrich.stdout.log" "$LOG_DIR/enrich.stderr.log"
+     ;;
+   *)
+diff --git a/src/paia_supernote/cloud_poller.py b/src/paia_supernote/cloud_poller.py
+index b17799c..6ce9c96 100644
+--- a/src/paia_supernote/cloud_poller.py
++++ b/src/paia_supernote/cloud_poller.py
+@@ -6,10 +6,11 @@ ABOUTME: Polls /api/file/list/query, downloads changed files, fires callback wit
+ from __future__ import annotations
+ 
+ import asyncio
+-import logging
+ from typing import Callable, Awaitable, Dict, Optional
+ 
+-log = logging.getLogger(__name__)
++import structlog
++
++log = structlog.get_logger(__name__)
+ 
+ # Type alias: async callback receives (notebook_name, note_bytes, update_time)
+ NoteChangedCallback = Callable[[str, bytes, "int | None"], Awaitable[None]]
+@@ -49,16 +50,30 @@ class CloudPoller:
+         self._last_seen: Dict[str, int] = {}
+         self._task: Optional[asyncio.Task] = None
+         self._running = False
++        self._stopping = False
+ 
+     def start(self) -> None:
+         """Start the polling loop as a background asyncio task."""
+         self._running = True
++        self._stopping = False
+         self._task = asyncio.create_task(self._loop())
+         log.info("cloud_poller_started", poll_interval=self._poll_interval)
+ 
++    async def wait(self) -> None:
++        """Wait for the background poller task to exit."""
++        if self._task is None:
++            return
++        try:
++            await self._task
++        except asyncio.CancelledError:
++            if self._stopping:
++                return
++            raise
++
+     async def stop(self) -> None:
+         """Stop polling and await the background task."""
+         self._running = False
++        self._stopping = True
+         if self._task:
+             self._task.cancel()
+             try:
+@@ -74,7 +89,7 @@ class CloudPoller:
+             try:
+                 await self._poll_once()
+             except Exception as exc:
+-                log.error("cloud_poller_error", error=str(exc))
++                log.exception("cloud_poller_error", error=str(exc))
+             await asyncio.sleep(self._poll_interval)
+ 
+     async def _poll_once(self) -> None:
+@@ -102,9 +117,6 @@ class CloudPoller:
+             if update_time <= last_update:
+                 continue
+ 
+-            # File is new or updated — download and fire
+-            self._last_seen[name] = update_time
+-
+             try:
+                 note_bytes = await self._uploader.download_notebook(name)
+                 log.info(
+@@ -114,8 +126,10 @@ class CloudPoller:
+                     update_time=update_time,
+                 )
+                 await self._callback(notebook_name, note_bytes, update_time)
++                # Advance the revision marker only after download + callback succeed.
++                self._last_seen[name] = update_time
+             except Exception as exc:
+-                log.error("cloud_download_error", name=name, error=str(exc))
++                log.warning("cloud_download_error", name=name, error=str(exc))
+ 
+     async def _list_notes(self) -> list:
+         """Fetch the Note folder listing from Supernote Cloud."""
+diff --git a/src/paia_supernote/enrich_service.py b/src/paia_supernote/enrich_service.py
+index beec574..f998a4e 100644
+--- a/src/paia_supernote/enrich_service.py
++++ b/src/paia_supernote/enrich_service.py
+@@ -30,6 +30,7 @@ class EnrichService:
+         self.page_state = page_state or PageStateStore(Path(self.config["state_db_path"]))
+         self.page_state.init_schema()
+         self.enricher = enricher or SupernoteEnricher(
++            zai_api_key=self.config["zai_api_key"],
+             zai_base_url=self.config["zai_base_url"],
+             zai_text_model=self.config["zai_text_model"],
+         )
+diff --git a/src/paia_supernote/enrichment.py b/src/paia_supernote/enrichment.py
+index fab1616..df5b868 100644
+--- a/src/paia_supernote/enrichment.py
++++ b/src/paia_supernote/enrichment.py
+@@ -32,7 +32,11 @@ class SupernoteEnricher:
+     async def enrich_page(self, *, notebook: str, page: int, raw_text: str) -> EnrichedPage:
+         prompt = (
+             "Normalize this Supernote page into readable markdown and a renderable diagram. "
+-            "Return strict JSON with keys markdown and diagram."
++            "Return strict JSON with keys markdown and diagram. "
++            "diagram must be either "
++            "{\"kind\":\"scene\",\"render_version\":\"1\",\"scene\":{\"nodes\":[],\"edges\":[]},\"summary\":null,\"confidence\":null}, "
++            "{\"kind\":\"mermaid\",\"render_version\":\"1\",\"mermaid\":\"graph TD\\nA-->B\",\"summary\":null,\"confidence\":null}, "
++            "or {\"kind\":\"none\",\"render_version\":\"1\",\"summary\":null,\"confidence\":null}."
+         )
+         async with httpx.AsyncClient() as client:
+             resp = await client.post(
+@@ -52,7 +56,17 @@ class SupernoteEnricher:
+             )
+             resp.raise_for_status()
+             payload = json.loads(resp.json()["choices"][0]["message"]["content"])
+-        diagram = payload.get("diagram") or {"kind": "none", "render_version": "1"}
++        raw_diagram = payload.get("diagram")
++        if isinstance(raw_diagram, dict):
++            diagram = raw_diagram
++        elif isinstance(raw_diagram, str) and raw_diagram.strip():
++            diagram = {
++                "kind": "mermaid",
++                "render_version": "1",
++                "mermaid": raw_diagram,
++            }
++        else:
++            diagram = {"kind": "none", "render_version": "1"}
+         return EnrichedPage(
+             markdown=payload.get("markdown", raw_text),
+             diagram=diagram,
+diff --git a/src/paia_supernote/events.py b/src/paia_supernote/events.py
+index 5b510c6..a82ddd8 100644
+--- a/src/paia_supernote/events.py
++++ b/src/paia_supernote/events.py
+@@ -6,6 +6,7 @@ ABOUTME: Publishes/polls paia-events HTTP API (port 3511) — no MQTT, no direct
+ from __future__ import annotations
+ 
+ import asyncio
++from datetime import datetime, timezone
+ import time
+ import uuid
+ from typing import Any, Callable, Awaitable, Optional
+@@ -56,18 +57,18 @@ class EventsClient:
+     def register_write_handler(
+         self, handler: Callable[[dict[str, Any]], Awaitable[None]]
+     ) -> None:
+-        """Register async handler for supernote.write_requested events."""
++        """Register async handler for supernote.write.requested events."""
+         self._write_handler = handler
+ 
+     async def _register_subscriber(self) -> None:
+-        """Register paia-supernote as a subscriber for write_requested events."""
++        """Register paia-supernote as a subscriber for write.requested events."""
+         try:
+             async with httpx.AsyncClient() as client:
+                 resp = await client.post(
+                     f"{self._base_url}/v1/subscribers",
+                     json={
+                         "name": _SUBSCRIBER_NAME,
+-                        "event_type_prefix": "supernote.write_requested",
++                        "event_type_prefix": "supernote.write.requested",
+                     },
+                     timeout=5.0,
+                 )
+@@ -78,7 +79,7 @@ class EventsClient:
+             log.warning("subscriber_registration_failed", error=str(exc))
+ 
+     async def _poll_loop(self) -> None:
+-        """Poll for inbound write_requested events on a fixed interval."""
++        """Poll for inbound write.requested events on a fixed interval."""
+         while True:
+             try:
+                 await self._fetch_and_dispatch()
+@@ -124,12 +125,13 @@ class EventsClient:
+     async def publish_note_transcribed(
+         self, notebook: str, page: int, text: str, timestamp: float | None = None
+     ) -> None:
+-        """Publish supernote.note_transcribed event."""
++        """Publish supernote.note.transcribed event."""
+         ts = timestamp if timestamp is not None else time.time()
+         await self._publish(
+-            event_type="supernote.note_transcribed",
++            event_type="supernote.note.transcribed",
+             payload={"notebook": notebook, "page": page, "text": text, "timestamp": ts},
+             dedupe_key=f"supernote.note_transcribed:{notebook}:{page}:{int(ts)}",
++            occurred_at=datetime.fromtimestamp(ts, tz=timezone.utc),
+         )
+ 
+     async def publish_checkbox_completed(
+@@ -140,10 +142,10 @@ class EventsClient:
+         task_id: str = "",
+         tag: str = "",
+     ) -> None:
+-        """Publish supernote.checkbox_completed event."""
++        """Publish supernote.checkbox.completed event."""
+         _task_id = task_id or task_text[:32]
+         await self._publish(
+-            event_type="supernote.checkbox_completed",
++            event_type="supernote.checkbox.completed",
+             payload={
+                 "task_id": _task_id,
+                 "notebook": notebook,
+@@ -152,16 +154,18 @@ class EventsClient:
+                 "tag": tag,
+             },
+             dedupe_key=f"supernote.checkbox_completed:{notebook}:{page}:{_task_id}",
++            occurred_at=datetime.now(timezone.utc),
+         )
+ 
+     async def publish_snippet_detected(
+         self, notebook: str, page: int, text: str, agent: str
+     ) -> None:
+-        """Publish supernote.snippet_detected event."""
++        """Publish supernote.snippet.detected event."""
+         await self._publish(
+-            event_type="supernote.snippet_detected",
++            event_type="supernote.snippet.detected",
+             payload={"notebook": notebook, "page": page, "text": text, "agent": agent},
+             dedupe_key=f"supernote.snippet_detected:{notebook}:{page}:{text[:32]}",
++            occurred_at=datetime.now(timezone.utc),
+         )
+ 
+     async def _publish(
+@@ -169,6 +173,7 @@ class EventsClient:
+         event_type: str,
+         payload: dict[str, Any],
+         dedupe_key: str,
++        occurred_at: datetime,
+     ) -> None:
+         """POST /v1/events — fire and forget with warning on failure."""
+         try:
+@@ -179,6 +184,7 @@ class EventsClient:
+                         "event_type": event_type,
+                         "source_app": "paia-supernote",
+                         "source_event_id": str(uuid.uuid4()),
++                        "occurred_at": occurred_at.isoformat(),
+                         "dedupe_key": dedupe_key,
+                         "payload": payload,
+                     },
+diff --git a/src/paia_supernote/ingest_service.py b/src/paia_supernote/ingest_service.py
+index 54e153e..4cfe84e 100644
+--- a/src/paia_supernote/ingest_service.py
++++ b/src/paia_supernote/ingest_service.py
+@@ -3,6 +3,8 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import inspect
++from contextlib import suppress
+ import hashlib
+ from pathlib import Path
+ from typing import Any
+@@ -32,6 +34,7 @@ class IngestService:
+             vision_backend=self.config["vision_backend"],
+             ollama_model=self.config["ollama_model"],
+             ollama_url=self.config["ollama_url"],
++            zai_api_key=self.config["zai_api_key"],
+             zai_base_url=self.config["zai_base_url"],
+             zai_vision_model=self.config["zai_vision_model"],
+             zai_text_model=self.config["zai_text_model"],
+@@ -52,9 +55,10 @@ class IngestService:
+         note_bytes: bytes,
+         update_time: int | None = None,
+     ) -> None:
+-        results = await self.reader.process_file(note_bytes, notebook_name)
+         note_hash = hashlib.sha256(note_bytes).hexdigest()
+-        for result in results:
++        persisted_pages: set[int] = set()
++
++        async def persist_result(result) -> None:
+             source_revision = f"{update_time or 0}:{note_hash}:{result.page_num}"
+             self.page_state.upsert_ocr_page(
+                 notebook=result.notebook,
+@@ -63,15 +67,57 @@ class IngestService:
+                 raw_text=result.text,
+                 ocr_model=self.config["zai_vision_model"],
+             )
++            persisted_pages.add(result.page_num)
+             log.info("ocr_succeeded", notebook=result.notebook, page=result.page_num)
+ 
++        results = await self.reader.process_file(
++            note_bytes,
++            notebook_name,
++            on_result=persist_result,
++        )
++        for result in results:
++            if result.page_num in persisted_pages:
++                continue
++            await persist_result(result)
++
+     async def start(self) -> None:
+         log.info("ingest_service_starting")
+         await self.uploader.start()
+         self.cloud_poller.start()
+-        await self._shutdown_event.wait()
++        try:
++            await self._wait_until_shutdown_or_poller_exit()
++        except Exception as exc:
++            log.error("ingest_service_exiting_after_poller_failure", error=str(exc))
++            with suppress(Exception):
++                await self.cloud_poller.stop()
++            with suppress(Exception):
++                await self.uploader.stop()
++            raise
+ 
+     async def stop(self) -> None:
+         await self.cloud_poller.stop()
+         await self.uploader.stop()
+         self._shutdown_event.set()
++
++    async def _wait_until_shutdown_or_poller_exit(self) -> None:
++        poller_wait = getattr(self.cloud_poller, "wait", None)
++        if poller_wait is None or not inspect.iscoroutinefunction(poller_wait):
++            await self._shutdown_event.wait()
++            return
++
++        shutdown_task = asyncio.create_task(self._shutdown_event.wait())
++        poller_task = asyncio.create_task(poller_wait())
++
++        done, pending = await asyncio.wait(
++            {shutdown_task, poller_task},
++            return_when=asyncio.FIRST_COMPLETED,
++        )
++
++        for task in pending:
++            task.cancel()
++        for task in pending:
++            with suppress(asyncio.CancelledError):
++                await task
++
++        if poller_task in done:
++            poller_task.result()
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index 5433912..26faafe 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -8,10 +8,12 @@ from __future__ import annotations
+ 
+ import argparse
+ import asyncio
++import inspect
+ import os
+ import signal
+ import sys
+ import tomllib
++from contextlib import suppress
+ from pathlib import Path
+ from typing import Any, Dict
+ 
+@@ -27,6 +29,7 @@ from .uploader import SupernoteUploader
+ from .notebook_writer import append_page_to_notebook
+ from .tasks_sync import TasksSync
+ from .task_curator import TaskCurator
++from .notebook_artifacts import NotebookPageSpec, replace_notebook_pages
+ 
+ log = structlog.get_logger(__name__)
+ 
+@@ -38,6 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
+     "rewrite_backend": "zai",
+     "ollama_model": "qwen2.5vl:7b",
+     "ollama_url": "http://localhost:11434",
++    "zai_api_key": None,
+     "zai_base_url": "https://api.z.ai/api/coding/paas/v4",
+     "zai_vision_model": "glm-4.5v",
+     "zai_text_model": "glm-5.1",
+@@ -74,6 +78,7 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
+                 "rewrite_backend",
+                 "ollama_model",
+                 "ollama_url",
++                "zai_api_key",
+                 "zai_base_url",
+                 "zai_vision_model",
+                 "zai_text_model",
+@@ -96,6 +101,8 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
+         config["vision_backend"] = env_vision_backend
+     if env_rewrite_backend := os.environ.get("SUPERNOTE_REWRITE_BACKEND"):
+         config["rewrite_backend"] = env_rewrite_backend
++    if env_zai_api_key := os.environ.get("ZAI_API_KEY"):
++        config["zai_api_key"] = env_zai_api_key
+     if env_zai_base := os.environ.get("ZAI_BASE_URL"):
+         config["zai_base_url"] = env_zai_base
+     if env_zai_vision := os.environ.get("SUPERNOTE_ZAI_VISION_MODEL"):
+@@ -126,6 +133,7 @@ class SupernoteService:
+             vision_backend=self.config["vision_backend"],
+             ollama_model=self.config["ollama_model"],
+             ollama_url=self.config["ollama_url"],
++            zai_api_key=self.config["zai_api_key"],
+             zai_base_url=self.config["zai_base_url"],
+             zai_vision_model=self.config["zai_vision_model"],
+             zai_text_model=self.config["zai_text_model"],
+@@ -149,32 +157,66 @@ class SupernoteService:
+             uploader=self.uploader,
+             events_client=self.events,
+             rewrite_backend=self.config["rewrite_backend"],
++            zai_api_key=self.config["zai_api_key"],
+             zai_base_url=self.config["zai_base_url"],
+             zai_text_model=self.config["zai_text_model"],
+         )
+         self._shutdown_event = asyncio.Event()
+ 
++    def _resolve_agent_name(self, raw_agent: str) -> str | None:
++        candidate = str(raw_agent or "").strip()
++        if not candidate:
++            return None
++        if candidate in self.config["agent_mappings"]:
++            return candidate
++
++        lowered = candidate.lower()
++        alias_map = {
++            "sam": "Sam",
++            "samantha": "Sam",
++            "caroline": "Caroline",
++            "ingrid": "Ingrid",
++        }
++        if lowered in alias_map and alias_map[lowered] in self.config["agent_mappings"]:
++            return alias_map[lowered]
++
++        for configured in self.config["agent_mappings"]:
++            if configured.lower() == lowered:
++                return configured
++        return None
++
+     async def start(self) -> None:
+         """Start the Supernote service."""
+         log.info("service_starting", config_keys=list(self.config.keys()))
+ 
+-        # Start events connection
+-        await self.events.start()
+-        self.events.register_write_handler(self._handle_write_request)
++        try:
++            # Start events connection
++            await self.events.start()
++            self.events.register_write_handler(self._handle_write_request)
+ 
+-        # Start uploader browser session (also used by cloud poller for API calls)
+-        await self.uploader.start()
++            # Start uploader browser session (also used by cloud poller for API calls)
++            await self.uploader.start()
+ 
+-        # Start cloud poller (no Partner app needed)
+-        self.cloud_poller.start()
++            # Start cloud poller (no Partner app needed)
++            self.cloud_poller.start()
+ 
+-        # Start tasks sync (paia-work → tasks.note)
+-        self.tasks_sync.start()
++            # Start tasks sync (paia-work → tasks.note)
++            self.tasks_sync.start()
+ 
+-        log.info("service_started")
++            log.info("service_started")
+ 
+-        # Wait for shutdown signal
+-        await self._shutdown_event.wait()
++            await self._wait_until_shutdown_or_poller_exit()
++        except Exception as exc:
++            log.error("service_exiting_after_poller_failure", error=str(exc))
++            with suppress(Exception):
++                await self.tasks_sync.stop()
++            with suppress(Exception):
++                await self.cloud_poller.stop()
++            with suppress(Exception):
++                await self.uploader.stop()
++            with suppress(Exception):
++                await self.events.stop()
++            raise
+ 
+     async def stop(self) -> None:
+         """Stop the Supernote service, flushing pending ops."""
+@@ -188,6 +230,29 @@ class SupernoteService:
+         self._shutdown_event.set()
+         log.info("service_stopped")
+ 
++    async def _wait_until_shutdown_or_poller_exit(self) -> None:
++        poller_wait = getattr(self.cloud_poller, "wait", None)
++        if poller_wait is None or not inspect.iscoroutinefunction(poller_wait):
++            await self._shutdown_event.wait()
++            return
++
++        shutdown_task = asyncio.create_task(self._shutdown_event.wait())
++        poller_task = asyncio.create_task(poller_wait())
++
++        done, pending = await asyncio.wait(
++            {shutdown_task, poller_task},
++            return_when=asyncio.FIRST_COMPLETED,
++        )
++
++        for task in pending:
++            task.cancel()
++        for task in pending:
++            with suppress(asyncio.CancelledError):
++                await task
++
++        if poller_task in done:
++            poller_task.result()
++
+     async def _on_note_changed(
+         self, notebook_name: str, note_bytes: bytes, update_time: int | None = None
+     ) -> None:
+@@ -281,14 +346,15 @@ class SupernoteService:
+         import os
+ 
+         try:
+-            agent = event_data["agent"]
++            raw_agent = str(event_data["agent"])
++            agent = self._resolve_agent_name(raw_agent)
+             notebook = event_data.get("notebook") or self.config["agent_mappings"].get(agent, {}).get("notebook", "")
+             content = event_data.get("content", "")
+             content_type = event_data.get("content_type")
+ 
+             # Validate agent is known
+-            if agent not in self.config["agent_mappings"]:
+-                log.warning("write_request_unknown_agent", agent=agent)
++            if agent is None or agent not in self.config["agent_mappings"]:
++                log.warning("write_request_unknown_agent", agent=raw_agent)
+                 return
+ 
+             # tasks.note is owned by TasksSync — agents cannot write to it
+@@ -303,6 +369,50 @@ class SupernoteService:
+                 await self.task_curator.handle_write_requested(event_data)
+                 return
+ 
++            # Handle replace_pages content type
++            if content_type == "replace_pages":
++                page_specs = [
++                    NotebookPageSpec(
++                        agent=str(page.get("agent") or agent),
++                        content=str(page.get("content") or ""),
++                    )
++                    for page in event_data.get("pages", [])
++                ]
++                if not page_specs:
++                    log.warning("write_request_replace_pages_empty", notebook=notebook)
++                    return
++
++                target_name = f"{notebook}.note"
++                try:
++                    success = await self._replace_pages_with_uploader(
++                        uploader=self.uploader,
++                        target_name=target_name,
++                        page_specs=page_specs,
++                    )
++                except RuntimeError as exc:
++                    log.warning(
++                        "replace_pages_retrying_with_fresh_uploader",
++                        agent=agent,
++                        notebook=notebook,
++                        error=str(exc),
++                    )
++                    fresh_uploader = SupernoteUploader()
++                    await fresh_uploader.start()
++                    try:
++                        success = await self._replace_pages_with_uploader(
++                            uploader=fresh_uploader,
++                            target_name=target_name,
++                            page_specs=page_specs,
++                        )
++                    finally:
++                        await fresh_uploader.stop()
++
++                if success:
++                    log.info("replace_pages_complete", agent=agent, notebook=notebook, page_count=len(page_specs))
++                else:
++                    log.warning("replace_pages_upload_failed", agent=agent, notebook=notebook)
++                return
++
+             target_name = f"{notebook}.note"
+ 
+             log.info("write_request_received", agent=agent, notebook=notebook)
+@@ -338,6 +448,38 @@ class SupernoteService:
+         except Exception as exc:
+             log.error("write_request_error", error=str(exc))
+ 
++    async def _replace_pages_with_uploader(
++        self,
++        *,
++        uploader: SupernoteUploader,
++        target_name: str,
++        page_specs: list[NotebookPageSpec],
++    ) -> bool:
++        import tempfile
++        import os
++
++        try:
++            notebook_bytes = await uploader.download_notebook(target_name)
++        except RuntimeError as exc:
++            if "not found in Note folder" not in str(exc):
++                raise
++            notebook_bytes = await uploader.download_notebook("Quick.note")
++
++        updated_bytes = replace_notebook_pages(
++            notebook_bytes,
++            writer=self.writer,
++            pages=page_specs,
++        )
++
++        with tempfile.NamedTemporaryFile(suffix=".note", delete=False, dir="/tmp") as tmp:
++            tmp.write(updated_bytes)
++            tmp_path = tmp.name
++
++        try:
++            return await uploader.upload_notebook(tmp_path, target_name)
++        finally:
++            os.unlink(tmp_path)
++
+ 
+ def _configure_logging() -> None:
+     """Configure structlog for JSON output to stdout."""
+@@ -381,6 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
+         help=f"Path to config TOML file (default: {DEFAULT_CONFIG_PATH})",
+     )
+     subparsers = parser.add_subparsers(dest="mode", required=False)
++    subparsers.add_parser("service", help="Run the event-backed Supernote service")
+     subparsers.add_parser("ingest", help="Poll Supernote Cloud and OCR pages")
+     subparsers.add_parser("enrich", help="Enrich dirty pages and upsert to Folio")
+     subparsers.add_parser("status", help="Show pipeline queue counts")
+@@ -395,13 +538,15 @@ def main(argv: list[str] | None = None) -> None:
+     _configure_logging()
+ 
+     config = load_config(args.config)
+-    mode = args.mode or "ingest"
++    mode = args.mode or "service"
+ 
+     if mode == "status":
+         print(render_status(Path(config["state_db_path"])))
+         return
+ 
+-    if mode == "enrich":
++    if mode == "service":
++        service: Any = SupernoteService(config)
++    elif mode == "enrich":
+         service: Any = EnrichService(config)
+     else:
+         service = IngestService(config)
+diff --git a/src/paia_supernote/notebook_artifacts.py b/src/paia_supernote/notebook_artifacts.py
+index 7e7f8ed..ea5ef64 100644
+--- a/src/paia_supernote/notebook_artifacts.py
++++ b/src/paia_supernote/notebook_artifacts.py
+@@ -22,31 +22,22 @@ def replace_notebook_pages(base_bytes: bytes, *, writer, pages: list[NotebookPag
+     if not pages:
+         raise ValueError("pages must not be empty")
+ 
+-    page_rles = [writer.render_page(spec.agent, spec.content) for spec in pages]
++    page_rles = [
++        writer.render_page(spec.agent, chunk)
++        for spec in pages
++        for chunk in writer.paginate_content(spec.agent, spec.content)
++    ]
+ 
+     fd, path = tempfile.mkstemp(suffix=".note")
+     try:
+         os.write(fd, base_bytes)
+         os.close(fd)
+         notebook = sn_parser.load_notebook(path)
+-        existing = notebook.get_total_pages()
+-
+-        # Replace existing pages with new content
+-        for index, rle in enumerate(page_rles[:existing]):
+-            page = notebook.get_page(index)
+-            page.get_layer(0).set_content(rle)
+-
+-        # Remove extra pages if we have fewer new pages than existing
+-        if existing > len(page_rles):
+-            notebook.pages = notebook.pages[:len(page_rles)]
+-            notebook.metadata.pages = notebook.metadata.pages[:len(page_rles)]
+-
++        fresh_pages = [writer.build_page(rle) for rle in page_rles]
++        notebook.pages = fresh_pages
++        notebook.metadata.pages = [page.metadata for page in fresh_pages]
+         rebuilt = sn_manip.reconstruct(notebook)
+     finally:
+         os.unlink(path)
+ 
+-    # Add any additional pages beyond the existing page count
+-    for rle in page_rles[existing:]:
+-        rebuilt = writer.append_rle_page(rebuilt, rle)
+-
+-    return rebuilt
+\ No newline at end of file
++    return rebuilt
+diff --git a/src/paia_supernote/notebook_writer.py b/src/paia_supernote/notebook_writer.py
+index af4c387..f82628a 100644
+--- a/src/paia_supernote/notebook_writer.py
++++ b/src/paia_supernote/notebook_writer.py
+@@ -15,6 +15,23 @@ from typing import Union
+ import supernotelib.parser as sn_parser
+ import supernotelib.manipulator as sn_manip
+ 
++OFFSET_FIELDS = (
++    "RECOGNTEXT",
++    "RECOGNFILE",
++    "TOTALPATH",
++    "EXTERNALLINKINFO",
++    "IDTABLE",
++)
++
++
++def clear_recognition_metadata(page) -> None:
++    """Zero stale recognition offsets and status fields on a notebook page."""
++    for key in OFFSET_FIELDS:
++        if key in page.metadata:
++            page.metadata[key] = "0"
++    page.metadata["RECOGNSTATUS"] = "0"
++    page.metadata["RECOGNFILESTATUS"] = "0"
++
+ 
+ def append_page_to_notebook(
+     note_source: Union[str, Path, bytes], ratta_rle_bytes: bytes
+@@ -61,14 +78,9 @@ def _append_from_path(note_path: str, ratta_rle_bytes: bytes) -> bytes:
+     # changes, so ALL existing pages' recognition offsets become dangling
+     # pointers — causing the device to close the file immediately on open.
+     # Zero them on every page before appending.
+-    _OFFSET_FIELDS = ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE")
+     for i in range(notebook.get_total_pages()):
+         page = notebook.get_page(i)
+-        for key in _OFFSET_FIELDS:
+-            if key in page.metadata:
+-                page.metadata[key] = "0"
+-        page.metadata["RECOGNSTATUS"] = "0"
+-        page.metadata["RECOGNFILESTATUS"] = "0"
++        clear_recognition_metadata(page)
+ 
+     # Template: deepcopy the last page to inherit all metadata fields and structure
+     last_idx = notebook.get_total_pages() - 1
+@@ -85,11 +97,7 @@ def _append_from_path(note_path: str, ratta_rle_bytes: bytes) -> bytes:
+     template_page.set_recogn_file(None)
+     template_page.set_recogn_text(None)
+     template_page.set_totalpath(None)
+-    for key in ("RECOGNTEXT", "RECOGNFILE", "TOTALPATH", "EXTERNALLINKINFO", "IDTABLE"):
+-        if key in template_page.metadata:
+-            template_page.metadata[key] = "0"
+-    template_page.metadata["RECOGNSTATUS"] = "0"
+-    template_page.metadata["RECOGNFILESTATUS"] = "0"
++    clear_recognition_metadata(template_page)
+ 
+     # Replace MAINLAYER (layer 0) with our RATTA_RLE bytes
+     if template_page.is_layer_supported():
+diff --git a/src/paia_supernote/page_state.py b/src/paia_supernote/page_state.py
+index b76cd46..a0ad24c 100644
+--- a/src/paia_supernote/page_state.py
++++ b/src/paia_supernote/page_state.py
+@@ -29,6 +29,7 @@ class PageStateStore:
+         self._db_path = Path(db_path)
+ 
+     def init_schema(self) -> None:
++        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+         with sqlite3.connect(self._db_path) as conn:
+             conn.execute(
+                 """
+diff --git a/src/paia_supernote/reader.py b/src/paia_supernote/reader.py
+index ccca07f..9ae456a 100644
+--- a/src/paia_supernote/reader.py
++++ b/src/paia_supernote/reader.py
+@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
+ from io import BytesIO
+ from pathlib import Path
+-from typing import List, Dict, Any, Optional, Union
++from typing import List, Dict, Any, Optional, Union, Callable, Awaitable
+ 
+ import httpx
+ import supernotelib
+@@ -42,6 +42,9 @@ class ReadResult:
+     timestamp: datetime
+ 
+ 
++ReadResultCallback = Callable[[ReadResult], Awaitable[None]]
++
++
+ class SupernoteReader:
+     """Processes .note files to extract and classify content."""
+ 
+@@ -49,14 +52,18 @@ class SupernoteReader:
+         self,
+         anthropic_client: Optional[anthropic.AsyncAnthropic] = None,
+         vision_backend: str = "anthropic",
+-        ollama_model: str = "gemma4:31b",
++        ollama_model: str = "qwen2.5vl:7b",
+         ollama_url: str = "http://localhost:11434",
++        zai_api_key: Optional[str] = None,
++        zai_base_url: str = "https://api.z.ai/api/coding/paas/v4",
++        zai_vision_model: str = "glm-4.5v",
++        zai_text_model: str = "glm-5.1",
+     ):
+         """Initialize the reader.
+ 
+         Args:
+             anthropic_client: Optional pre-built Anthropic client (for testing).
+-            vision_backend: "anthropic" or "ollama".
++            vision_backend: "anthropic", "ollama", or "zai".
+             ollama_model: Model name to use when vision_backend="ollama".
+             ollama_url: Base URL for the Ollama API.
+         """
+@@ -65,6 +72,10 @@ class SupernoteReader:
+         self.vision_backend = vision_backend
+         self.ollama_model = ollama_model
+         self.ollama_url = ollama_url.rstrip("/")
++        self.zai_api_key = zai_api_key or os.environ.get("ZAI_API_KEY")
++        self.zai_base_url = zai_base_url.rstrip("/")
++        self.zai_vision_model = zai_vision_model
++        self.zai_text_model = zai_text_model
+ 
+     @property
+     def client(self) -> anthropic.AsyncAnthropic:
+@@ -74,7 +85,10 @@ class SupernoteReader:
+         return self._client
+ 
+     async def process_file(
+-        self, note_source: Union[str, Path, bytes], notebook_name: Optional[str] = None
++        self,
++        note_source: Union[str, Path, bytes],
++        notebook_name: Optional[str] = None,
++        on_result: Optional[ReadResultCallback] = None,
+     ) -> List[ReadResult]:
+         """Process a .note file and extract content.
+ 
+@@ -91,15 +105,21 @@ class SupernoteReader:
+             try:
+                 os.write(tmp_fd, note_source)
+                 os.close(tmp_fd)
+-                return await self._process_path(tmp_path, notebook_name)
++                return await self._process_path(tmp_path, notebook_name, on_result=on_result)
+             finally:
+                 os.unlink(tmp_path)
+         else:
+             path = Path(note_source)
+             name = notebook_name or path.stem
+-            return await self._process_path(str(path), name)
++            return await self._process_path(str(path), name, on_result=on_result)
+ 
+-    async def _process_path(self, file_path: str, notebook_name: str) -> List[ReadResult]:
++    async def _process_path(
++        self,
++        file_path: str,
++        notebook_name: str,
++        *,
++        on_result: Optional[ReadResultCallback] = None,
++    ) -> List[ReadResult]:
+         """Internal: load notebook from path and process all pages."""
+         notebook = supernotelib.load_notebook(file_path)
+         converter = ImageConverter(notebook)
+@@ -130,6 +150,8 @@ class SupernoteReader:
+                 timestamp=datetime.now(timezone.utc),
+             )
+             results.append(result)
++            if on_result is not None:
++                await on_result(result)
+ 
+         return results
+ 
+@@ -139,6 +161,8 @@ class SupernoteReader:
+         page_image.save(img_buffer, format="PNG")
+         img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
+ 
++        if self.vision_backend == "zai":
++            return await self._transcribe_page_zai(img_b64)
+         if self.vision_backend == "ollama":
+             return await self._transcribe_page_ollama(img_b64)
+         return await self._transcribe_page_anthropic(img_b64)
+@@ -197,6 +221,51 @@ class SupernoteReader:
+             data = response.json()
+             return data["message"]["content"]
+ 
++    async def _zai_chat_completion(
++        self, model: str, messages: List[Dict[str, Any]], max_tokens: int
++    ) -> str:
++        """Call Z.AI's coding-plan chat completion endpoint."""
++        if not self.zai_api_key:
++            raise RuntimeError("ZAI_API_KEY is required when using the zai backend")
++
++        payload = {
++            "model": model,
++            "messages": messages,
++            "thinking": {"type": "disabled"},
++            "temperature": 0,
++            "stream": False,
++            "max_tokens": max_tokens,
++        }
++        async with httpx.AsyncClient() as client:
++            response = await client.post(
++                f"{self.zai_base_url}/chat/completions",
++                headers={"Authorization": f"Bearer {self.zai_api_key}"},
++                json=payload,
++                timeout=600.0,
++            )
++            response.raise_for_status()
++            data = response.json()
++            return data["choices"][0]["message"]["content"]
++
++    async def _transcribe_page_zai(self, img_b64: str) -> Optional[str]:
++        """Transcribe via Z.AI multimodal chat."""
++        return await self._zai_chat_completion(
++            model=self.zai_vision_model,
++            messages=[
++                {
++                    "role": "user",
++                    "content": [
++                        {
++                            "type": "image_url",
++                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
++                        },
++                        {"type": "text", "text": self._TRANSCRIBE_PROMPT},
++                    ],
++                }
++            ],
++            max_tokens=2048,
++        )
++
+     def detect_checkbox_changes(
+         self, notebook_name: str, page_num: int, text: str
+     ) -> List[CheckboxItem]:
+@@ -243,23 +312,33 @@ class SupernoteReader:
+ 
+         # Use LLM to detect strategy snippets
+         try:
+-            response = await self.client.messages.create(
+-                model="claude-sonnet-4-6",
+-                max_tokens=16,
+-                messages=[
+-                    {
+-                        "role": "user",
+-                        "content": (
+-                            "Classify this handwritten note. Reply with exactly one word:\n"
+-                            "- 'snippet' if it contains a strategy fragment, client mention, "
+-                            "open question, or incomplete strategic thought\n"
+-                            "- 'general' otherwise\n\n"
+-                            f"Note:\n{text}"
+-                        ),
+-                    }
+-                ],
++            prompt = (
++                "Classify this handwritten note. Reply with exactly one word:\n"
++                "- 'snippet' if it contains a strategy fragment, client mention, "
++                "open question, or incomplete strategic thought\n"
++                "- 'general' otherwise\n\n"
++                f"Note:\n{text}"
+             )
+-            classification = response.content[0].text.strip().lower()
++            if self.vision_backend == "zai":
++                classification = (
++                    await self._zai_chat_completion(
++                        model=self.zai_text_model,
++                        messages=[{"role": "user", "content": prompt}],
++                        max_tokens=16,
++                    )
++                ).strip().lower()
++            else:
++                response = await self.client.messages.create(
++                    model="claude-sonnet-4-6",
++                    max_tokens=16,
++                    messages=[
++                        {
++                            "role": "user",
++                            "content": prompt,
++                        }
++                    ],
++                )
++                classification = response.content[0].text.strip().lower()
+             if classification == "snippet":
+                 return "snippet"
+         except Exception:
+@@ -278,3 +357,61 @@ class SupernoteReader:
+ 
+         self.page_checksums[key] = current_checksum
+         return previous_checksum is None or current_checksum != previous_checksum
++
++    async def read_all_pages(
++        self, note_bytes: bytes, notebook_name: str, page_range: Optional[tuple[int, int]] = None
++    ) -> List[ReadResult]:
++        """Read all pages from notebook bytes, without checking for changes.
++
++        Args:
++            note_bytes: Raw .note bytes downloaded from cloud.
++            notebook_name: The name of the notebook.
++            page_range: Optional tuple (start_page, end_page) for specific pages (0-based).
++                        If None, all pages are read.
++        """
++        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
++        try:
++            os.write(tmp_fd, note_bytes)
++            os.close(tmp_fd)
++            
++            notebook = supernotelib.load_notebook(tmp_path)
++            converter = ImageConverter(notebook)
++
++            results = []
++            start_page = page_range[0] if page_range else 0
++            end_page = page_range[1] if page_range else notebook.get_total_pages() - 1
++
++            for page_num in range(start_page, end_page + 1):
++                page_image = converter.convert(page_num)
++                transcription = await self._transcribe_page(page_image)
++                if not transcription:
++                    continue
++
++                content_type = await self.classify_content(transcription)
++                # For read_all_pages, we don't care about newly checked items, just current state
++                current_checked = []
++                for match in re.finditer(r"[\u2611\u25a0]\s*(.+)", transcription):
++                    current_checked.append({"task_text": match.group(1).strip(), "tag": "focus"})
++                for match in re.finditer(r"[\u25cf]\s*(.+)", transcription):
++                    current_checked.append({"task_text": match.group(1).strip(), "tag": "orbit"})
++
++                checkbox_items = [
++                    CheckboxItem(
++                        task_text=item["task_text"], tag=item["tag"], page_num=page_num
++                    )
++                    for item in current_checked
++                ]
++
++                result = ReadResult(
++                    notebook=notebook_name,
++                    page_num=page_num,
++                    text=transcription,
++                    checkboxes=checkbox_items,
++                    content_type=content_type,
++                    timestamp=datetime.now(timezone.utc),
++                )
++                results.append(result)
++
++            return results
++        finally:
++            os.unlink(tmp_path)
+diff --git a/src/paia_supernote/task_curator.py b/src/paia_supernote/task_curator.py
+index 7f08fb5..ba565e3 100644
+--- a/src/paia_supernote/task_curator.py
++++ b/src/paia_supernote/task_curator.py
+@@ -4,10 +4,16 @@ Author: Braydon McCormick <braydon@braydondm.com>
+ Purpose: Sam's intelligent task page curation for Quick.note
+ """
+ 
++from __future__ import annotations
++import os
++import tempfile
+ from typing import Any, Dict, Optional
++
+ import anthropic
+ import httpx
+-from . import reader, writer, uploader, events
++
++from . import events, reader, uploader, writer
++from .notebook_writer import append_page_to_notebook
+ 
+ 
+ class TaskCurator:
+@@ -20,6 +26,10 @@ class TaskCurator:
+         uploader: Optional[uploader.SupernoteUploader] = None,
+         events_client: Optional[events.EventsClient] = None,
+         anthropic_client: Optional[anthropic.AsyncAnthropic] = None,
++        rewrite_backend: str = "anthropic",
++        zai_api_key: Optional[str] = None,
++        zai_base_url: str = "https://api.z.ai/api/coding/paas/v4",
++        zai_text_model: str = "glm-5.1",
+     ):
+         """Initialize the task curator with dependencies."""
+         self.reader = reader
+@@ -27,47 +37,80 @@ class TaskCurator:
+         self.uploader = uploader
+         self.events_client = events_client
+         self.anthropic_client = anthropic_client
++        self.rewrite_backend = rewrite_backend
++        self.zai_api_key = zai_api_key or os.environ.get("ZAI_API_KEY")
++        self.zai_base_url = zai_base_url.rstrip("/")
++        self.zai_text_model = zai_text_model
++
++    @property
++    def client(self) -> anthropic.AsyncAnthropic:
++        """Get or create the Anthropic client."""
++        if self.anthropic_client is None:
++            self.anthropic_client = anthropic.AsyncAnthropic()
++        return self.anthropic_client
+ 
+     async def handle_write_requested(self, payload: Dict[str, Any]) -> None:
+         """Handle supernote.write_requested events with content_type='task_page_curate'."""
+         if payload.get("content_type") != "task_page_curate":
+             return
+ 
++        notebook_name = payload["notebook"]
++        notebook_bytes = payload["notebook_bytes"]
++        agent = payload["agent"]
++
+         # Read current task page state
+-        current_page_text = await self._read_current_task_page(payload["notebook"])
++        current_page_text = await self._read_current_task_page(notebook_bytes, notebook_name)
+ 
+         # Send to LLM for reorganization
+         reorganized_content = await self._reorganize_with_llm(current_page_text)
+ 
+         # Render the reorganized page
+         rendered_bytes = self.writer.render_page(
+-            agent=payload["agent"],
++            agent=agent,
+             content=reorganized_content
+         )
+ 
++        # Append page to the downloaded notebook bytes
++        updated_bytes = append_page_to_notebook(notebook_bytes, rendered_bytes)
++
+         # Upload to Supernote Cloud
+-        await self.uploader.upload_notebook("temp_path", "target_path")
++        with tempfile.NamedTemporaryFile(
++            suffix=".note", delete=False, dir="/tmp"
++        ) as tmp:
++            tmp.write(updated_bytes)
++            tmp_path = tmp.name
++
++        try:
++            success = await self.uploader.upload_notebook(tmp_path, f"{notebook_name}.note")
++        finally:
++            os.unlink(tmp_path)
+ 
+         # Emit note_transcribed event
+         await self.events_client.publish_note_transcribed(
+-            notebook=payload["notebook"],
+-            page=1,  # TODO: determine actual page number
++            notebook=notebook_name,
++            page=21,  # Assuming page 21 (0-based) is the last task page for now
+             text=reorganized_content
+         )
+ 
+-    async def _read_current_task_page(self, notebook: str) -> str:
+-        """Read current task page content from the notebook file."""
+-        # TODO: Map notebook name to actual file path
+-        file_path = f"~/Supernote/{notebook}"
+-        results = await self.reader.process_file(file_path)
++    async def _read_current_task_page(self, notebook_bytes: bytes, notebook_name: str) -> str:
++        """Read current task page content from the notebook bytes.
+ 
+-        # Find the task page (assuming it's the first or only page with task content)
++        This aggregates content from the specified task page range (19-22, 0-based 18-21).
++        """
++        # Quick.note task pages are 19-22 (human numbering), which is 18-21 (zero-based)
++        TASK_PAGE_START = 18
++        TASK_PAGE_END = 21
++
++        results = await self.reader.read_all_pages(
++            notebook_bytes, notebook_name, page_range=(TASK_PAGE_START, TASK_PAGE_END)
++        )
++
++        aggregated_content = []
+         for result in results:
+-            if result.content_type == "task":
+-                return result.text
++            if result.text.strip():
++                aggregated_content.append(result.text.strip())
+ 
+-        # If no task page found, return empty content
+-        return ""
++        return "\n".join(aggregated_content)
+ 
+     async def _process_new_tasks(self, notebook: str) -> None:
+         """Process new handwritten tasks and create paia-work entries."""
+@@ -104,7 +147,10 @@ class TaskCurator:
+ 
+     async def _reorganize_with_llm(self, current_text: str) -> str:
+         """Send task page to LLM for intelligent reorganization."""
+-        response = await self.anthropic_client.messages.create(
++        if self.rewrite_backend == "zai":
++            return await self._reorganize_with_zai(current_text)
++
++        response = await self.client.messages.create(
+             model="claude-sonnet-4-6",
+             max_tokens=2048,
+             messages=[
+@@ -123,4 +169,42 @@ class TaskCurator:
+                 }
+             ],
+         )
+-        return response.content[0].text
+\ No newline at end of file
++        return response.content[0].text
++
++    async def _reorganize_with_zai(self, current_text: str) -> str:
++        """Rewrite task page content using the Z.AI coding endpoint."""
++        if not self.zai_api_key:
++            raise RuntimeError("ZAI_API_KEY is required when using the zai rewrite backend")
++
++        payload = {
++            "model": self.zai_text_model,
++            "messages": [
++                {
++                    "role": "system",
++                    "content": (
++                        "You are curating Braydon's task page. Reorganize for clarity: "
++                        "group by focus/orbit, move completed items to bottom, insert new "
++                        "paia-work tasks where they fit naturally. You have agency to "
++                        "reorganize. Output the full rewritten page content."
++                    ),
++                },
++                {
++                    "role": "user",
++                    "content": f"Current task page content:\n{current_text}",
++                },
++            ],
++            "thinking": {"type": "disabled"},
++            "temperature": 0,
++            "stream": False,
++            "max_tokens": 2048,
++        }
++        async with httpx.AsyncClient() as client:
++            response = await client.post(
++                f"{self.zai_base_url}/chat/completions",
++                headers={"Authorization": f"Bearer {self.zai_api_key}"},
++                json=payload,
++                timeout=600.0,
++            )
++            response.raise_for_status()
++            data = response.json()
++            return data["choices"][0]["message"]["content"]
+diff --git a/src/paia_supernote/tasks_sync.py b/src/paia_supernote/tasks_sync.py
+index 156a98d..1c13600 100644
+--- a/src/paia_supernote/tasks_sync.py
++++ b/src/paia_supernote/tasks_sync.py
+@@ -219,7 +219,7 @@ class TasksSync:
+         """Replace all pages in an existing tasks.note with fresh lane pages."""
+         import supernotelib.parser as sn_parser
+         import supernotelib.manipulator as sn_manip
+-        from .notebook_writer import append_page_to_notebook, _OFFSET_FIELDS
++        from .notebook_writer import append_page_to_notebook, clear_recognition_metadata
+ 
+         fd, path = tempfile.mkstemp(suffix=".note")
+         try:
+@@ -233,11 +233,7 @@ class TasksSync:
+                 if i < n_existing:
+                     page = nb.get_page(i)
+                     # Zero recognition offsets
+-                    for key in _OFFSET_FIELDS:
+-                        if key in page.metadata:
+-                            page.metadata[key] = "0"
+-                    page.metadata["RECOGNSTATUS"] = "0"
+-                    page.metadata["RECOGNFILESTATUS"] = "0"
++                    clear_recognition_metadata(page)
+                     if page.is_layer_supported():
+                         page.get_layer(0).set_content(rle)
+                         layers = page.get_layers()
+diff --git a/src/paia_supernote/uploader.py b/src/paia_supernote/uploader.py
+index 335f73c..89d5d87 100644
+--- a/src/paia_supernote/uploader.py
++++ b/src/paia_supernote/uploader.py
+@@ -11,8 +11,10 @@ All notebooks (Quick.note, LFW.note, Synth.note) live in the "Note" folder,
+ directoryId = NOTE_FOLDER_ID.  Files sync at SYNC_BASE on Mac.
+ """
+ 
++import asyncio
+ import hashlib
+ import io
++import json
+ from pathlib import Path
+ from typing import Any, Dict, List, Optional
+ from urllib.parse import urlparse
+@@ -45,6 +47,7 @@ class SupernoteUploader:
+         self.context: Optional[BrowserContext] = None
+         self.page: Optional[Page] = None
+         self._playwright = None
++        self._recovery_lock = asyncio.Lock()
+ 
+     async def start(self) -> None:
+         """Launch browser and restore session if available."""
+@@ -59,7 +62,7 @@ class SupernoteUploader:
+             self.context = await self.browser.new_context()
+ 
+         self.page = await self.context.new_page()
+-        await self.page.goto(f"{self.CLOUD_URL}/#/home", wait_until="networkidle")
++        await self._refresh_csrf_token()
+ 
+     async def stop(self) -> None:
+         """Persist session and close browser. Safe to call more than once."""
+@@ -197,19 +200,32 @@ class SupernoteUploader:
+ 
+     async def _ensure_authenticated(self) -> None:
+         """Check auth state; trigger interactive re-auth when session expired."""
+-        if not self.page:
+-            raise RuntimeError("Browser not started")
++        async def do_check() -> None:
++            if not self.page:
++                raise RuntimeError("Browser not started")
+ 
+-        response = await self.page.goto(f"{self.CLOUD_URL}/#/home")
++            response = await self.page.goto(f"{self.CLOUD_URL}/", wait_until="networkidle")
+ 
+-        needs_reauth = False
+-        if response and response.status in (401, 403):
+-            needs_reauth = True
+-        elif "login" in self.page.url:
+-            needs_reauth = True
++            needs_reauth = False
++            if response and response.status in (401, 403):
++                needs_reauth = True
++            elif "login" in self.page.url:
++                needs_reauth = True
+ 
+-        if needs_reauth:
+-            await self._interactive_reauth()
++            if needs_reauth:
++                await self._interactive_reauth()
++
++        await self._retry_on_closed_target(do_check)
++
++    async def _refresh_csrf_token(self) -> None:
++        """Reload the cloud root so the browser session gets a fresh XSRF token."""
++
++        async def do_refresh() -> None:
++            if not self.page:
++                raise RuntimeError("Browser not started")
++            await self.page.goto(f"{self.CLOUD_URL}/", wait_until="networkidle")
++
++        await self._retry_on_closed_target(do_refresh)
+ 
+     async def _interactive_reauth(self) -> None:
+         """Open login page and wait for user to complete authentication."""
+@@ -229,31 +245,85 @@ class SupernoteUploader:
+ 
+     async def _api_call(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+         """Make an authenticated API call via the Playwright page context."""
+-        result = await self.page.evaluate("""
+-            async ([endpoint, body]) => {
+-                const xsrfCookie = document.cookie.split(';')
+-                    .map(c => c.trim())
+-                    .find(c => c.startsWith('XSRF-TOKEN='));
+-                const xsrfToken = xsrfCookie
+-                    ? decodeURIComponent(xsrfCookie.split('=')[1])
+-                    : '';
+-
+-                const resp = await fetch(endpoint, {
+-                    method: 'POST',
+-                    headers: {
+-                        'Content-Type': 'application/json',
+-                        'X-XSRF-TOKEN': xsrfToken,
+-                    },
+-                    body: JSON.stringify(body),
+-                });
+-                return {
+-                    status: resp.status,
+-                    body: resp.ok ? await resp.json() : await resp.text(),
+-                };
+-            }
+-        """, [endpoint, body])
++        async def do_call() -> Dict[str, Any]:
++            if not self.page:
++                raise RuntimeError("Browser not started")
++            result = await self.page.evaluate("""
++                async ([endpoint, body]) => {
++                    const xsrfCookie = document.cookie.split(';')
++                        .map(c => c.trim())
++                        .find(c => c.startsWith('XSRF-TOKEN='));
++                    const xsrfToken = xsrfCookie
++                        ? decodeURIComponent(xsrfCookie.split('=')[1])
++                        : '';
++
++                    const resp = await fetch(endpoint, {
++                        method: 'POST',
++                        headers: {
++                            'Content-Type': 'application/json',
++                            'X-XSRF-TOKEN': xsrfToken,
++                        },
++                        body: JSON.stringify(body),
++                    });
++                    return {
++                        status: resp.status,
++                        body: resp.ok ? await resp.json() : await resp.text(),
++                    };
++                }
++            """, [endpoint, body])
++            return result  # type: ignore[return-value]
++
++        result = await self._retry_on_closed_target(do_call)
++        if self._is_csrf_expired_response(result):
++            await self._refresh_csrf_token()
++            result = await self._retry_on_closed_target(do_call)
+         return result  # type: ignore[return-value]
+ 
++    async def _retry_on_closed_target(self, operation):
++        try:
++            return await operation()
++        except Exception as exc:
++            if not self._is_closed_target_error(exc):
++                raise
++            await self._restart_browser_session()
++            return await operation()
++
++    async def _restart_browser_session(self) -> None:
++        async with self._recovery_lock:
++            await self.stop()
++            await self.start()
++
++    @staticmethod
++    def _is_closed_target_error(exc: Exception) -> bool:
++        message = str(exc)
++        return "Target page, context or browser has been closed" in message
++
++    @staticmethod
++    def _is_csrf_expired_response(result: Dict[str, Any]) -> bool:
++        if result.get("status") != 403:
++            return False
++
++        body = result.get("body")
++        payload: Dict[str, Any] | None = None
++        if isinstance(body, dict):
++            payload = body
++        elif isinstance(body, str):
++            try:
++                parsed = json.loads(body)
++            except json.JSONDecodeError:
++                parsed = None
++            if isinstance(parsed, dict):
++                payload = parsed
++            else:
++                return "CSRF_TOKEN_EXPIRED" in body or "csrf token" in body.lower()
++
++        if payload is None:
++            return False
++
++        code = str(payload.get("code") or payload.get("errorCode") or "")
++        error = str(payload.get("error") or payload.get("message") or payload.get("errorMsg") or "")
++        return code == "CSRF_TOKEN_EXPIRED" or "csrf token" in error.lower()
++
+     async def _initiate_upload(
+         self, file_path: str, target_name: str
+     ) -> Dict[str, Any]:
+diff --git a/src/paia_supernote/user_board.py b/src/paia_supernote/user_board.py
+index 14ef4cd..3d397f8 100644
+--- a/src/paia_supernote/user_board.py
++++ b/src/paia_supernote/user_board.py
+@@ -1,14 +1,16 @@
+ """
+ ABOUTME: User board - persistent conversation surface for braydon
+ Author: Braydon McCormick <braydon@braydondm.com>
+-Purpose: CLI interface for interacting with paia-supernote service
++Purpose: Enhanced conversational interface for interacting with paia-supernote service
+ """
+ 
+ import asyncio
+ import json
+ import time
+-from datetime import datetime
+-from typing import Dict, Any, Optional
++import shutil
++import sys
++from datetime import datetime, timedelta
++from typing import Dict, Any, Optional, List
+ from pathlib import Path
+ 
+ import httpx
+@@ -18,15 +20,50 @@ from .events import EventsClient
+ 
+ log = structlog.get_logger(__name__)
+ 
++# Terminal styling constants
++class Style:
++    RESET = '\033[0m'
++    BOLD = '\033[1m'
++    DIM = '\033[2m'
++    ITALIC = '\033[3m'
++
++    # Colors
++    RED = '\033[91m'
++    GREEN = '\033[92m'
++    YELLOW = '\033[93m'
++    BLUE = '\033[94m'
++    MAGENTA = '\033[95m'
++    CYAN = '\033[96m'
++    WHITE = '\033[97m'
++    GRAY = '\033[90m'
++
++    # Background colors
++    BG_BLUE = '\033[44m'
++    BG_GREEN = '\033[42m'
++    BG_YELLOW = '\033[43m'
++    BG_RED = '\033[41m'
++
++def get_terminal_width() -> int:
++    """Get terminal width, fallback to 80."""
++    return shutil.get_terminal_size().columns
++
+ 
+ class UserBoard:
+-    """CLI-based user board for paia-supernote service interaction."""
++    """Enhanced conversational interface for paia-supernote service interaction."""
+ 
+     def __init__(self):
+         """Initialize user board."""
+         self.events = EventsClient()
+         self.session_file = Path("~/.paia-supernote-session.json").expanduser()
+         self.session_data = self._load_session()
++        self.conversation_history: List[Dict[str, Any]] = []
++        self.is_connected = False
++        self.last_refresh = datetime.now()
++        self.stats = {
++            "transcriptions_today": 0,
++            "write_requests_today": 0,
++            "uptime": datetime.now()
++        }
+ 
+     def _load_session(self) -> Dict[str, Any]:
+         """Load persistent session data."""
+@@ -46,109 +83,293 @@ class UserBoard:
+         except Exception as e:
+             log.error("failed_to_save_session", error=str(e))
+ 
++    def _clear_screen(self) -> None:
++        """Clear the terminal screen."""
++        print("\033[2J\033[H", end="")
++
++    def _print_header(self) -> None:
++        """Print the application header with branding."""
++        width = get_terminal_width()
++
++        # PAIA Supernote brand header
++        print(f"{Style.CYAN}{Style.BOLD}")
++        print("╔" + "═" * (width - 2) + "╗")
++        title = "PAIA SUPERNOTE · USER BOARD"
++        subtitle = "Persistent Conversation Surface"
++        padding = (width - len(title) - 4) // 2
++        print(f"║{' ' * padding}{title}{' ' * (width - len(title) - padding - 2)}║")
++        padding_sub = (width - len(subtitle) - 4) // 2
++        print(f"║{' ' * padding_sub}{Style.DIM}{subtitle}{Style.RESET}{Style.CYAN}{Style.BOLD}{' ' * (width - len(subtitle) - padding_sub - 2)}║")
++        print("╚" + "═" * (width - 2) + "╝")
++        print(Style.RESET)
++
++    def _print_status_bar(self) -> None:
++        """Print the status bar with connection and session info."""
++        width = get_terminal_width()
++
++        # Connection status
++        connection_icon = "🟢" if self.is_connected else "🔴"
++        connection_text = "CONNECTED" if self.is_connected else "OFFLINE"
++
++        # Session uptime
++        uptime = datetime.now() - self.stats["uptime"]
++        uptime_str = f"{int(uptime.total_seconds() // 60)}m"
++
++        # Create status bar
++        left_info = f" {connection_icon} {connection_text}"
++        right_info = f"UPTIME {uptime_str} | TRANSCRIPTIONS {self.stats['transcriptions_today']} "
++
++        # Fill middle with spaces
++        middle_spaces = width - len(left_info) - len(right_info)
++        if middle_spaces < 0:
++            middle_spaces = 2
++
++        status_line = f"{Style.BG_BLUE}{Style.WHITE}{left_info}{' ' * middle_spaces}{right_info}{Style.RESET}"
++        print(status_line)
++
++    def _print_conversation_prompt(self) -> None:
++        """Print the conversation prompt."""
++        print(f"\n{Style.GRAY}──────────────────────────────────────────────────────────────────────────────────{Style.RESET}")
++        print(f"{Style.BOLD}{Style.WHITE}💬 What would you like to do? {Style.DIM}(type 'help' for commands){Style.RESET}")
++
++    def _add_to_conversation(self, role: str, message: str, context: Dict[str, Any] = None) -> None:
++        """Add message to conversation history."""
++        entry = {
++            "timestamp": datetime.now().isoformat(),
++            "role": role,  # "user", "system", "assistant"
++            "message": message,
++            "context": context or {}
++        }
++        self.conversation_history.append(entry)
++
++        # Keep only last 50 entries to prevent memory bloat
++        if len(self.conversation_history) > 50:
++            self.conversation_history = self.conversation_history[-50:]
++
++    def _print_recent_conversation(self, limit: int = 5) -> None:
++        """Print recent conversation entries."""
++        if not self.conversation_history:
++            return
++
++        print(f"\n{Style.DIM}Recent Activity:{Style.RESET}")
++        recent = self.conversation_history[-limit:]
++
++        for entry in recent:
++            timestamp = datetime.fromisoformat(entry["timestamp"])
++            time_str = timestamp.strftime("%H:%M")
++
++            role_icon = {
++                "user": "👤",
++                "system": "⚡",
++                "assistant": "🤖"
++            }.get(entry["role"], "•")
++
++            role_color = {
++                "user": Style.CYAN,
++                "system": Style.YELLOW,
++                "assistant": Style.GREEN
++            }.get(entry["role"], Style.WHITE)
++
++            message = entry["message"][:80] + ("..." if len(entry["message"]) > 80 else "")
++            print(f"  {Style.DIM}{time_str}{Style.RESET} {role_icon} {role_color}{message}{Style.RESET}")
++
++    def _print_quick_stats(self) -> None:
++        """Print quick stats about today's activity."""
++        print(f"\n{Style.BOLD}📊 Today's Activity{Style.RESET}")
++        print(f"  📝 Transcriptions: {Style.CYAN}{self.stats['transcriptions_today']}{Style.RESET}")
++        print(f"  ✏️  Write Requests: {Style.GREEN}{self.stats['write_requests_today']}{Style.RESET}")
++
++        # Check Supernote sync folder
++        supernote_dir = Path("~/Supernote").expanduser()
++        if supernote_dir.exists():
++            note_files = list(supernote_dir.glob("*.note"))
++            print(f"  📁 Notebooks Synced: {Style.MAGENTA}{len(note_files)}{Style.RESET}")
++
++    def _refresh_display(self) -> None:
++        """Refresh the entire display."""
++        self._clear_screen()
++        self._print_header()
++        self._print_status_bar()
++        self._print_quick_stats()
++        self._print_recent_conversation()
++        self._print_conversation_prompt()
++
+     async def start(self) -> None:
+         """Start interactive user board session."""
+-        print("🎯 PAIA Supernote User Board")
+-        print("=" * 40)
+-
++        # Initialize connection
+         try:
+             await self.events.start()
+-            print("✅ Connected to paia-events")
++            self.is_connected = True
++            self._add_to_conversation("system", "Connected to paia-events service")
+         except Exception as e:
+-            print(f"⚠️  Failed to connect to paia-events: {e}")
+-            print("   Starting in offline mode...")
++            self.is_connected = False
++            self._add_to_conversation("system", f"Failed to connect to paia-events: {str(e)}")
++
++        # Initial display
++        self._refresh_display()
++        self._add_to_conversation("system", "PAIA Supernote User Board session started")
+ 
+         await self._main_loop()
+ 
+     async def stop(self) -> None:
+-        """Stop user board."""
++        """Stop user board gracefully."""
++        self._add_to_conversation("system", "Ending session")
+         await self.events.stop()
+         self._save_session()
+-        print("👋 Session ended")
++        print(f"\n{Style.BOLD}{Style.CYAN}Thank you for using PAIA Supernote User Board!{Style.RESET}")
++        print(f"{Style.DIM}Session data saved. Your conversation history is preserved.{Style.RESET}")
++        print(f"{Style.YELLOW}👋 Goodbye!{Style.RESET}\n")
+ 
+     async def _main_loop(self) -> None:
+-        """Main interactive loop."""
++        """Main conversational loop."""
++        refresh_task = None
++        try:
++            # Start auto-refresh task
++            refresh_task = asyncio.create_task(self._auto_refresh_loop())
++
++            while True:
++                try:
++                    # Get user input
++                    user_input = input(f"\n{Style.BOLD}> {Style.RESET}").strip()
++
++                    if not user_input:
++                        continue
++
++                    # Add to conversation history
++                    self._add_to_conversation("user", user_input)
++
++                    # Parse and handle commands
++                    if user_input.lower() in ['quit', 'exit', 'q', 'bye']:
++                        self._add_to_conversation("assistant", "Ending session...")
++                        break
++                    elif user_input.lower() in ['help', 'h', '?']:
++                        await self._handle_help()
++                    elif user_input.lower() in ['status', 'st']:
++                        await self._handle_status()
++                    elif user_input.lower() in ['events', 'e']:
++                        await self._handle_events()
++                    elif user_input.lower().startswith('write'):
++                        await self._handle_write_command(user_input)
++                    elif user_input.lower() in ['refresh', 'r']:
++                        await self._handle_refresh()
++                    elif user_input.lower() in ['clear', 'cls']:
++                        self._refresh_display()
++                        self._add_to_conversation("assistant", "Display cleared and refreshed")
++                    else:
++                        # Try to interpret as natural language
++                        await self._handle_natural_language(user_input)
++
++                except EOFError:
++                    # Handle non-interactive environments gracefully
++                    print(f"\n\n{Style.YELLOW}⚠️  Non-interactive environment detected.{Style.RESET}")
++                    print(f"{Style.DIM}The user board requires an interactive terminal to function properly.{Style.RESET}")
++                    print(f"{Style.DIM}Run in a terminal with TTY support for full functionality.{Style.RESET}")
++                    self._add_to_conversation("system", "Session ended due to non-interactive environment")
++                    break
++                except KeyboardInterrupt:
++                    print(f"\n\n{Style.YELLOW}👋 Session interrupted. Goodbye!{Style.RESET}")
++                    break
++                except Exception as e:
++                    error_msg = f"Error processing command: {str(e)}"
++                    print(f"{Style.RED}❌ {error_msg}{Style.RESET}")
++                    self._add_to_conversation("system", error_msg)
++
++        finally:
++            if refresh_task:
++                refresh_task.cancel()
++
++    async def _auto_refresh_loop(self) -> None:
++        """Auto-refresh the display every 30 seconds."""
+         while True:
++            await asyncio.sleep(30)
+             try:
+-                await self._show_menu()
+-                choice = input("\n> ").strip().lower()
++                # Check for new events and update stats
++                await self._update_stats()
++            except Exception as e:
++                log.debug("auto_refresh_error", error=str(e))
++
++    async def _handle_help(self) -> None:
++        """Handle help command."""
++        help_text = f"""
++{Style.BOLD}🔧 Available Commands{Style.RESET}
++
++{Style.CYAN}status{Style.RESET} / {Style.CYAN}st{Style.RESET}     → Check service and sync status
++{Style.CYAN}events{Style.RESET} / {Style.CYAN}e{Style.RESET}      → View recent transcriptions
++{Style.CYAN}write{Style.RESET}           → Send content to Supernote
++{Style.CYAN}refresh{Style.RESET} / {Style.CYAN}r{Style.RESET}     → Refresh display and data
++{Style.CYAN}clear{Style.RESET} / {Style.CYAN}cls{Style.RESET}    → Clear and refresh display
++{Style.CYAN}help{Style.RESET} / {Style.CYAN}h{Style.RESET}       → Show this help
++{Style.CYAN}quit{Style.RESET} / {Style.CYAN}q{Style.RESET}       → Exit user board
++
++{Style.DIM}You can also use natural language like:{Style.RESET}
++• "show me recent notes"
++• "send a message to notebook Quick"
++• "what's the status of my supernote?"
++
++{Style.DIM}The display auto-refreshes every 30 seconds.{Style.RESET}
++"""
++        print(help_text)
++        self._add_to_conversation("assistant", "Displayed help information")
+ 
+-                if choice in ['q', 'quit', 'exit']:
+-                    break
+-                elif choice in ['s', 'status']:
+-                    await self._show_status()
+-                elif choice in ['e', 'events']:
+-                    await self._show_recent_events()
+-                elif choice in ['w', 'write']:
+-                    await self._send_write_request()
+-                elif choice in ['r', 'refresh']:
+-                    await self._refresh_data()
+-                elif choice in ['h', 'help']:
+-                    self._show_help()
+-                else:
+-                    print("❌ Unknown command. Type 'h' for help.")
++    async def _handle_status(self) -> None:
++        """Handle status command with enhanced display."""
++        print(f"\n{Style.BOLD}📊 System Status{Style.RESET}")
++        print("─" * 50)
+ 
+-            except KeyboardInterrupt:
+-                print("\n👋 Goodbye!")
+-                break
+-            except Exception as e:
+-                print(f"❌ Error: {e}")
+-
+-    async def _show_menu(self) -> None:
+-        """Show main menu."""
+-        print("\n" + "─" * 40)
+-        print("📋 Commands:")
+-        print("  s) Status     - Service & sync status")
+-        print("  e) Events     - Recent transcriptions & events")
+-        print("  w) Write      - Send content to Supernote")
+-        print("  r) Refresh    - Refresh data")
+-        print("  h) Help       - Show detailed help")
+-        print("  q) Quit       - Exit user board")
+-
+-    async def _show_status(self) -> None:
+-        """Show service and sync status."""
+-        print("\n🔍 Service Status")
+-        print("─" * 20)
+-
+-        # Check paia-supernote service (if running)
++        # Check paia-events service
+         try:
+-            # Try to connect to events to see if service is up
+             async with httpx.AsyncClient() as client:
+                 response = await client.get("http://localhost:3511/v1/health", timeout=2)
+                 if response.status_code == 200:
+-                    print("✅ paia-events service: running")
++                    print(f"  {Style.GREEN}●{Style.RESET} paia-events service: {Style.BOLD}RUNNING{Style.RESET}")
++                    self.is_connected = True
+                 else:
+-                    print("⚠️  paia-events service: degraded")
+-        except Exception:
+-            print("❌ paia-events service: not accessible")
++                    print(f"  {Style.YELLOW}●{Style.RESET} paia-events service: {Style.BOLD}DEGRADED{Style.RESET}")
++                    self.is_connected = False
++        except Exception as e:
++            print(f"  {Style.RED}●{Style.RESET} paia-events service: {Style.BOLD}NOT ACCESSIBLE{Style.RESET}")
++            print(f"    {Style.DIM}Error: {str(e)[:60]}{Style.RESET}")
++            self.is_connected = False
+ 
+         # Check Supernote sync folder
+         supernote_dir = Path("~/Supernote").expanduser()
+         if supernote_dir.exists():
+             note_files = list(supernote_dir.glob("*.note"))
+-            print(f"📁 Supernote sync: {len(note_files)} notebooks found")
++            print(f"  {Style.GREEN}●{Style.RESET} Supernote sync: {Style.BOLD}{len(note_files)} notebooks{Style.RESET}")
+ 
+             # Show recent activity
+-            recent_files = sorted(note_files, key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+-            if recent_files:
+-                print("   Recent activity:")
++            if note_files:
++                recent_files = sorted(note_files, key=lambda f: f.stat().st_mtime, reverse=True)[:3]
++                print(f"\n    {Style.DIM}Recent activity:{Style.RESET}")
+                 for file in recent_files:
+                     mtime = datetime.fromtimestamp(file.stat().st_mtime)
+-                    print(f"     • {file.stem} (modified {mtime.strftime('%H:%M')})")
++                    age = datetime.now() - mtime
++                    if age.days == 0:
++                        time_ago = f"{int(age.total_seconds() // 3600)}h ago" if age.total_seconds() > 3600 else f"{int(age.total_seconds() // 60)}m ago"
++                    else:
++                        time_ago = f"{age.days}d ago"
++
++                    print(f"      {Style.CYAN}📔 {file.stem}{Style.RESET} {Style.DIM}({time_ago}){Style.RESET}")
+         else:
+-            print("❌ Supernote sync folder not found")
++            print(f"  {Style.RED}●{Style.RESET} Supernote sync folder: {Style.BOLD}NOT FOUND{Style.RESET}")
++            print(f"    {Style.DIM}Expected at: ~/Supernote/{Style.RESET}")
++
++        # Session information
++        uptime = datetime.now() - self.stats["uptime"]
++        print(f"\n  {Style.MAGENTA}●{Style.RESET} Session uptime: {Style.BOLD}{int(uptime.total_seconds() // 60)}m {int(uptime.total_seconds() % 60)}s{Style.RESET}")
+ 
+-    async def _show_recent_events(self) -> None:
+-        """Show recent events and transcriptions."""
+-        print("\n📝 Recent Events")
+-        print("─" * 20)
++        self._add_to_conversation("assistant", "Displayed detailed system status")
++
++    async def _handle_events(self) -> None:
++        """Handle events command with enhanced display."""
++        print(f"\n{Style.BOLD}📝 Recent Events & Transcriptions{Style.RESET}")
++        print("─" * 50)
+ 
+         try:
+-            # Get recent events from paia-events
+             async with httpx.AsyncClient() as client:
+                 response = await client.get(
+                     f"http://localhost:3511/v1/subscribers/paia-supernote/events",
+-                    params={"since": self.session_data["last_seen"], "limit": 10},
++                    params={"since": self.session_data["last_seen"], "limit": 15},
+                     timeout=5
+                 )
+ 
+@@ -157,58 +378,189 @@ class UserBoard:
+                     events = data.get("events", [])
+ 
+                     if not events:
+-                        print("📭 No new events")
++                        print(f"  {Style.DIM}📭 No new events since last check{Style.RESET}")
++                        print(f"  {Style.DIM}Last updated: {self.last_refresh.strftime('%H:%M:%S')}{Style.RESET}")
+                         return
+ 
+-                    for event in events[-10:]:  # Show last 10 events
+-                        payload = event.get("payload", {})
+-                        event_time = datetime.fromtimestamp(event.get("timestamp", time.time()))
++                    # Group events by type
++                    transcriptions = []
++                    write_requests = []
++                    other_events = []
+ 
+-                        if "notebook" in payload:
+-                            notebook = payload["notebook"]
++                    for event in events[-15:]:
++                        payload = event.get("payload", {})
++                        event_type = event.get("event_type", "")
++
++                        if "text" in payload and "notebook" in payload:
++                            transcriptions.append(event)
++                        elif "write" in event_type.lower():
++                            write_requests.append(event)
++                        else:
++                            other_events.append(event)
++
++                    # Display transcriptions
++                    if transcriptions:
++                        print(f"\n  {Style.BOLD}{Style.CYAN}📖 Transcriptions{Style.RESET}")
++                        for event in transcriptions[-5:]:  # Show last 5
++                            payload = event.get("payload", {})
++                            event_time = datetime.fromtimestamp(event.get("timestamp", time.time()))
++                            notebook = payload.get("notebook", "Unknown")
+                             page = payload.get("page", "?")
++                            text = payload.get("text", "")
++
++                            text_preview = text[:70] + ("..." if len(text) > 70 else "")
++                            time_ago = self._format_time_ago(event_time)
+ 
+-                            if "text" in payload:
+-                                text_preview = payload["text"][:60] + ("..." if len(payload["text"]) > 60 else "")
+-                                print(f"📄 {notebook}:{page} - {text_preview}")
+-                                print(f"    {event_time.strftime('%H:%M:%S')}")
++                            print(f"    {Style.GREEN}📔 {notebook}:{page}{Style.RESET} {Style.DIM}({time_ago}){Style.RESET}")
++                            print(f"      {Style.DIM}\"{text_preview}\"{Style.RESET}")
+ 
+-                        # Update last seen
++                    # Display write requests
++                    if write_requests:
++                        print(f"\n  {Style.BOLD}{Style.MAGENTA}✏️  Write Requests{Style.RESET}")
++                        for event in write_requests[-3:]:
++                            payload = event.get("payload", {})
++                            event_time = datetime.fromtimestamp(event.get("timestamp", time.time()))
++                            agent = payload.get("agent", "Unknown")
++                            notebook = payload.get("notebook", "Unknown")
++                            time_ago = self._format_time_ago(event_time)
++
++                            print(f"    {Style.YELLOW}🤖 {agent}{Style.RESET} → {Style.CYAN}{notebook}{Style.RESET} {Style.DIM}({time_ago}){Style.RESET}")
++
++                    # Update last seen
++                    for event in events:
+                         if event["id"] > self.session_data["last_seen"]:
+                             self.session_data["last_seen"] = event["id"]
+ 
++                    self.stats["transcriptions_today"] = len(transcriptions)
++                    self.stats["write_requests_today"] = len(write_requests)
+                     self._save_session()
++
+                 else:
+-                    print("❌ Failed to fetch events")
++                    print(f"  {Style.RED}❌ Failed to fetch events (HTTP {response.status_code}){Style.RESET}")
++
++        except Exception as e:
++            print(f"  {Style.RED}❌ Error fetching events: {str(e)[:60]}{Style.RESET}")
++
++        self._add_to_conversation("assistant", "Displayed recent events and transcriptions")
++
++    def _format_time_ago(self, event_time: datetime) -> str:
++        """Format time ago string."""
++        now = datetime.now()
++        diff = now - event_time
++
++        if diff.days > 0:
++            return f"{diff.days}d ago"
++        elif diff.seconds > 3600:
++            return f"{diff.seconds // 3600}h ago"
++        elif diff.seconds > 60:
++            return f"{diff.seconds // 60}m ago"
++        else:
++            return "just now"
++
++    async def _handle_write_command(self, user_input: str) -> None:
++        """Handle write command with enhanced interface."""
++        await self._send_write_request()
++
++    async def _handle_refresh(self) -> None:
++        """Handle refresh command."""
++        self.last_refresh = datetime.now()
++        await self._update_stats()
++        self._refresh_display()
++        self._add_to_conversation("assistant", "Display refreshed and data updated")
++
++    async def _handle_natural_language(self, user_input: str) -> None:
++        """Handle natural language input by interpreting intent."""
++        user_lower = user_input.lower()
++
++        if any(word in user_lower for word in ["status", "how", "what's", "check"]):
++            await self._handle_status()
++        elif any(word in user_lower for word in ["events", "notes", "recent", "transcription"]):
++            await self._handle_events()
++        elif any(word in user_lower for word in ["write", "send", "message", "note"]):
++            await self._send_write_request()
++        elif any(word in user_lower for word in ["refresh", "update", "reload"]):
++            await self._handle_refresh()
++        else:
++            suggestions = [
++                "Try: 'status' to see system status",
++                "Try: 'events' to see recent transcriptions",
++                "Try: 'write' to send a message to Supernote",
++                "Type 'help' for all commands"
++            ]
++            print(f"\n{Style.YELLOW}🤔 I'm not sure what you meant.{Style.RESET}")
++            print(f"{Style.DIM}Here are some suggestions:{Style.RESET}")
++            for suggestion in suggestions:
++                print(f"  • {suggestion}")
++
++            self._add_to_conversation("assistant", f"Didn't understand: '{user_input}' - showed suggestions")
++
++    async def _update_stats(self) -> None:
++        """Update statistics from recent events."""
++        try:
++            async with httpx.AsyncClient() as client:
++                response = await client.get(
++                    f"http://localhost:3511/v1/subscribers/paia-supernote/events",
++                    params={"limit": 50},
++                    timeout=3
++                )
++                if response.status_code == 200:
++                    data = response.json()
++                    events = data.get("events", [])
++
++                    # Count today's events
++                    today = datetime.now().date()
++                    transcriptions_today = 0
++                    writes_today = 0
++
++                    for event in events:
++                        event_time = datetime.fromtimestamp(event.get("timestamp", 0))
++                        if event_time.date() == today:
++                            if "text" in event.get("payload", {}):
++                                transcriptions_today += 1
++                            elif "write" in event.get("event_type", "").lower():
++                                writes_today += 1
++
++                    self.stats["transcriptions_today"] = transcriptions_today
++                    self.stats["write_requests_today"] = writes_today
+ 
+         except Exception as e:
+-            print(f"❌ Error fetching events: {e}")
++            log.debug("stats_update_error", error=str(e))
+ 
+     async def _send_write_request(self) -> None:
+-        """Send a write request to Supernote."""
+-        print("\n✏️  Write to Supernote")
+-        print("─" * 20)
++        """Send a write request to Supernote with enhanced interface."""
++        print(f"\n{Style.BOLD}✏️  Write to Supernote{Style.RESET}")
++        print("─" * 30)
+ 
+-        notebook = input("📒 Notebook name: ").strip()
++        # Get notebook name
++        print(f"{Style.CYAN}📒 Notebook name:{Style.RESET}")
++        notebook = input(f"  → ").strip()
+         if not notebook:
+-            print("❌ Notebook name required")
++            print(f"{Style.RED}❌ Notebook name required{Style.RESET}")
+             return
+ 
+-        print("📝 Content types:")
+-        print("  1) note    - Regular text note")
+-        print("  2) summary - Summary/report")
+-        print("  3) task    - Task list")
++        # Get content type
++        print(f"\n{Style.CYAN}📝 Content type:{Style.RESET}")
++        print(f"  {Style.DIM}1){Style.RESET} note     - Regular text note")
++        print(f"  {Style.DIM}2){Style.RESET} summary  - Summary/report")
++        print(f"  {Style.DIM}3){Style.RESET} task     - Task list")
+ 
+         content_type_map = {"1": "note", "2": "summary", "3": "task"}
+-        choice = input("Content type (1-3): ").strip()
++        choice = input(f"  → Choose (1-3): ").strip()
+         content_type = content_type_map.get(choice, "note")
+ 
+-        print(f"\n✏️  Enter your {content_type} (press Enter twice to finish):")
++        print(f"\n{Style.CYAN}✍️  Content for '{content_type}':{Style.RESET}")
++        print(f"  {Style.DIM}(Press Enter twice when finished){Style.RESET}")
++
+         content_lines = []
+         empty_count = 0
+ 
+         while empty_count < 2:
+-            line = input()
++            try:
++                line = input("  ")
++            except (EOFError, KeyboardInterrupt):
++                print(f"\n{Style.YELLOW}Write cancelled{Style.RESET}")
++                return
++
+             if line.strip():
+                 content_lines.append(line)
+                 empty_count = 0
+@@ -219,7 +571,18 @@ class UserBoard:
+ 
+         content = "\n".join(content_lines).strip()
+         if not content:
+-            print("❌ No content provided")
++            print(f"{Style.RED}❌ No content provided{Style.RESET}")
++            return
++
++        # Show preview
++        print(f"\n{Style.BOLD}📋 Preview:{Style.RESET}")
++        preview = content[:200] + ("..." if len(content) > 200 else "")
++        print(f"  {Style.DIM}{preview}{Style.RESET}")
++        print(f"  {Style.DIM}→ {content_type} for {notebook} ({len(content)} chars){Style.RESET}")
++
++        confirm = input(f"\n{Style.YELLOW}Send this content? (y/N): {Style.RESET}").strip().lower()
++        if confirm not in ['y', 'yes']:
++            print(f"{Style.DIM}Write cancelled{Style.RESET}")
+             return
+ 
+         # Send write request via events
+@@ -234,46 +597,18 @@ class UserBoard:
+                     "timestamp": time.time()
+                 }
+             )
+-            print(f"✅ Write request sent to {notebook}")
++            print(f"{Style.GREEN}✅ Write request sent to {Style.BOLD}{notebook}{Style.RESET}{Style.GREEN}!{Style.RESET}")
++            self._add_to_conversation("assistant", f"Sent {content_type} to notebook '{notebook}'", {
++                "notebook": notebook,
++                "content_type": content_type,
++                "length": len(content)
++            })
++
+         except Exception as e:
+-            print(f"❌ Failed to send write request: {e}")
+-
+-    async def _refresh_data(self) -> None:
+-        """Refresh all data."""
+-        print("\n🔄 Refreshing...")
+-        await self._show_status()
+-        print("✅ Data refreshed")
+-
+-    def _show_help(self) -> None:
+-        """Show detailed help."""
+-        print("\n📖 PAIA Supernote User Board Help")
+-        print("=" * 40)
+-        print("""
+-This user board provides a command-line interface for interacting with the
+-PAIA Supernote service. Through this interface you can:
+-
+-🔍 STATUS: Check if services are running and see Supernote sync activity
+-📝 EVENTS: View recent note transcriptions and system events
+-✏️  WRITE: Send content from agents back to your Supernote
+-🔄 REFRESH: Update status and event information
+-
+-The board maintains session state in ~/.paia-supernote-session.json to
+-track which events you've already seen.
+-
+-Commands:
+-  s, status  - Show service status and Supernote sync information
+-  e, events  - Display recent transcriptions and events
+-  w, write   - Compose and send content to a Supernote notebook
+-  r, refresh - Refresh all status information
+-  h, help    - Show this help message
+-  q, quit    - Exit the user board
+-
+-Tips:
+-• The board connects to paia-events on localhost:3511
+-• Supernote files are expected in ~/Supernote/
+-• Write requests are sent as events for the main service to process
+-• All timestamps are shown in local time
+-        """)
++            error_msg = f"Failed to send write request: {str(e)}"
++            print(f"{Style.RED}❌ {error_msg}{Style.RESET}")
++            self._add_to_conversation("system", error_msg)
++
+ 
+ 
+ async def main():
+@@ -287,5 +622,16 @@ async def main():
+         await board.stop()
+ 
+ 
++def cli():
++    """Synchronous CLI entry point for setuptools scripts."""
++    try:
++        asyncio.run(main())
++    except KeyboardInterrupt:
++        print("\n👋 Goodbye!")
++    except Exception as e:
++        print(f"❌ Error starting user board: {e}")
++        sys.exit(1)
++
++
+ if __name__ == "__main__":
+-    asyncio.run(main())
+\ No newline at end of file
++    cli()
+\ No newline at end of file
+diff --git a/src/paia_supernote/writer.py b/src/paia_supernote/writer.py
+index 2b154d7..0c77423 100644
+--- a/src/paia_supernote/writer.py
++++ b/src/paia_supernote/writer.py
+@@ -41,6 +41,32 @@ class SupernoteWriter:
+     MARGIN = 80
+     LINE_SPACING = 16
+ 
++    def paginate_content(self, agent: str, content: str) -> list[str]:
++        """Split body content into page-sized chunks without dropping text."""
++        draw = ImageDraw.Draw(
++            Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
++        )
++        body_font = self._load_font(agent, size=self.BODY_FONT_SIZE)
++        current_lines: list[str] = []
++        pages: list[str] = []
++        y = self._body_start_y()
++
++        for line in self._iter_wrapped_body_lines(draw, content, body_font):
++            line_height = self._body_line_height(draw, line, body_font)
++            if current_lines and y + line_height > self._body_bottom_limit():
++                pages.append("\n".join(current_lines))
++                current_lines = [line]
++                y = self._body_start_y() + line_height
++                continue
++
++            current_lines.append(line)
++            y += line_height
++
++        if current_lines:
++            pages.append("\n".join(current_lines))
++
++        return pages or [""]
++
+     def render_page(self, agent: str, content: str, content_type: str = "text") -> bytes:
+         """
+         Render content to RATTA_RLE encoded bytes in the agent's font.
+@@ -68,16 +94,13 @@ class SupernoteWriter:
+         )
+ 
+         # Body text with word wrapping
+-        y = self.MARGIN + 60
+-        max_width = self.DEVICE_WIDTH - 2 * self.MARGIN
+-        for line in content.split("\n"):
+-            wrapped = self._wrap_text(draw, line, body_font, max_width)
+-            for wline in wrapped:
+-                if y > self.DEVICE_HEIGHT - self.MARGIN - 60:
+-                    break
+-                draw.text((self.MARGIN, y), wline, fill=0, font=body_font)
+-                line_bbox = draw.textbbox((0, 0), wline or "A", font=body_font)
+-                y += (line_bbox[3] - line_bbox[1]) + self.LINE_SPACING
++        y = self._body_start_y()
++        for line in self._iter_wrapped_body_lines(draw, content, body_font):
++            line_height = self._body_line_height(draw, line, body_font)
++            if y + line_height > self._body_bottom_limit():
++                break
++            draw.text((self.MARGIN, y), line, fill=0, font=body_font)
++            y += line_height
+ 
+         # Agent signature bottom-left
+         sig_font = self._load_font(None, size=self.SIGNATURE_FONT_SIZE)
+@@ -362,3 +385,36 @@ class SupernoteWriter:
+             lines.append(current)
+         return lines or [""]
+ 
++    def _iter_wrapped_body_lines(
++        self, draw: ImageDraw.ImageDraw, content: str, body_font
++    ) -> list[str]:
++        """Return wrapped body lines using the same layout rules as page rendering."""
++        max_width = self.DEVICE_WIDTH - 2 * self.MARGIN
++        lines: list[str] = []
++        for line in content.split("\n"):
++            lines.extend(self._wrap_text(draw, line, body_font, max_width))
++        return lines or [""]
++
++    def _body_line_height(self, draw: ImageDraw.ImageDraw, line: str, body_font) -> int:
++        """Measure one rendered body line including spacing."""
++        line_bbox = draw.textbbox((0, 0), line or "A", font=body_font)
++        return (line_bbox[3] - line_bbox[1]) + self.LINE_SPACING
++
++    def _body_start_y(self) -> int:
++        """Return the first y-position used for body text rendering."""
++        return self.MARGIN + 60
++
++    def _body_bottom_limit(self) -> int:
++        """Return the exclusive lower bound for body text rendering."""
++        return self.DEVICE_HEIGHT - self.MARGIN - 60
++
++    def append_rle_page(self, notebook_bytes: bytes, rle_content: bytes) -> bytes:
++        """Append a new page with RLE content to an existing notebook."""
++        import io
++        import supernotelib
++
++        page = self.build_page(rle_content)
++        notebook = supernotelib.load(io.BytesIO(notebook_bytes))
++        notebook.pages.append(page)
++        notebook.metadata.pages.append(page.metadata)
++        return supernotelib.reconstruct(notebook)
+diff --git a/tests/test_enrichment.py b/tests/test_enrichment.py
+index be1b872..cb57482 100644
+--- a/tests/test_enrichment.py
++++ b/tests/test_enrichment.py
+@@ -58,3 +58,38 @@ async def test_enricher_returns_markdown_and_scene(mock_client) -> None:
+     assert result.diagram["scene"]["nodes"][0]["label"] == "Start"
+     assert result.summary == "Simple flow"
+     assert result.confidence == 0.92
++
++
++@pytest.mark.asyncio
++@patch("paia_supernote.enrichment.httpx.AsyncClient")
++async def test_enricher_normalizes_string_diagram_to_mermaid(mock_client) -> None:
++    mock_http = AsyncMock()
++    mock_response = MagicMock()
++    mock_response.raise_for_status.return_value = None
++    mock_response.json.return_value = {
++        "choices": [
++            {
++                "message": {
++                    "content": """
++                    {
++                      "markdown": "# Flow",
++                      "diagram": "graph TD\\n  A[Start] --> B[Done]"
++                    }
++                    """
++                }
++            }
++        ]
++    }
++    mock_http.post.return_value = mock_response
++    mock_client.return_value.__aenter__.return_value = mock_http
++    mock_client.return_value.__aexit__.return_value = False
++
++    enricher = SupernoteEnricher(zai_api_key="token")
++    result = await enricher.enrich_page(notebook="Quick", page=19, raw_text="raw flow")
++
++    assert result.markdown == "# Flow"
++    assert result.diagram["kind"] == "mermaid"
++    assert "A[Start]" in result.diagram["mermaid"]
++    assert result.diagram["render_version"] == "1"
++    assert result.summary is None
++    assert result.confidence is None
+diff --git a/tests/test_events.py b/tests/test_events.py
+index 0791351..0324891 100644
+--- a/tests/test_events.py
++++ b/tests/test_events.py
+@@ -31,8 +31,9 @@ class TestEventPublishing:
+             mock_http.post.assert_called_once()
+             call_kwargs = mock_http.post.call_args
+             body = call_kwargs[1]["json"]
+-            assert body["event_type"] == "supernote.note_transcribed"
++            assert body["event_type"] == "supernote.note.transcribed"
+             assert body["source_app"] == "paia-supernote"
++            assert "occurred_at" in body
+             assert body["payload"]["notebook"] == "Quick"
+             assert body["payload"]["page"] == 1
+             assert body["payload"]["text"] == "Meeting notes here"
+@@ -54,7 +55,8 @@ class TestEventPublishing:
+             )
+ 
+             body = mock_http.post.call_args[1]["json"]
+-            assert body["event_type"] == "supernote.checkbox_completed"
++            assert body["event_type"] == "supernote.checkbox.completed"
++            assert "occurred_at" in body
+             assert body["payload"]["task_id"] == "task-123"
+             assert body["payload"]["task_text"] == "Buy groceries"
+             assert body["payload"]["notebook"] == "Quick"
+@@ -71,7 +73,8 @@ class TestEventPublishing:
+             await client.publish_snippet_detected("LFW", 3, "Strategy pivot", "Caroline")
+ 
+             body = mock_http.post.call_args[1]["json"]
+-            assert body["event_type"] == "supernote.snippet_detected"
++            assert body["event_type"] == "supernote.snippet.detected"
++            assert "occurred_at" in body
+             assert body["payload"]["agent"] == "Caroline"
+             assert body["payload"]["text"] == "Strategy pivot"
+ 
+@@ -106,7 +109,7 @@ class TestSubscriberRegistration:
+             mock_http.post.assert_called_once()
+             body = mock_http.post.call_args[1]["json"]
+             assert body["name"] == "paia-supernote"
+-            assert body["event_type_prefix"] == "supernote.write_requested"
++            assert body["event_type_prefix"] == "supernote.write.requested"
+ 
+     @pytest.mark.asyncio
+     async def test_start_survives_registration_failure(self, client: EventsClient) -> None:
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 001b5af..c9478ca 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -296,12 +296,37 @@ class TestSignalHandling:
+ class TestMainEntrypoint:
+     """main() function wires everything together."""
+ 
+-    def test_parser_supports_ingest_enrich_and_status(self) -> None:
++    def test_parser_supports_service_ingest_enrich_and_status(self) -> None:
+         parser = build_parser()
++        assert parser.parse_args(["service"]).mode == "service"
+         assert parser.parse_args(["ingest"]).mode == "ingest"
+         assert parser.parse_args(["enrich"]).mode == "enrich"
+         assert parser.parse_args(["status"]).mode == "status"
+ 
++    @patch("paia_supernote.main.load_config")
++    @patch("paia_supernote.main._configure_logging")
++    def test_main_service_mode_starts_supernote_service(
++        self,
++        mock_logging: MagicMock,
++        mock_load_config: MagicMock,
++    ) -> None:
++        mock_load_config.return_value = dict(DEFAULT_CONFIG)
++
++        async def fake_start() -> None:
++            pass
++
++        with patch("paia_supernote.main.SupernoteService") as mock_cls:
++            mock_service = MagicMock()
++            mock_service.start = MagicMock(side_effect=fake_start)
++            mock_service.stop = AsyncMock()
++            mock_cls.return_value = mock_service
++
++            main(argv=["service"])
++
++        mock_logging.assert_called_once()
++        mock_load_config.assert_called_once()
++        mock_cls.assert_called_once()
++
+     @patch("paia_supernote.main.load_config")
+     @patch("paia_supernote.main._configure_logging")
+     def test_main_ingest_mode_starts_ingest_service(
+@@ -515,3 +540,72 @@ class TestMainEntrypoint2:
+ 
+         await service._handle_write_request(event_data)
+         mock_uploader.download_notebook.assert_not_awaited()
++
++    @pytest.mark.asyncio
++    async def test_write_request_normalizes_runtime_agent_aliases(
++        self,
++        tmp_path: Path,
++    ) -> None:
++        service = SupernoteService(config=DEFAULT_CONFIG)
++        mock_uploader = AsyncMock()
++        mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
++        mock_uploader.upload_notebook = AsyncMock(return_value=True)
++        service.uploader = mock_uploader
++
++        event_data = {
++            "agent": "samantha",
++            "notebook": "Walk",
++            "content_type": "replace_pages",
++            "pages": [
++                {"content": "2026-04-24 Daily Walk"},
++            ],
++        }
++
++        with patch(
++            "paia_supernote.main.replace_notebook_pages",
++            return_value=b"rebuilt_notebook",
++        ) as mock_replace:
++            await service._handle_write_request(event_data)
++
++        page_specs = mock_replace.call_args.kwargs["pages"]
++        assert page_specs[0].agent == "Sam"
++
++    @pytest.mark.asyncio
++    async def test_write_request_replace_pages_retries_with_fresh_uploader_when_shared_uploader_is_stale(
++        self,
++    ) -> None:
++        service = SupernoteService(config=DEFAULT_CONFIG)
++        stale_uploader = AsyncMock()
++        stale_uploader.download_notebook = AsyncMock(side_effect=RuntimeError("stale uploader"))
++        service.uploader = stale_uploader
++
++        fresh_uploader = AsyncMock()
++        fresh_uploader.start = AsyncMock()
++        fresh_uploader.stop = AsyncMock()
++        fresh_uploader.download_notebook = AsyncMock(return_value=b"fresh_notebook")
++        fresh_uploader.upload_notebook = AsyncMock(return_value=True)
++
++        event_data = {
++            "agent": "Sam",
++            "notebook": "Walk",
++            "content_type": "replace_pages",
++            "pages": [
++                {"agent": "Sam", "content": "Fresh page"},
++            ],
++        }
++
++        with patch(
++            "paia_supernote.main.replace_notebook_pages",
++            return_value=b"rebuilt_notebook",
++        ) as mock_replace, patch(
++            "paia_supernote.main.SupernoteUploader",
++            return_value=fresh_uploader,
++        ):
++            await service._handle_write_request(event_data)
++
++        stale_uploader.download_notebook.assert_awaited_once_with("Walk.note")
++        fresh_uploader.start.assert_awaited_once()
++        fresh_uploader.download_notebook.assert_awaited_once_with("Walk.note")
++        fresh_uploader.upload_notebook.assert_awaited_once()
++        fresh_uploader.stop.assert_awaited_once()
++        mock_replace.assert_called_once()
+diff --git a/tests/test_notebook_artifacts.py b/tests/test_notebook_artifacts.py
+index e8aa268..591c67c 100644
+--- a/tests/test_notebook_artifacts.py
++++ b/tests/test_notebook_artifacts.py
+@@ -65,6 +65,18 @@ class TestReplaceNotebookPages:
+         nb = supernotelib.load(io.BytesIO(result))
+         assert nb.get_total_pages() == 1
+ 
++    def test_long_page_content_spills_into_continuation_pages(self) -> None:
++        content = "\n".join(
++            f"Brief line {index}: {'meeting ' * 10}".strip()
++            for index in range(80)
++        )
++        pages = [NotebookPageSpec(agent="Sam", content=content)]
++
++        result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
++
++        nb = supernotelib.load(io.BytesIO(result))
++        assert nb.get_total_pages() > 1
++
+     def test_mainlayer_has_content_after_replace(self) -> None:
+         pages = [NotebookPageSpec(agent="Caroline", content="Check layer")]
+         result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
+@@ -88,3 +100,22 @@ class TestReplaceNotebookPages:
+         result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
+         nb = supernotelib.load(io.BytesIO(result))
+         assert nb.get_total_pages() == extra
++
++    def test_rebuilds_pages_with_fresh_page_ids(self) -> None:
++        original = supernotelib.load(io.BytesIO(self.base_bytes))
++        original_ids = {
++            original.get_page(index).metadata.get("PAGEID")
++            for index in range(original.get_total_pages())
++        }
++
++        pages = [NotebookPageSpec(agent="Sam", content="Fresh page")]
++        result = replace_notebook_pages(self.base_bytes, writer=self.writer, pages=pages)
++
++        rebuilt = supernotelib.load(io.BytesIO(result))
++        rebuilt_ids = {
++            rebuilt.get_page(index).metadata.get("PAGEID")
++            for index in range(rebuilt.get_total_pages())
++        }
++
++        assert rebuilt_ids
++        assert rebuilt_ids.isdisjoint(original_ids)
+diff --git a/tests/test_page_state.py b/tests/test_page_state.py
+index daa0693..f713a88 100644
+--- a/tests/test_page_state.py
++++ b/tests/test_page_state.py
+@@ -33,6 +33,15 @@ def test_upsert_page_overwrites_same_notebook_page_and_marks_dirty(tmp_path: Pat
+     assert row.retry_count == 0
+ 
+ 
++def test_init_schema_creates_parent_directory(tmp_path: Path) -> None:
++    db_path = tmp_path / "nested" / "state.db"
++    store = PageStateStore(db_path)
++
++    store.init_schema()
++
++    assert db_path.parent.exists()
++
++
+ def test_mark_enriched_only_updates_matching_revision(tmp_path: Path) -> None:
+     store = PageStateStore(tmp_path / "state.db")
+     store.init_schema()
+diff --git a/tests/test_pipeline_services.py b/tests/test_pipeline_services.py
+index c5f3846..c5eb4ac 100644
+--- a/tests/test_pipeline_services.py
++++ b/tests/test_pipeline_services.py
+@@ -2,12 +2,14 @@
+ 
+ from __future__ import annotations
+ 
++import asyncio
+ from pathlib import Path
+ from types import SimpleNamespace
+-from unittest.mock import AsyncMock
++from unittest.mock import AsyncMock, MagicMock, patch
+ 
+ import pytest
+ 
++from paia_supernote.cloud_poller import CloudPoller
+ from paia_supernote.enrich_service import EnrichService
+ from paia_supernote.ingest_service import IngestService
+ from paia_supernote.main import DEFAULT_CONFIG
+@@ -39,6 +41,39 @@ async def test_ingest_service_persists_latest_page_revision(tmp_path: Path) -> N
+     assert row.source_revision.endswith(":19")
+ 
+ 
++@pytest.mark.asyncio
++async def test_ingest_service_persists_completed_pages_before_later_page_failure(
++    tmp_path: Path,
++) -> None:
++    config = dict(DEFAULT_CONFIG)
++    config["state_db_path"] = str(tmp_path / "state.db")
++    mock_reader = AsyncMock()
++
++    async def fake_process_file(note_bytes, notebook_name, on_result=None):
++        assert notebook_name == "Quick"
++        assert on_result is not None
++        await on_result(
++            SimpleNamespace(notebook="Quick", page_num=19, text="raw v1")
++        )
++        raise RuntimeError("page 20 failed")
++
++    mock_reader.process_file.side_effect = fake_process_file
++    service = IngestService(
++        config=config,
++        reader=mock_reader,
++        uploader=AsyncMock(),
++        cloud_poller=MagicMock(),
++    )
++
++    with pytest.raises(RuntimeError, match="page 20 failed"):
++        await service._on_note_changed("Quick", b"note-bytes", 123456)
++
++    row = service.page_state.get_page("Quick", 19)
++    assert row is not None
++    assert row.raw_text == "raw v1"
++    assert row.source_revision.endswith(":19")
++
++
+ @pytest.mark.asyncio
+ async def test_enrich_service_discards_stale_revision_before_folio_write(tmp_path: Path) -> None:
+     config = dict(DEFAULT_CONFIG)
+@@ -96,3 +131,102 @@ async def test_enrich_service_marks_retry_state_on_failure(tmp_path: Path) -> No
+     assert row.retry_count == 1
+     assert row.last_error_stage == "enrich"
+     assert row.last_error == "boom"
++
++
++def test_ingest_service_passes_configured_zai_api_key_to_reader(tmp_path: Path) -> None:
++    config = dict(DEFAULT_CONFIG)
++    config["state_db_path"] = str(tmp_path / "state.db")
++    config["zai_api_key"] = "config-token"
++
++    with patch("paia_supernote.ingest_service.SupernoteReader") as mock_reader_cls:
++        service = IngestService(config=config)
++
++    mock_reader_cls.assert_called_once()
++    assert mock_reader_cls.call_args.kwargs["zai_api_key"] == "config-token"
++    assert service.reader is mock_reader_cls.return_value
++
++
++def test_enrich_service_passes_configured_zai_api_key_to_enricher(tmp_path: Path) -> None:
++    config = dict(DEFAULT_CONFIG)
++    config["state_db_path"] = str(tmp_path / "state.db")
++    config["zai_api_key"] = "config-token"
++
++    with patch("paia_supernote.enrich_service.SupernoteEnricher") as mock_enricher_cls:
++        service = EnrichService(config=config)
++
++    mock_enricher_cls.assert_called_once()
++    assert mock_enricher_cls.call_args.kwargs["zai_api_key"] == "config-token"
++    assert service.enricher is mock_enricher_cls.return_value
++
++
++@pytest.mark.asyncio
++async def test_cloud_poller_retries_revision_after_download_error() -> None:
++    uploader = AsyncMock()
++    uploader._api_call.return_value = {
++        "status": 200,
++        "body": {
++            "userFileVOList": [
++                {
++                    "fileName": "Quick.note",
++                    "updateTime": 123,
++                    "isFolder": "N",
++                    "size": 42,
++                }
++            ]
++        },
++    }
++    uploader.download_notebook = AsyncMock(
++        side_effect=[RuntimeError("download failed"), b"latest-bytes"]
++    )
++    on_note_changed = AsyncMock()
++    poller = CloudPoller(
++        uploader=uploader,
++        on_note_changed=on_note_changed,
++        poll_interval=60,
++    )
++
++    await poller._poll_once()
++
++    assert "Quick.note" not in poller._last_seen
++    on_note_changed.assert_not_awaited()
++
++    await poller._poll_once()
++
++    assert poller._last_seen["Quick.note"] == 123
++    on_note_changed.assert_awaited_once_with("Quick", b"latest-bytes", 123)
++
++
++@pytest.mark.asyncio
++async def test_ingest_service_start_raises_when_cloud_poller_task_dies(
++    tmp_path: Path,
++) -> None:
++    config = dict(DEFAULT_CONFIG)
++    config["state_db_path"] = str(tmp_path / "state.db")
++
++    class CrashingPoller:
++        def __init__(self) -> None:
++            self.stop = AsyncMock()
++            self._task: asyncio.Task[None] | None = None
++
++        def start(self) -> None:
++            async def crash() -> None:
++                await asyncio.sleep(0)
++                raise RuntimeError("poller died")
++
++            self._task = asyncio.create_task(crash())
++
++        async def wait(self) -> None:
++            assert self._task is not None
++            await self._task
++
++    uploader = AsyncMock()
++    poller = CrashingPoller()
++    service = IngestService(
++        config=config,
++        reader=AsyncMock(),
++        uploader=uploader,
++        cloud_poller=poller,
++    )
++
++    with pytest.raises(RuntimeError, match="poller died"):
++        await asyncio.wait_for(service.start(), timeout=0.2)
+diff --git a/tests/test_reader.py b/tests/test_reader.py
+index 4465a11..3aa89a0 100644
+--- a/tests/test_reader.py
++++ b/tests/test_reader.py
+@@ -121,6 +121,63 @@ class TestSupernoteReader:
+         assert result == "snippet"
+         mock_client.messages.create.assert_called_once()
+ 
++    @pytest.mark.asyncio
++    @patch("paia_supernote.reader.httpx.AsyncClient")
++    async def test_transcribe_page_zai_uses_coding_endpoint(self, mock_async_client):
++        """Z.AI OCR backend posts multimodal chat to the coding endpoint."""
++        mock_response = Mock()
++        mock_response.json.return_value = {
++            "choices": [{"message": {"content": "Transcribed page text"}}]
++        }
++        mock_response.raise_for_status = Mock()
++        mock_response.headers = {"content-type": "application/json"}
++        mock_async_client.return_value.__aenter__.return_value.post = AsyncMock(
++            return_value=mock_response
++        )
++
++        reader = SupernoteReader(
++            vision_backend="zai",
++            zai_api_key="test-zai-key",
++            zai_vision_model="glm-4.5v",
++        )
++
++        result = await reader._transcribe_page_zai("YWJjZA==")
++
++        assert result == "Transcribed page text"
++        mock_async_client.return_value.__aenter__.return_value.post.assert_awaited_once()
++        _, kwargs = mock_async_client.return_value.__aenter__.return_value.post.await_args
++        assert kwargs["headers"]["Authorization"] == "Bearer test-zai-key"
++        assert kwargs["json"]["model"] == "glm-4.5v"
++        assert kwargs["json"]["messages"][0]["content"][0]["type"] == "image_url"
++
++    @pytest.mark.asyncio
++    @patch("paia_supernote.reader.httpx.AsyncClient")
++    async def test_classification_returns_snippet_via_zai_chat(self, mock_async_client):
++        """When using the Z.AI backend, snippet classification does not require Anthropic."""
++        mock_response = Mock()
++        mock_response.json.return_value = {
++            "choices": [{"message": {"content": "snippet"}}]
++        }
++        mock_response.raise_for_status = Mock()
++        mock_response.headers = {"content-type": "application/json"}
++        mock_async_client.return_value.__aenter__.return_value.post = AsyncMock(
++            return_value=mock_response
++        )
++
++        reader = SupernoteReader(
++            vision_backend="zai",
++            zai_api_key="test-zai-key",
++            zai_text_model="glm-5.1",
++        )
++
++        result = await reader.classify_content(
++            "Aberdeen positioning needs rethinking before the call"
++        )
++
++        assert result == "snippet"
++        _, kwargs = mock_async_client.return_value.__aenter__.return_value.post.await_args
++        assert kwargs["json"]["model"] == "glm-5.1"
++
+     @pytest.mark.asyncio
+     async def test_classification_returns_general_for_plain_content(self):
+         """Plain content without markers classified as general."""
+@@ -148,6 +205,47 @@ class TestSupernoteReader:
+         # Different page number: should process
+         assert reader.page_changed("test_file", 1, test_image) is True
+ 
++    @pytest.mark.asyncio
++    @patch('paia_supernote.reader.supernotelib')
++    @patch('paia_supernote.reader.ImageConverter')
++    async def test_read_all_pages_returns_task_page_range_without_change_detection(
++        self, mock_converter_class, mock_supernotelib, tmp_path, monkeypatch
++    ):
++        """read_all_pages(bytes, name, page_range=(18,21)) returns all four task pages.
++
++        Regression: process_file() skips unchanged pages via page_changed(); pages 19-22
++        that were already seen were silently dropped.  read_all_pages must bypass the
++        checksum cache entirely and always return the requested range.
++        """
++        monkeypatch.setattr('paia_supernote.reader.SNAPSHOT_DIR', tmp_path / "snapshots")
++
++        mock_notebook = Mock()
++        mock_notebook.get_total_pages.return_value = 25
++        mock_supernotelib.load_notebook.return_value = mock_notebook
++
++        mock_converter = Mock()
++        mock_converter_class.return_value = mock_converter
++        test_image = Image.open("tests/fixtures/test_page.png")
++        mock_converter.convert.return_value = test_image
++
++        mock_client = AsyncMock()
++        mock_response = Mock()
++        mock_response.content = [Mock()]
++        mock_response.content[0].text = "□ Task item"
++        mock_client.messages.create.return_value = mock_response
++
++        reader = SupernoteReader(anthropic_client=mock_client)
++        # Pre-populate checksums for pages 18-21 so process_file() would skip them
++        for page_num in range(18, 22):
++            reader.page_checksums[f"Quick:{page_num}"] = "already_seen_checksum"
++
++        results = await reader.read_all_pages(b"note_bytes", "Quick", page_range=(18, 21))
++
++        # All four pages must be present despite being "unchanged" in the checksum cache
++        assert len(results) == 4
++        assert {r.page_num for r in results} == {18, 19, 20, 21}
++        assert all(r.notebook == "Quick" for r in results)
++
+     @pytest.mark.asyncio
+     @patch('paia_supernote.reader.supernotelib')
+     @patch('paia_supernote.reader.ImageConverter')
+@@ -182,3 +280,35 @@ class TestSupernoteReader:
+         assert result.checkboxes[0].task_text == "Complete task one"
+         assert result.checkboxes[0].tag == "focus"
+         assert result.checkboxes[0].page_num == 0
++
++    @pytest.mark.asyncio
++    @patch('paia_supernote.reader.supernotelib')
++    @patch('paia_supernote.reader.ImageConverter')
++    async def test_process_file_invokes_on_result_callback_per_page(
++        self, mock_converter_class, mock_supernotelib, tmp_path, monkeypatch
++    ):
++        """process_file can stream each page result as soon as it is ready."""
++        monkeypatch.setattr('paia_supernote.reader.SNAPSHOT_DIR', tmp_path / "snapshots")
++
++        mock_notebook = Mock()
++        mock_notebook.get_total_pages.return_value = 2
++        mock_supernotelib.load_notebook.return_value = mock_notebook
++
++        mock_converter = Mock()
++        mock_converter_class.return_value = mock_converter
++        test_image = Image.open("tests/fixtures/test_page.png")
++        mock_converter.convert.return_value = test_image
++
++        reader = SupernoteReader()
++        reader._transcribe_page = AsyncMock(side_effect=["page 0", "page 1"])
++        reader.classify_content = AsyncMock(side_effect=["general", "general"])
++        reader.detect_checkbox_changes = Mock(return_value=[])
++        on_result = AsyncMock()
++
++        results = await reader.process_file(
++            "tests/fixtures/Quick.note",
++            on_result=on_result,
++        )
++
++        assert [result.page_num for result in results] == [0, 1]
++        assert [call.args[0].page_num for call in on_result.await_args_list] == [0, 1]
+diff --git a/tests/test_task_curator.py b/tests/test_task_curator.py
+index 188414d..7c3a051 100644
+--- a/tests/test_task_curator.py
++++ b/tests/test_task_curator.py
+@@ -8,30 +8,48 @@ from paia_supernote.task_curator import TaskCurator
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_task_curator_reads_current_task_page_from_note_file():
+-    """Task curator reads current Quick.note file to get task page content."""
++async def test_task_curator_reads_current_task_page_from_notebook_bytes():
++    """Task curator reads notebook bytes via read_all_pages to get task page content.
++
++    Regression: old implementation used process_file(~/Supernote/path) which (a) used
++    a placeholder path that never existed and (b) skipped unchanged pages.  The fix
++    must use read_all_pages so that pages 19-22 (0-based 18-21) are always readable.
++    """
+     # Arrange
+     mock_reader = AsyncMock()
+     curator = TaskCurator(reader=mock_reader)
+ 
+-    # Mock the reader to return ReadResult with task content
+-    from paia_supernote.reader import ReadResult, CheckboxItem
+-    read_result = ReadResult(
+-        notebook="Quick",
+-        page_num=0,
+-        text="□ Task 1\n○ Task 2\n☑ Completed task",
+-        checkboxes=[],
+-        content_type="task",
+-        timestamp=datetime.now(timezone.utc)
+-    )
+-    mock_reader.process_file = AsyncMock(return_value=[read_result])
++    from paia_supernote.reader import ReadResult
++    read_results = [
++        ReadResult(
++            notebook="Quick",
++            page_num=18,
++            text="□ Task 1\n○ Task 2",
++            checkboxes=[],
++            content_type="task",
++            timestamp=datetime.now(timezone.utc),
++        ),
++        ReadResult(
++            notebook="Quick",
++            page_num=19,
++            text="☑ Completed task",
++            checkboxes=[],
++            content_type="task",
++            timestamp=datetime.now(timezone.utc),
++        ),
++    ]
++    mock_reader.read_all_pages = AsyncMock(return_value=read_results)
+ 
+-    # Act
+-    result = await curator._read_current_task_page("Quick.note")
++    # Act — new API: pass bytes + notebook name, not a file path string
++    result = await curator._read_current_task_page(b"fake_note_bytes", "Quick")
+ 
+-    # Assert
+-    assert result == "□ Task 1\n○ Task 2\n☑ Completed task"
+-    mock_reader.process_file.assert_called_once()
++    # Assert content from both pages is present
++    assert "□ Task 1" in result
++    assert "☑ Completed task" in result
++    # Verify read_all_pages (not process_file) is called with the task-page range
++    mock_reader.read_all_pages.assert_awaited_once_with(
++        b"fake_note_bytes", "Quick", page_range=(18, 21)
++    )
+ 
+ 
+ @pytest.mark.asyncio
+@@ -103,4 +121,104 @@ async def test_task_curator_emits_checkbox_completed_events():
+         task_text="Completed focus task",
+         notebook="Quick",
+         page=0
+-    )
+\ No newline at end of file
++    )
++
++
++@pytest.mark.asyncio
++async def test_task_curator_aggregates_content_from_task_pages_18_to_21():
++    """Curator joins text from all four task pages (0-based 18-21) in a single string.
++
++    Regression: old implementation returned only the first task page; pages 20-21
++    were silently dropped.
++    """
++    mock_reader = AsyncMock()
++    curator = TaskCurator(reader=mock_reader)
++
++    from paia_supernote.reader import ReadResult
++    mock_reader.read_all_pages = AsyncMock(return_value=[
++        ReadResult(notebook="Quick", page_num=18, text="Page 19 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++        ReadResult(notebook="Quick", page_num=19, text="Page 20 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++        ReadResult(notebook="Quick", page_num=20, text="Page 21 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++        ReadResult(notebook="Quick", page_num=21, text="Page 22 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++    ])
++
++    result = await curator._read_current_task_page(b"note_bytes", "Quick")
++
++    # All four pages must be present in the aggregated output
++    assert "Page 19 tasks" in result
++    assert "Page 20 tasks" in result
++    assert "Page 21 tasks" in result
++    assert "Page 22 tasks" in result
++    # Joined with newlines
++    assert result.count("\n") == 3
++
++
++@pytest.mark.asyncio
++async def test_task_curator_keeps_designated_task_pages_even_when_not_classified_as_task():
++    """Task-page curation should use the designated page span, not task-marker classification.
++
++    Real Quick.note pages 19-22 can contain task-planning prose with weak or missing checkbox OCR.
++    Those pages still need to be curated even if classify_content returns "general".
++    """
++    mock_reader = AsyncMock()
++    curator = TaskCurator(reader=mock_reader)
++
++    from paia_supernote.reader import ReadResult
++    mock_reader.read_all_pages = AsyncMock(return_value=[
++        ReadResult(
++            notebook="Quick",
++            page_num=18,
++            text="Fundraising mode notes",
++            checkboxes=[],
++            content_type="general",
++            timestamp=datetime.now(timezone.utc),
++        ),
++        ReadResult(
++            notebook="Quick",
++            page_num=19,
++            text="Prototype dashboard planning",
++            checkboxes=[],
++            content_type="general",
++            timestamp=datetime.now(timezone.utc),
++        ),
++    ])
++
++    result = await curator._read_current_task_page(b"note_bytes", "Quick")
++
++    assert "Fundraising mode notes" in result
++    assert "Prototype dashboard planning" in result
++
++
++@pytest.mark.asyncio
++@patch("paia_supernote.task_curator.httpx.AsyncClient")
++async def test_task_curator_reorganize_with_llm_uses_zai_backend(mock_async_client):
++    """Task curation rewrite uses the approved Z.AI text model when configured."""
++    mock_response = Mock()
++    mock_response.json.return_value = {
++        "choices": [{"message": {"content": "Rewritten task page"}}]
++    }
++    mock_response.raise_for_status = Mock()
++    mock_async_client.return_value.__aenter__.return_value.post = AsyncMock(
++        return_value=mock_response
++    )
++
++    curator = TaskCurator(
++        rewrite_backend="zai",
++        zai_api_key="test-zai-key",
++        zai_text_model="glm-5.1",
++    )
++
++    result = await curator._reorganize_with_llm("Current task page content")
++
++    assert result == "Rewritten task page"
++    _, kwargs = mock_async_client.return_value.__aenter__.return_value.post.await_args
++    assert kwargs["headers"]["Authorization"] == "Bearer test-zai-key"
++    assert kwargs["json"]["model"] == "glm-5.1"
+diff --git a/tests/test_uploader.py b/tests/test_uploader.py
+index 7174d48..2f5961a 100644
+--- a/tests/test_uploader.py
++++ b/tests/test_uploader.py
+@@ -127,6 +127,10 @@ class TestSupernoteUploader:
+             mock_browser.new_context.assert_called_once_with(
+                 storage_state=str(mock_session_file)
+             )
++            mock_page.goto.assert_awaited_once_with(
++                f"{uploader.CLOUD_URL}/",
++                wait_until="networkidle",
++            )
+ 
+     @pytest.mark.asyncio
+     async def test_upload_flow_with_mocked_network(self, uploader, mock_note_file):
+@@ -406,4 +410,79 @@ class TestSupernoteUploader:
+         with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
+                           return_value=["some-id"]):
+             with pytest.raises(RuntimeError, match="No URL"):
+-                await uploader.download_notebook("Quick.note")
+\ No newline at end of file
++                await uploader.download_notebook("Quick.note")
++
++    @pytest.mark.asyncio
++    async def test_api_call_recovers_when_page_target_is_closed(self, uploader):
++        """_api_call should restart the browser session once when Playwright target is closed."""
++        dead_page = Mock()
++        dead_page.evaluate = AsyncMock(
++            side_effect=RuntimeError("Page.evaluate: Target page, context or browser has been closed")
++        )
++        live_page = Mock()
++        live_page.evaluate = AsyncMock(return_value={"status": 200, "body": {"success": True}})
++        uploader.page = dead_page
++
++        async def fake_start() -> None:
++            uploader.page = live_page
++
++        with patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop, \
++             patch.object(uploader, "start", side_effect=fake_start) as mock_start:
++            result = await uploader._api_call("/api/file/list/query", {"pageNo": 1})
++
++        assert result == {"status": 200, "body": {"success": True}}
++        mock_stop.assert_awaited_once()
++        mock_start.assert_awaited_once()
++        dead_page.evaluate.assert_awaited_once()
++        live_page.evaluate.assert_awaited_once()
++
++    @pytest.mark.asyncio
++    async def test_ensure_authenticated_recovers_when_page_target_is_closed(self, uploader):
++        """_ensure_authenticated should restart the browser session once when page navigation fails."""
++        dead_page = Mock()
++        dead_page.goto = AsyncMock(
++            side_effect=RuntimeError("Page.goto: Target page, context or browser has been closed")
++        )
++        live_page = Mock()
++        live_response = Mock()
++        live_response.status = 200
++        live_page.goto = AsyncMock(return_value=live_response)
++        live_page.url = "https://cloud.supernote.com/files"
++        uploader.page = dead_page
++
++        async def fake_start() -> None:
++            uploader.page = live_page
++
++        with patch.object(uploader, "stop", new_callable=AsyncMock) as mock_stop, \
++             patch.object(uploader, "start", side_effect=fake_start) as mock_start, \
++             patch.object(uploader, "_interactive_reauth", new_callable=AsyncMock) as mock_reauth:
++            await uploader._ensure_authenticated()
++
++        mock_stop.assert_awaited_once()
++        mock_start.assert_awaited_once()
++        mock_reauth.assert_not_called()
++        dead_page.goto.assert_awaited_once()
++        live_page.goto.assert_awaited_once()
++
++    @pytest.mark.asyncio
++    async def test_api_call_refreshes_csrf_token_and_retries_once(self, uploader):
++        """_api_call should refresh the XSRF token and retry once on CSRF expiry."""
++        mock_page = Mock()
++        mock_page.evaluate = AsyncMock(side_effect=[
++            {
++                "status": 403,
++                "body": '{"error":"CSRF token validation failed","code":"CSRF_TOKEN_EXPIRED"}',
++            },
++            {
++                "status": 200,
++                "body": {"success": True},
++            },
++        ])
++        uploader.page = mock_page
++
++        with patch.object(uploader, "_refresh_csrf_token", new_callable=AsyncMock) as mock_refresh:
++            result = await uploader._api_call("/api/file/list/query", {"pageNo": 1})
++
++        assert result == {"status": 200, "body": {"success": True}}
++        mock_refresh.assert_awaited_once()
++        assert mock_page.evaluate.await_count == 2
+diff --git a/tests/test_user_board.py b/tests/test_user_board.py
+index 995a4b5..b3f6bb5 100644
+--- a/tests/test_user_board.py
++++ b/tests/test_user_board.py
+@@ -93,7 +93,7 @@ class TestUserBoard:
+         user_board._save_session.assert_called_once()
+ 
+     @pytest.mark.asyncio
+-    async def test_show_status_service_running(self, user_board, capsys):
++    async def test_handle_status_service_running(self, user_board, capsys):
+         """Test status display when services are running."""
+         with patch("httpx.AsyncClient") as mock_client:
+             mock_response = MagicMock()
+@@ -104,22 +104,22 @@ class TestUserBoard:
+             mock_stat.st_mtime = 0.0
+             mock_note1 = MagicMock(spec=Path)
+             mock_note1.stat.return_value = mock_stat
+-            mock_note1.name = "notebook1.note"
++            mock_note1.stem = "notebook1"
+             mock_note2 = MagicMock(spec=Path)
+             mock_note2.stat.return_value = mock_stat
+-            mock_note2.name = "notebook2.note"
++            mock_note2.stem = "notebook2"
+ 
+             with patch("pathlib.Path.exists", return_value=True), \
+                  patch("pathlib.Path.glob", return_value=[mock_note1, mock_note2]):
+ 
+-                await user_board._show_status()
++                await user_board._handle_status()
+ 
+                 captured = capsys.readouterr()
+-                assert "paia-events service: running" in captured.out
+-                assert "2 notebooks found" in captured.out
++                assert "RUNNING" in captured.out
++                assert "2 notebooks" in captured.out
+ 
+     @pytest.mark.asyncio
+-    async def test_show_recent_events(self, user_board, capsys):
++    async def test_handle_events(self, user_board, capsys):
+         """Test displaying recent events."""
+         mock_events = {
+             "events": [
+@@ -141,18 +141,19 @@ class TestUserBoard:
+             mock_response.json.return_value = mock_events
+             mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
+ 
+-            await user_board._show_recent_events()
++            await user_board._handle_events()
+ 
+             captured = capsys.readouterr()
+             assert "test_notebook:1" in captured.out
+             assert "This is a test transcription" in captured.out
+ 
+-    def test_show_help(self, user_board, capsys):
++    @pytest.mark.asyncio
++    async def test_handle_help(self, user_board, capsys):
+         """Test help display."""
+-        user_board._show_help()
++        await user_board._handle_help()
+ 
+         captured = capsys.readouterr()
+-        assert "PAIA Supernote User Board Help" in captured.out
+-        assert "STATUS: Check if services" in captured.out
+-        assert "EVENTS: View recent" in captured.out
+-        assert "WRITE: Send content" in captured.out
+\ No newline at end of file
++        assert "Available Commands" in captured.out
++        assert "status" in captured.out
++        assert "events" in captured.out
++        assert "write" in captured.out
+\ No newline at end of file
+diff --git a/tests/test_writer.py b/tests/test_writer.py
+index a0b8280..fbb411c 100644
+--- a/tests/test_writer.py
++++ b/tests/test_writer.py
+@@ -9,6 +9,7 @@ from pathlib import Path
+ import pytest
+ import supernotelib
+ 
++from paia_supernote.notebook_artifacts import NotebookPageSpec, replace_notebook_pages
+ from paia_supernote.writer import SupernoteWriter
+ 
+ 
+@@ -72,6 +73,30 @@ class TestSupernoteWriter:
+         # Content should result in more bytes (different compression)
+         assert len(result_with_content) != len(result_empty)
+ 
++    def test_paginate_content_keeps_short_content_on_one_page(self):
++        """Short content should remain a single logical page."""
++        pages = self.writer.paginate_content(
++            agent="Sam",
++            content="Short executive brief",
++        )
++
++        assert pages == ["Short executive brief"]
++
++    def test_paginate_content_splits_long_content_without_losing_words(self):
++        """Long content should split into continuation pages instead of truncating."""
++        content = "\n".join(
++            f"Agenda item {index}: {'priority ' * 10}".strip()
++            for index in range(80)
++        )
++
++        pages = self.writer.paginate_content(
++            agent="Sam",
++            content=content,
++        )
++
++        assert len(pages) > 1
++        assert " ".join("\n".join(pages).split()) == " ".join(content.split())
++
+     def test_font_size_is_configurable_constant(self):
+         """Should have configurable font size constants."""
+         assert hasattr(SupernoteWriter, 'BODY_FONT_SIZE')
+@@ -243,4 +268,42 @@ class TestAppendRlePage:
+         nb = supernotelib.load(io.BytesIO(result))
+         last_page = nb.get_page(nb.get_total_pages() - 1)
+         mainlayer = last_page.get_layer(0)
+-        assert mainlayer.get_content() == rle
+\ No newline at end of file
++        assert mainlayer.get_content() == rle
++
++
++class TestReplaceNotebookPages:
++    """Integration tests for stable notebook replacement."""
++
++    def setup_method(self):
++        self.writer = SupernoteWriter()
++
++    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
++    def test_replace_pages_rebuilds_notebook_to_exact_page_count(self):
++        """Notebook replacement should trim/pad to exactly the requested page count."""
++        base_bytes = _NOTE_FIXTURE.read_bytes()
++        page_specs = [
++            NotebookPageSpec(agent="Sam", content="Walk brief\n\nWhat matters most"),
++            NotebookPageSpec(
++                agent="Sam",
++                content="2026-04-24 LightforgeWorks Weekly\n\nKeywords: lfw, prep",
++            ),
++        ]
++
++        result = replace_notebook_pages(base_bytes, writer=self.writer, pages=page_specs)
++
++        notebook = supernotelib.load(io.BytesIO(result))
++        assert notebook.get_total_pages() == 2
++
++    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
++    def test_replace_pages_reuses_existing_pages_before_appending(self):
++        """Replacement should rebuild in place without leaving extra template pages behind."""
++        base_bytes = _NOTE_FIXTURE.read_bytes()
++        page_specs = [
++            NotebookPageSpec(agent="Sam", content=f"Page {index}")
++            for index in range(3)
++        ]
++
++        result = replace_notebook_pages(base_bytes, writer=self.writer, pages=page_specs)
++
++        notebook = supernotelib.load(io.BytesIO(result))
++        assert notebook.get_total_pages() == 3

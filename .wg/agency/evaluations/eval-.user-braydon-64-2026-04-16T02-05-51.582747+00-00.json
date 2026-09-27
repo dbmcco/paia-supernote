@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-64-2026-04-16T02-05-51.582747+00-00",
+  "task_id": ".user-braydon-64",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.46,
+  "dimensions": {
+    "correctness": 0.45,
+    "efficiency": 0.4,
+    "coordination_overhead": 0.42,
+    "downstream_usability": 0.4,
+    "blocking_impact": 0.4,
+    "style_adherence": 0.48,
+    "intent_fidelity": 0.465,
+    "completeness": 0.48
+  },
+  "notes": "**Underspecification Detected:** Task contract lacks acceptance criteria (empty acceptance array), making ground truth for success ambiguous. **Critical Issue: FLIP Verification Failed (0.47/1.0)** — strong signal that actual output does not meet requirements despite task log indicating successful launch. **Missing Artifacts:** Task produced no recorded artifacts despite claiming functional user board launch, making verification and downstream consumption impossible. **Scope Creep:** Coredrift warnings (churn_loc, hardening_in_core) indicate the work touched excessive files/lines relative to task scope. **Recovery from Orphaned State:** Prior coordination loss suggests execution context issues. The conflict between log messaging ('launched successfully, interface functional') and FLIP failure (0.47) indicates either: (a) misalignment between actual success criteria and what was implemented, or (b) the launch message is misleading about functional completeness. **Strengths:** Fast execution (~85s). **Weaknesses:** Verification failure, missing artifact recording, coredrift warnings, no tangible deliverable captured. Recommend: clarify acceptance criteria in task contract, investigate why FLIP failed vs. log success message, and ensure artifacts are properly recorded for task review.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:05:51.582747+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

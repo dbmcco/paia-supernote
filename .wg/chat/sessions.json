@@ -1,0 +1,16 @@
+{
+  "version": 0,
+  "sessions": {
+    "019e3681-243f-7b13-a00b-3c1ce9805ba7": {
+      "kind": "coordinator",
+      "created": "2026-05-17T15:14:53.631157+00:00",
+      "aliases": [
+        "chat-0",
+        ".chat-0",
+        "coordinator-0",
+        "0"
+      ],
+      "label": "chat 0"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-130-2026-04-16T06-25-33.370601+00-00",
+  "task_id": ".user-braydon-130",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.56,
+  "dimensions": {
+    "intent_fidelity": 0.66,
+    "downstream_usability": 0.75,
+    "style_adherence": 0.45,
+    "completeness": 0.65,
+    "coordination_overhead": 0.55,
+    "efficiency": 0.5,
+    "correctness": 0.6,
+    "blocking_impact": 0.65
+  },
+  "notes": "The agent successfully created a functional user board that connects to paia-events with a working terminal interface and command handling. However, the work is significantly undermined by FLIP verification failure (0.66 vs 0.70 threshold) and contract violations. The agent exceeded the 800 LOC budget (reaching 962 LOC) and triggered multiple coredrift warnings about hardening in core files. While the pit_stop_after=3 mechanism should have prompted the agent to pause and reassess, execution continued despite these signals. The functionality is verified as working, but the verification suite itself failed, creating uncertainty about full compliance with requirements. The work is usable as a persistent conversation surface but the verification failure indicates missing or incorrect implementation details that should have been caught. Strengths: rapid completion, clean downstream interface. Weaknesses: contract budget violations, failed verification check, apparent disregard for pit_stop signals, architectural changes to core files that may not have been necessary.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:25:33.370601+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

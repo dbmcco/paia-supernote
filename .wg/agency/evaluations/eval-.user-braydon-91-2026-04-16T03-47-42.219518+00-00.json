@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-91-2026-04-16T03-47-42.219518+00-00",
+  "task_id": ".user-braydon-91",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.25,
+  "dimensions": {
+    "coordination_overhead": 0.3,
+    "efficiency": 0.3,
+    "downstream_usability": 0.2,
+    "blocking_impact": 0.3,
+    "style_adherence": 0.4,
+    "correctness": 0.3,
+    "completeness": 0.25,
+    "intent_fidelity": 0.25
+  },
+  "notes": "Task failed FLIP verification (0.25 score), which is a critical signal of incomplete or incorrect work. The task log indicates the agent examined an existing implementation and verified functionality, but does not show evidence of actually implementing the 'user board: braydon' persistent conversation surface as the task description suggests. No artifacts were recorded, and the task log lacks clarity about what was built or delivered. Coredrift warnings (yellow on churn_loc, hardening_in_core) suggest potential issues with code quality or budget overruns. The 1-minute execution time is suspiciously fast for a core feature implementation. The agent appears to have verified existing functionality rather than building new functionality, potentially misunderstanding the task scope. Task was recovered from orphaned state at start, adding coordination overhead. Overall, the work does not demonstrate successful completion of the intended objective and leaves no clear deliverables for downstream tasks.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:47:42.219518+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

@@ -1,0 +1,49 @@
+[
+  {
+    "timestamp": "2026-07-19T17:28:58.340194+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-07-19T17:30:04.254939+00:00",
+    "user": "braydon",
+    "message": "Task published"
+  },
+  {
+    "timestamp": "2026-07-19T18:32:38.436126+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task claimed by @avery"
+  },
+  {
+    "timestamp": "2026-07-19T18:32:38.963854+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T18:32:39.169604+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T18:39:05.237166+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T18:39:05.436904+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T18:39:05.532599+00:00",
+    "user": "braydon",
+    "message": "Independently verified 21 surface/integration/regression tests pass and no-network CLI/event contracts are wired. The absence of an agent HTTP API is recorded in docs/superpowers/specs/follow-ups/agent-contract-http-api-surface.md rather than inventing a server. Post-task drift exit=3."
+  },
+  {
+    "timestamp": "2026-07-19T18:39:05.602637+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task pending eval (agent reported done; awaiting `.evaluate-*` to score)"
+  }
+]

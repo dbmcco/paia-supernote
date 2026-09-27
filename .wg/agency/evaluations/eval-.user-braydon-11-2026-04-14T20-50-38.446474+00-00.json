@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-11-2026-04-14T20-50-38.446474+00-00",
+  "task_id": ".user-braydon-11",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.28,
+  "dimensions": {
+    "completeness": 0.2,
+    "style_adherence": 0.5,
+    "downstream_usability": 0.2,
+    "coordination_overhead": 0.3,
+    "efficiency": 0.6,
+    "correctness": 0.3,
+    "blocking_impact": 0.7,
+    "intent_fidelity": 0.2
+  },
+  "notes": "Critical failure in artifact capture and task completion. Task log shows verification work (CLI entry point, imports, documentation), but no artifacts were recorded despite 2-minute execution. FLIP verification score of 0.20 is a strong signal of fundamental problems. Coredrift warnings (dependency_drift, hardening_in_core) indicate unintended or poorly justified changes. Task definition was severely underspecified (no acceptance criteria, vague objective), but agent should have either clarified requirements or captured what was built. Either the agent verified existing functionality without building new work (scope mismatch), or built something but failed to properly record it for downstream consumption. The speed of execution (2 min) is suspiciously brief for a meaningful 'persistent conversation surface' implementation. No downstream usability—nothing was handed off. Recommendation: task needs clearer specification, agent needs training on artifact capture and workgraph contract compliance.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T20:50:38.446474+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

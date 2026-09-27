@@ -1,0 +1,461 @@
+diff --git a/run_user_board.py b/run_user_board.py
+new file mode 100755
+index 0000000..3aee738
+--- /dev/null
++++ b/run_user_board.py
+@@ -0,0 +1,26 @@
++#!/usr/bin/env python3
++"""
++Simple launcher for the PAIA Supernote User Board.
++
++This script provides an easy way to start the user board when the
++CLI entry point isn't available in the current environment.
++"""
++
++import sys
++from pathlib import Path
++
++# Add src to path so we can import the module
++script_dir = Path(__file__).parent if __name__ == "__main__" else Path.cwd()
++src_path = script_dir / "src"
++sys.path.insert(0, str(src_path))
++
++if __name__ == "__main__":
++    import asyncio
++    try:
++        from paia_supernote.user_board import main
++        asyncio.run(main())
++    except KeyboardInterrupt:
++        print("\n👋 Goodbye!")
++    except Exception as e:
++        print(f"❌ Error starting user board: {e}")
++        sys.exit(1)
+\ No newline at end of file
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index b35b405..b41eff2 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -24,6 +24,7 @@ from .writer import SupernoteWriter
+ from .uploader import SupernoteUploader
+ from .notebook_writer import append_page_to_notebook
+ from .tasks_sync import TasksSync
++from .task_curator import TaskCurator
+ 
+ log = structlog.get_logger(__name__)
+ 
+@@ -109,6 +110,12 @@ class SupernoteService:
+             work_url=self.config["work_url"],
+             poll_interval=self.config["poll_interval"],
+         )
++        self.task_curator = TaskCurator(
++            reader=self.reader,
++            writer=self.writer,
++            uploader=self.uploader,
++            events_client=self.events,
++        )
+         self._shutdown_event = asyncio.Event()
+ 
+     async def start(self) -> None:
+@@ -239,6 +246,7 @@ class SupernoteService:
+             agent = event_data["agent"]
+             notebook = event_data.get("notebook") or self.config["agent_mappings"].get(agent, {}).get("notebook", "")
+             content = event_data.get("content", "")
++            content_type = event_data.get("content_type")
+ 
+             # Validate agent is known
+             if agent not in self.config["agent_mappings"]:
+@@ -250,6 +258,13 @@ class SupernoteService:
+                 log.warning("write_request_rejected_tasks_notebook", agent=agent)
+                 return
+ 
++            # Delegate task_page_curate to TaskCurator
++            if content_type == "task_page_curate":
++                log.info("delegating_task_page_curation", agent=agent, notebook=notebook)
++                event_data["notebook_bytes"] = await self.uploader.download_notebook(f"{notebook}.note")
++                await self.task_curator.handle_write_requested(event_data)
++                return
++
+             target_name = f"{notebook}.note"
+ 
+             log.info("write_request_received", agent=agent, notebook=notebook)
+diff --git a/src/paia_supernote/reader.py b/src/paia_supernote/reader.py
+index ccca07f..fa09c9e 100644
+--- a/src/paia_supernote/reader.py
++++ b/src/paia_supernote/reader.py
+@@ -278,3 +278,61 @@ class SupernoteReader:
+ 
+         self.page_checksums[key] = current_checksum
+         return previous_checksum is None or current_checksum != previous_checksum
++
++    async def read_all_pages(
++        self, note_bytes: bytes, notebook_name: str, page_range: Optional[tuple[int, int]] = None
++    ) -> List[ReadResult]:
++        """Read all pages from notebook bytes, without checking for changes.
++
++        Args:
++            note_bytes: Raw .note bytes downloaded from cloud.
++            notebook_name: The name of the notebook.
++            page_range: Optional tuple (start_page, end_page) for specific pages (0-based).
++                        If None, all pages are read.
++        """
++        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
++        try:
++            os.write(tmp_fd, note_bytes)
++            os.close(tmp_fd)
++            
++            notebook = supernotelib.load_notebook(tmp_path)
++            converter = ImageConverter(notebook)
++
++            results = []
++            start_page = page_range[0] if page_range else 0
++            end_page = page_range[1] if page_range else notebook.get_total_pages() - 1
++
++            for page_num in range(start_page, end_page + 1):
++                page_image = converter.convert(page_num)
++                transcription = await self._transcribe_page(page_image)
++                if not transcription:
++                    continue
++
++                content_type = await self.classify_content(transcription)
++                # For read_all_pages, we don't care about newly checked items, just current state
++                current_checked = []
++                for match in re.finditer(r"[\u2611\u25a0]\s*(.+)", transcription):
++                    current_checked.append({"task_text": match.group(1).strip(), "tag": "focus"})
++                for match in re.finditer(r"[\u25cf]\s*(.+)", transcription):
++                    current_checked.append({"task_text": match.group(1).strip(), "tag": "orbit"})
++
++                checkbox_items = [
++                    CheckboxItem(
++                        task_text=item["task_text"], tag=item["tag"], page_num=page_num
++                    )
++                    for item in current_checked
++                ]
++
++                result = ReadResult(
++                    notebook=notebook_name,
++                    page_num=page_num,
++                    text=transcription,
++                    checkboxes=checkbox_items,
++                    content_type=content_type,
++                    timestamp=datetime.now(timezone.utc),
++                )
++                results.append(result)
++
++            return results
++        finally:
++            os.unlink(tmp_path)
+diff --git a/src/paia_supernote/task_curator.py b/src/paia_supernote/task_curator.py
+index 7f08fb5..c48c599 100644
+--- a/src/paia_supernote/task_curator.py
++++ b/src/paia_supernote/task_curator.py
+@@ -4,10 +4,16 @@ Author: Braydon McCormick <braydon@braydondm.com>
+ Purpose: Sam's intelligent task page curation for Quick.note
+ """
+ 
++from __future__ import annotations
++import os
++import tempfile
+ from typing import Any, Dict, Optional
++
+ import anthropic
+ import httpx
+-from . import reader, writer, uploader, events
++
++from . import events, reader, uploader, writer
++from .notebook_writer import append_page_to_notebook
+ 
+ 
+ class TaskCurator:
+@@ -33,41 +39,63 @@ class TaskCurator:
+         if payload.get("content_type") != "task_page_curate":
+             return
+ 
++        notebook_name = payload["notebook"]
++        notebook_bytes = payload["notebook_bytes"]
++        agent = payload["agent"]
++
+         # Read current task page state
+-        current_page_text = await self._read_current_task_page(payload["notebook"])
++        current_page_text = await self._read_current_task_page(notebook_bytes, notebook_name)
+ 
+         # Send to LLM for reorganization
+         reorganized_content = await self._reorganize_with_llm(current_page_text)
+ 
+         # Render the reorganized page
+         rendered_bytes = self.writer.render_page(
+-            agent=payload["agent"],
++            agent=agent,
+             content=reorganized_content
+         )
+ 
++        # Append page to the downloaded notebook bytes
++        updated_bytes = append_page_to_notebook(notebook_bytes, rendered_bytes)
++
+         # Upload to Supernote Cloud
+-        await self.uploader.upload_notebook("temp_path", "target_path")
++        with tempfile.NamedTemporaryFile(
++            suffix=".note", delete=False, dir="/tmp"
++        ) as tmp:
++            tmp.write(updated_bytes)
++            tmp_path = tmp.name
++
++        try:
++            success = await self.uploader.upload_notebook(tmp_path, f"{notebook_name}.note")
++        finally:
++            os.unlink(tmp_path)
+ 
+         # Emit note_transcribed event
+         await self.events_client.publish_note_transcribed(
+-            notebook=payload["notebook"],
+-            page=1,  # TODO: determine actual page number
++            notebook=notebook_name,
++            page=21,  # Assuming page 21 (0-based) is the last task page for now
+             text=reorganized_content
+         )
+ 
+-    async def _read_current_task_page(self, notebook: str) -> str:
+-        """Read current task page content from the notebook file."""
+-        # TODO: Map notebook name to actual file path
+-        file_path = f"~/Supernote/{notebook}"
+-        results = await self.reader.process_file(file_path)
++    async def _read_current_task_page(self, notebook_bytes: bytes, notebook_name: str) -> str:
++        """Read current task page content from the notebook bytes.
++
++        This aggregates content from the specified task page range (19-22, 0-based 18-21).
++        """
++        # Quick.note task pages are 19-22 (human numbering), which is 18-21 (zero-based)
++        TASK_PAGE_START = 18
++        TASK_PAGE_END = 21
++
++        results = await self.reader.read_all_pages(
++            notebook_bytes, notebook_name, page_range=(TASK_PAGE_START, TASK_PAGE_END)
++        )
+ 
+-        # Find the task page (assuming it's the first or only page with task content)
++        aggregated_content = []
+         for result in results:
+             if result.content_type == "task":
+-                return result.text
++                aggregated_content.append(result.text)
+ 
+-        # If no task page found, return empty content
+-        return ""
++        return "\n".join(aggregated_content)
+ 
+     async def _process_new_tasks(self, notebook: str) -> None:
+         """Process new handwritten tasks and create paia-work entries."""
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 344edae..b3c6b2e 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -224,3 +224,42 @@ class TestMainEntrypoint:
+         mock_logging.assert_called_once()
+         mock_load_config.assert_called_once()
+         mock_service_cls.assert_called_once()
++
++    @pytest.mark.asyncio
++    async def test_write_request_delegates_task_page_curate_to_task_curator(
++        self,
++        tmp_path: Path,
++    ) -> None:
++        """content_type=task_page_curate is routed to TaskCurator, not the generic write path.
++
++        Regression: @patch on instance attributes (uploader, task_curator) raises
++        AttributeError because they are set in __init__, not defined at class level.
++        The fix is to replace them directly on the service instance after construction.
++        """
++        # Arrange — create service then replace instance attrs with mocks
++        service = SupernoteService(config=DEFAULT_CONFIG)
++        mock_uploader = AsyncMock()
++        mock_task_curator = AsyncMock()
++        mock_uploader.download_notebook = AsyncMock(return_value=b"mock_notebook_bytes")
++        service.uploader = mock_uploader
++        service.task_curator = mock_task_curator
++
++        event_data = {
++            "agent": "Sam",
++            "notebook": "Quick",
++            "content": "some new content",
++            "content_type": "task_page_curate",
++        }
++
++        # Act
++        await service._handle_write_request(event_data)
++
++        # Assert — TaskCurator received the event with notebook bytes injected
++        mock_task_curator.handle_write_requested.assert_awaited_once_with({
++            "agent": "Sam",
++            "notebook": "Quick",
++            "content": "some new content",
++            "content_type": "task_page_curate",
++            "notebook_bytes": b"mock_notebook_bytes",
++        })
++        mock_uploader.download_notebook.assert_awaited_once_with("Quick.note")
+diff --git a/tests/test_reader.py b/tests/test_reader.py
+index 4465a11..40e2a0c 100644
+--- a/tests/test_reader.py
++++ b/tests/test_reader.py
+@@ -148,6 +148,47 @@ class TestSupernoteReader:
+         # Different page number: should process
+         assert reader.page_changed("test_file", 1, test_image) is True
+ 
++    @pytest.mark.asyncio
++    @patch('paia_supernote.reader.supernotelib')
++    @patch('paia_supernote.reader.ImageConverter')
++    async def test_read_all_pages_returns_task_page_range_without_change_detection(
++        self, mock_converter_class, mock_supernotelib, tmp_path, monkeypatch
++    ):
++        """read_all_pages(bytes, name, page_range=(18,21)) returns all four task pages.
++
++        Regression: process_file() skips unchanged pages via page_changed(); pages 19-22
++        that were already seen were silently dropped.  read_all_pages must bypass the
++        checksum cache entirely and always return the requested range.
++        """
++        monkeypatch.setattr('paia_supernote.reader.SNAPSHOT_DIR', tmp_path / "snapshots")
++
++        mock_notebook = Mock()
++        mock_notebook.get_total_pages.return_value = 25
++        mock_supernotelib.load_notebook.return_value = mock_notebook
++
++        mock_converter = Mock()
++        mock_converter_class.return_value = mock_converter
++        test_image = Image.open("tests/fixtures/test_page.png")
++        mock_converter.convert.return_value = test_image
++
++        mock_client = AsyncMock()
++        mock_response = Mock()
++        mock_response.content = [Mock()]
++        mock_response.content[0].text = "□ Task item"
++        mock_client.messages.create.return_value = mock_response
++
++        reader = SupernoteReader(anthropic_client=mock_client)
++        # Pre-populate checksums for pages 18-21 so process_file() would skip them
++        for page_num in range(18, 22):
++            reader.page_checksums[f"Quick:{page_num}"] = "already_seen_checksum"
++
++        results = await reader.read_all_pages(b"note_bytes", "Quick", page_range=(18, 21))
++
++        # All four pages must be present despite being "unchanged" in the checksum cache
++        assert len(results) == 4
++        assert {r.page_num for r in results} == {18, 19, 20, 21}
++        assert all(r.notebook == "Quick" for r in results)
++
+     @pytest.mark.asyncio
+     @patch('paia_supernote.reader.supernotelib')
+     @patch('paia_supernote.reader.ImageConverter')
+diff --git a/tests/test_task_curator.py b/tests/test_task_curator.py
+index 188414d..208b382 100644
+--- a/tests/test_task_curator.py
++++ b/tests/test_task_curator.py
+@@ -8,30 +8,48 @@ from paia_supernote.task_curator import TaskCurator
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_task_curator_reads_current_task_page_from_note_file():
+-    """Task curator reads current Quick.note file to get task page content."""
++async def test_task_curator_reads_current_task_page_from_notebook_bytes():
++    """Task curator reads notebook bytes via read_all_pages to get task page content.
++
++    Regression: old implementation used process_file(~/Supernote/path) which (a) used
++    a placeholder path that never existed and (b) skipped unchanged pages.  The fix
++    must use read_all_pages so that pages 19-22 (0-based 18-21) are always readable.
++    """
+     # Arrange
+     mock_reader = AsyncMock()
+     curator = TaskCurator(reader=mock_reader)
+ 
+-    # Mock the reader to return ReadResult with task content
+-    from paia_supernote.reader import ReadResult, CheckboxItem
+-    read_result = ReadResult(
+-        notebook="Quick",
+-        page_num=0,
+-        text="□ Task 1\n○ Task 2\n☑ Completed task",
+-        checkboxes=[],
+-        content_type="task",
+-        timestamp=datetime.now(timezone.utc)
+-    )
+-    mock_reader.process_file = AsyncMock(return_value=[read_result])
++    from paia_supernote.reader import ReadResult
++    read_results = [
++        ReadResult(
++            notebook="Quick",
++            page_num=18,
++            text="□ Task 1\n○ Task 2",
++            checkboxes=[],
++            content_type="task",
++            timestamp=datetime.now(timezone.utc),
++        ),
++        ReadResult(
++            notebook="Quick",
++            page_num=19,
++            text="☑ Completed task",
++            checkboxes=[],
++            content_type="task",
++            timestamp=datetime.now(timezone.utc),
++        ),
++    ]
++    mock_reader.read_all_pages = AsyncMock(return_value=read_results)
+ 
+-    # Act
+-    result = await curator._read_current_task_page("Quick.note")
++    # Act — new API: pass bytes + notebook name, not a file path string
++    result = await curator._read_current_task_page(b"fake_note_bytes", "Quick")
+ 
+-    # Assert
+-    assert result == "□ Task 1\n○ Task 2\n☑ Completed task"
+-    mock_reader.process_file.assert_called_once()
++    # Assert content from both pages is present
++    assert "□ Task 1" in result
++    assert "☑ Completed task" in result
++    # Verify read_all_pages (not process_file) is called with the task-page range
++    mock_reader.read_all_pages.assert_awaited_once_with(
++        b"fake_note_bytes", "Quick", page_range=(18, 21)
++    )
+ 
+ 
+ @pytest.mark.asyncio
+@@ -103,4 +121,41 @@ async def test_task_curator_emits_checkbox_completed_events():
+         task_text="Completed focus task",
+         notebook="Quick",
+         page=0
+-    )
+\ No newline at end of file
++    )
++
++
++@pytest.mark.asyncio
++async def test_task_curator_aggregates_content_from_task_pages_18_to_21():
++    """Curator joins text from all four task pages (0-based 18-21) in a single string.
++
++    Regression: old implementation returned only the first task page; pages 20-21
++    were silently dropped.
++    """
++    mock_reader = AsyncMock()
++    curator = TaskCurator(reader=mock_reader)
++
++    from paia_supernote.reader import ReadResult
++    mock_reader.read_all_pages = AsyncMock(return_value=[
++        ReadResult(notebook="Quick", page_num=18, text="Page 19 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++        ReadResult(notebook="Quick", page_num=19, text="Page 20 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++        ReadResult(notebook="Quick", page_num=20, text="Page 21 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++        ReadResult(notebook="Quick", page_num=21, text="Page 22 tasks",
++                   checkboxes=[], content_type="task",
++                   timestamp=datetime.now(timezone.utc)),
++    ])
++
++    result = await curator._read_current_task_page(b"note_bytes", "Quick")
++
++    # All four pages must be present in the aggregated output
++    assert "Page 19 tasks" in result
++    assert "Page 20 tasks" in result
++    assert "Page 21 tasks" in result
++    assert "Page 22 tasks" in result
++    # Joined with newlines
++    assert result.count("\n") == 3
+\ No newline at end of file

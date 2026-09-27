@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-6-2026-04-14T20-18-53.860688+00-00",
+  "task_id": ".user-braydon-6",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.275,
+  "dimensions": {
+    "semantic_match": 0.3,
+    "requirement_coverage": 0.2,
+    "hallucination_rate": 0.85,
+    "specificity_match": 0.4
+  },
+  "notes": "The actual task is a simple directive: create/provide a user board for braydon as a persistent conversation surface. The inferred task reframes this as an investigative/diagnostic task (investigate current state, determine what exists, verify if working, confirm how to access/launch). These are fundamentally different: one is a delivery goal, the other is an exploratory investigation. The inferred version adds investigation/verification/confirmation language entirely absent from the original. Specificity is also lost—the actual clearly specifies 'for braydon' and 'persistent conversation surface', while the inferred uses generic investigative language. Only minimal semantic overlap exists.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Investigate the current state of user board requirements and implementation in the paia-supernote project. Determine what user board functionality exists, verify if it's working correctly, and confirm how it can be accessed or launched.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T20:18:53.860688+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

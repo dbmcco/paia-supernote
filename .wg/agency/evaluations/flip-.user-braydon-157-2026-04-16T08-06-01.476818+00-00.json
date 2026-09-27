@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-157-2026-04-16T08-06-01.476818+00-00",
+  "task_id": ".user-braydon-157",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.28,
+  "dimensions": {
+    "hallucination_rate": 0.9,
+    "requirement_coverage": 0.15,
+    "semantic_match": 0.35,
+    "specificity_match": 0.4
+  },
+  "notes": "The ACTUAL task is minimal and abstract: create/maintain a 'user board for braydon — persistent conversation surface.' The INFERRED task reconstructs a much more detailed verification workflow (testing paia-events integration, UI, tests, launcher script). These are fundamentally different activities: one is a creation task, the other is a testing/verification task. The INFERRED adds extensive implementation details (paia-events, enhanced UI, launcher script, test suite) that are not present in or implied by the ACTUAL task description. The ACTUAL's brevity and empty acceptance criteria suggest an open-ended exploratory task, while the INFERRED assumes a complete implementation exists and needs verification. High hallucination rate indicates the reconstructed task went well beyond what the original specified.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board implementation is working correctly. Test and confirm that: 1) The user board successfully connects to paia-events, 2) The enhanced UI displays and functions properly, 3) All existing tests pass, and 4) The launcher script runs without issues. Analyze the implementation and provide confirmation that the user board component is ready for use.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:06:01.476818+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

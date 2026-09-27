@@ -1,0 +1,165 @@
+diff --git a/src/paia_supernote/page_state.py b/src/paia_supernote/page_state.py
+index 896da0d..0d10ae5 100644
+--- a/src/paia_supernote/page_state.py
++++ b/src/paia_supernote/page_state.py
+@@ -7,6 +7,9 @@ from dataclasses import dataclass
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ 
++#: Current page_state schema version recorded in ``schema_meta``.
++PAGE_STATE_SCHEMA_VERSION = "1"
++
+ 
+ @dataclass(slots=True)
+ class PageState:
+@@ -52,6 +55,33 @@ class PageStateStore:
+                 )
+                 """
+             )
++            # Lightweight migration marker shared with other state modules.
++            # Idempotent: ``CREATE TABLE IF NOT EXISTS`` + upsert never drops
++            # existing ``page_state`` rows.
++            conn.execute(
++                """
++                CREATE TABLE IF NOT EXISTS schema_meta (
++                    key TEXT PRIMARY KEY,
++                    value TEXT NOT NULL
++                )
++                """
++            )
++            conn.execute(
++                """
++                INSERT INTO schema_meta (key, value) VALUES (?, ?)
++                ON CONFLICT(key) DO UPDATE SET value = excluded.value
++                """,
++                ("page_state_schema_version", PAGE_STATE_SCHEMA_VERSION),
++            )
++
++    def schema_version(self) -> str | None:
++        """Return the recorded page_state schema version, if any."""
++        with sqlite3.connect(self._db_path) as conn:
++            row = conn.execute(
++                "SELECT value FROM schema_meta WHERE key = ?",
++                ("page_state_schema_version",),
++            ).fetchone()
++        return row[0] if row is not None else None
+ 
+     def upsert_ocr_page(
+         self,
+@@ -297,7 +327,9 @@ class PageStateStore:
+         with sqlite3.connect(self._db_path) as conn:
+             if stage:
+                 row = conn.execute(
+-                    "SELECT COUNT(*) FROM page_state WHERE last_error IS NOT NULL AND last_error_stage = ?",
++                    "SELECT COUNT(*) FROM page_state "
++                    "WHERE last_error IS NOT NULL "
++                    "AND last_error_stage = ?",
+                     (stage,),
+                 ).fetchone()
+             else:
+diff --git a/tests/test_page_state.py b/tests/test_page_state.py
+index 88aeaf7..e2ee173 100644
+--- a/tests/test_page_state.py
++++ b/tests/test_page_state.py
+@@ -4,10 +4,12 @@ from __future__ import annotations
+ 
+ from pathlib import Path
+ 
+-from paia_supernote.page_state import PageStateStore
++from paia_supernote.page_state import PAGE_STATE_SCHEMA_VERSION, PageStateStore
+ 
+ 
+-def test_upsert_page_overwrites_same_notebook_page_and_marks_dirty(tmp_path: Path) -> None:
++def test_upsert_page_overwrites_same_notebook_page_and_marks_dirty(
++    tmp_path: Path,
++) -> None:
+     store = PageStateStore(tmp_path / "state.db")
+     store.init_schema()
+ 
+@@ -67,7 +69,9 @@ def test_mark_enriched_only_updates_matching_revision(tmp_path: Path) -> None:
+     assert row.dirty_for_enrichment is True
+ 
+ 
+-def test_mark_enrichment_skipped_clears_dirty_without_folio_object(tmp_path: Path) -> None:
++def test_mark_enrichment_skipped_clears_dirty_without_folio_object(
++    tmp_path: Path,
++) -> None:
+     store = PageStateStore(tmp_path / "state.db")
+     store.init_schema()
+     store.upsert_ocr_page(
+@@ -111,3 +115,34 @@ def test_next_dirty_page_skips_future_retry_rows(tmp_path: Path) -> None:
+     )
+ 
+     assert store.next_dirty_page() is None
++
++
++def test_init_schema_is_idempotent_and_records_version(tmp_path: Path) -> None:
++    db_path = tmp_path / "state.db"
++    store = PageStateStore(db_path)
++    store.init_schema()
++    store.upsert_ocr_page("Quick", 19, "rev-1", "raw", "glm-4.5v")
++
++    # Re-running migration in-process must be a no-op.
++    store.init_schema()
++    assert store.schema_version() == PAGE_STATE_SCHEMA_VERSION
++    assert store.get_page("Quick", 19).raw_text == "raw"
++
++
++def test_init_schema_idempotent_across_reopens_preserves_rows(
++    tmp_path: Path,
++) -> None:
++    db_path = tmp_path / "state.db"
++    store = PageStateStore(db_path)
++    store.init_schema()
++    store.upsert_ocr_page("Quick", 19, "rev-1", "raw", "glm-4.5v")
++    store.upsert_ocr_page("Quick", 20, "rev-1", "raw-20", "glm-4.5v")
++
++    # A fresh store opening the existing database migrates safely.
++    reopened = PageStateStore(db_path)
++    reopened.init_schema()
++    reopened.init_schema()
++
++    assert reopened.schema_version() == PAGE_STATE_SCHEMA_VERSION
++    assert reopened.get_page("Quick", 19).raw_text == "raw"
++    assert reopened.get_page("Quick", 20).raw_text == "raw-20"
+diff --git a/uv.lock b/uv.lock
+index eb8d117..f1654c4 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1003,14 +1003,18 @@ dev = [
+ 
+ [[package]]
+ name = "paia-contracts"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "../paia-contracts" }
+ dependencies = [
+     { name = "pydantic" },
++    { name = "rfc8785" },
+ ]
+ 
+ [package.metadata]
+-requires-dist = [{ name = "pydantic", specifier = ">=2.10" }]
++requires-dist = [
++    { name = "pydantic", specifier = ">=2.10" },
++    { name = "rfc8785", specifier = ">=0.1.4" },
++]
+ 
+ [package.metadata.requires-dev]
+ dev = [
+@@ -1503,6 +1507,15 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/8a/2e/e1798b8b248e1517e74c6cdf10dd6edd485044e7edf46b5f11ffcc5a0add/reportlab-4.4.10-py3-none-any.whl", hash = "sha256:5abc815746ae2bc44e7ff25db96814f921349ca814c992c7eac3c26029bf7c24", size = 1955400, upload-time = "2026-02-12T10:45:18.828Z" },
+ ]
+ 
++[[package]]
++name = "rfc8785"
++version = "0.1.4"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/ef/2f/fa1d2e740c490191b572d33dbca5daa180cb423c24396b856f5886371d8b/rfc8785-0.1.4.tar.gz", hash = "sha256:e545841329fe0eee4f6a3b44e7034343100c12b4ec566dc06ca9735681deb4da", size = 14321, upload-time = "2024-09-27T16:33:31.206Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/4d/78/119878110660b2ad709888c8a1614fce7e2fab39080ab960656dc8605bf6/rfc8785-0.1.4-py3-none-any.whl", hash = "sha256:520d690b448ecf0703691c76e1a34a24ddcd4fc5bc41d589cb7c58ec651bcd48", size = 9240, upload-time = "2024-09-27T16:33:29.683Z" },
++]
++
+ [[package]]
+ name = "rlpycairo"
+ version = "0.4.0"

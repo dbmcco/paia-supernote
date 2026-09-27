@@ -1,0 +1,316 @@
+diff --git a/src/paia_supernote/cloud_poller.py b/src/paia_supernote/cloud_poller.py
+index a596aa9..6041e22 100644
+--- a/src/paia_supernote/cloud_poller.py
++++ b/src/paia_supernote/cloud_poller.py
+@@ -6,6 +6,7 @@ ABOUTME: Polls /api/file/list/query, downloads changed files, fires callback wit
+ from __future__ import annotations
+ 
+ import asyncio
++from pathlib import PurePosixPath
+ from typing import Awaitable, Callable, Dict, Iterable, Optional
+ 
+ import structlog
+@@ -61,10 +62,11 @@ class CloudPoller:
+         self._on_poll_health = on_poll_health
+         # Start healthy; the first auth failure transitions to degraded and fires.
+         self._poll_healthy = True
++        watched_source = (
++            self.WATCHED_NOTEBOOKS if watched_notebooks is None else watched_notebooks
++        )
+         self._watched_notebooks = {
+-            str(name).strip()
+-            for name in (watched_notebooks or self.WATCHED_NOTEBOOKS)
+-            if str(name).strip()
++            str(name).strip() for name in watched_source if str(name).strip()
+         }
+         self._watched_notebook_keys = {
+             name.casefold() for name in self._watched_notebooks
+@@ -141,7 +143,7 @@ class CloudPoller:
+             if entry.get("size", 0) == 0:
+                 continue
+ 
+-            notebook_name = name[:-5]  # strip .note suffix
++            notebook_name = _notebook_name_from_file_name(name)
+             if notebook_name.casefold() not in self._watched_notebook_keys:
+                 continue
+ 
+@@ -242,3 +244,9 @@ class CloudPoller:
+             await self._on_poll_health(healthy, detail)
+         except Exception as exc:  # monitoring must never break the poll loop
+             log.warning("cloud_poll_health_callback_error", error=str(exc))
++
++
++def _notebook_name_from_file_name(file_name: str) -> str:
++    """Return display notebook stem from a Cloud file name or path."""
++    leaf = PurePosixPath(str(file_name)).name
++    return leaf[:-5] if leaf.endswith(".note") else leaf
+diff --git a/src/paia_supernote/ingest_service.py b/src/paia_supernote/ingest_service.py
+index 0dc9f4d..538d126 100644
+--- a/src/paia_supernote/ingest_service.py
++++ b/src/paia_supernote/ingest_service.py
+@@ -7,15 +7,24 @@ falling back to cloud polling when not. The local path requires no auth.
+ from __future__ import annotations
+ 
+ import asyncio
++import hashlib
+ import inspect
+ from contextlib import suppress
+-import hashlib
+ from pathlib import Path
+ from typing import Any, Optional
+ 
+ import structlog
+ 
++from .cloud_change_ledger import (
++    CHANGE_ADDED,
++    CHANGE_UPDATED,
++    CloudChangeLedger,
++    NotebookSnapshot,
++    PageChangeRecord,
++    PageRevision,
++)
+ from .cloud_poller import CloudPoller
++from .config import notebook_is_ledger_allowlisted, resolve_ledger_notebooks
+ from .events import EventsClient
+ from .page_state import PageStateStore
+ from .reader import SupernoteReader, build_reader
+@@ -38,9 +47,13 @@ class IngestService:
+         self.config = config or load_config()
+         self.reader = reader or build_reader(self.config)
+         self.events = EventsClient(base_url=self.config["events_url"])
+-        self.page_state = PageStateStore(Path(self.config["state_db_path"]))
++        state_db_path = Path(self.config["state_db_path"])
++        self.page_state = PageStateStore(state_db_path)
+         self.page_state.init_schema()
++        self.ledger = CloudChangeLedger(state_db_path)
++        self.ledger.init_schema()
+         self._watched_notebook_keys = self._build_watched_notebook_keys()
++        self._cloud_watched_notebooks = resolve_ledger_notebooks(self.config)
+ 
+         # Cloud poller path (used only when Partner app sync unavailable)
+         self._uploader: Optional[SupernoteUploader] = uploader
+@@ -110,13 +123,92 @@ class IngestService:
+                 continue
+             await persist_result(result)
+ 
+-        if notebook_name.casefold() == "walk":
+-            for result in results:
+-                await self.events.publish_walk_feedback_detected(
+-                    notebook=result.notebook,
+-                    page=result.page_num,
+-                    text=result.text,
++        await self._publish_walk_feedback(notebook_name, results)
++
++    async def _on_cloud_note_changed(
++        self,
++        notebook_name: str,
++        note_bytes: bytes,
++        update_time: int | None = None,
++    ) -> None:
++        """Ledger-aware Cloud ingest: snapshot first, OCR only changed pages."""
++        if not notebook_is_ledger_allowlisted(self.config, notebook_name):
++            log.info("cloud_ingest_notebook_not_allowlisted", notebook=notebook_name)
++            return
++
++        note_hash = hashlib.sha256(note_bytes).hexdigest()
++        cloud_revision = f"{update_time or 0}:{note_hash}"
++        note_snapshot = self.reader.build_snapshot(
++            note_bytes,
++            notebook_name,
++            revision=cloud_revision,
++        )
++        page_by_index = {
++            page.page_index: page for page in note_snapshot.pages.values()
++        }
++        ledger_snapshot = NotebookSnapshot(
++            notebook=notebook_name,
++            cloud_revision=cloud_revision,
++            cloud_update_time=update_time,
++            pages=[
++                PageRevision(
++                    page_id=note_snapshot.pages[page_id].page_id,
++                    page_index=note_snapshot.pages[page_id].page_index,
++                    content_hash=note_snapshot.pages[page_id].content_hash,
+                 )
++                for page_id in note_snapshot.page_order
++            ],
++        )
++        changes = self.ledger.apply_snapshot(ledger_snapshot)
++        pages_to_ocr = _ocr_page_indexes(changes)
++        if not pages_to_ocr:
++            log.info(
++                "cloud_ingest_no_ocr_needed",
++                notebook=notebook_name,
++                changes=len(changes),
++            )
++            return
++
++        results = await self.reader.read_pages(
++            note_bytes,
++            notebook_name,
++            pages=pages_to_ocr,
++        )
++        for result in results:
++            page = page_by_index.get(result.page_num)
++            if page is None:
++                continue
++            source_revision = f"{cloud_revision}:{page.page_id}:{page.content_hash}"
++            self.page_state.upsert_ocr_page(
++                notebook=result.notebook,
++                page=result.page_num,
++                source_revision=source_revision,
++                raw_text=result.text,
++                ocr_model=self.config["zai_vision_model"],
++            )
++            self.ledger.mark_page_ocr_status(
++                result.notebook,
++                page.page_id,
++                "ready",
++            )
++            log.info(
++                "ocr_succeeded",
++                notebook=result.notebook,
++                page=result.page_num,
++                page_id=page.page_id,
++            )
++
++        await self._publish_walk_feedback(notebook_name, results)
++
++    async def _publish_walk_feedback(self, notebook_name: str, results: list) -> None:
++        if notebook_name.casefold() != "walk":
++            return
++        for result in results:
++            await self.events.publish_walk_feedback_detected(
++                notebook=result.notebook,
++                page=result.page_num,
++                text=result.text,
++            )
+ 
+     async def _on_poll_health(
+         self, healthy: bool, detail: dict[str, Any]
+@@ -179,9 +271,9 @@ class IngestService:
+         uploader = self._uploader or SupernoteUploader()
+         cloud_poller = self._cloud_poller or CloudPoller(
+             uploader=uploader,
+-            on_note_changed=self._on_note_changed,
++            on_note_changed=self._on_cloud_note_changed,
+             poll_interval=self.config["poll_interval"],
+-            watched_notebooks=self._watched_notebook_keys,
++            watched_notebooks=self._cloud_watched_notebooks,
+             process_existing_on_start=False,
+             on_poll_health=self._on_poll_health,
+         )
+@@ -229,3 +321,14 @@ class IngestService:
+ 
+         if poller_task in done:
+             poller_task.result()
++
++
++def _ocr_page_indexes(changes: list[PageChangeRecord]) -> list[int]:
++    """Return page indexes that need OCR for new or content-updated pages."""
++    indexes = {
++        change.new_index
++        for change in changes
++        if change.change_type in {CHANGE_ADDED, CHANGE_UPDATED}
++        and change.new_index is not None
++    }
++    return sorted(indexes)
+diff --git a/src/paia_supernote/reader.py b/src/paia_supernote/reader.py
+index bcc8494..5705bad 100644
+--- a/src/paia_supernote/reader.py
++++ b/src/paia_supernote/reader.py
+@@ -29,6 +29,7 @@ from .model_config import (
+     default_zai_vision_model,
+     resolve_supernote_zai_api_key,
+ )
++from .note_snapshot import NotebookSnapshot, build_snapshot_from_notebook
+ 
+ SNAPSHOT_DIR = Path.home() / ".paia" / "supernote" / "snapshots"
+ 
+@@ -116,6 +117,35 @@ class SupernoteReader:
+             self._client = anthropic.AsyncAnthropic()
+         return self._client
+ 
++    def build_snapshot(
++        self,
++        note_source: Union[str, Path, bytes],
++        notebook_name: str,
++        revision: str,
++    ) -> NotebookSnapshot:
++        """Parse a .note source into stable page IDs and content hashes."""
++        if isinstance(note_source, bytes):
++            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
++            try:
++                os.write(tmp_fd, note_source)
++                os.close(tmp_fd)
++                notebook = supernotelib.load_notebook(tmp_path)
++                return build_snapshot_from_notebook(
++                    notebook,
++                    notebook_name=notebook_name,
++                    revision=revision,
++                )
++            finally:
++                os.unlink(tmp_path)
++
++        path = Path(note_source)
++        notebook = supernotelib.load_notebook(str(path))
++        return build_snapshot_from_notebook(
++            notebook,
++            notebook_name=notebook_name,
++            revision=revision,
++        )
++
+     async def process_file(
+         self,
+         note_source: Union[str, Path, bytes],
+@@ -267,7 +297,8 @@ class SupernoteReader:
+         """Call the configured OpenAI-compatible Supernote model endpoint."""
+         if not self.zai_api_key:
+             raise RuntimeError(
+-                "The configured Supernote model API key is required when using the zai backend"
++                "The configured Supernote model API key is required when using "
++                "the zai backend"
+             )
+ 
+         payload = {
+diff --git a/uv.lock b/uv.lock
+index eb8d117..f1654c4 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1003,14 +1003,18 @@ dev = [
+ 
+ [[package]]
+ name = "paia-contracts"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "../paia-contracts" }
+ dependencies = [
+     { name = "pydantic" },
++    { name = "rfc8785" },
+ ]
+ 
+ [package.metadata]
+-requires-dist = [{ name = "pydantic", specifier = ">=2.10" }]
++requires-dist = [
++    { name = "pydantic", specifier = ">=2.10" },
++    { name = "rfc8785", specifier = ">=0.1.4" },
++]
+ 
+ [package.metadata.requires-dev]
+ dev = [
+@@ -1503,6 +1507,15 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/8a/2e/e1798b8b248e1517e74c6cdf10dd6edd485044e7edf46b5f11ffcc5a0add/reportlab-4.4.10-py3-none-any.whl", hash = "sha256:5abc815746ae2bc44e7ff25db96814f921349ca814c992c7eac3c26029bf7c24", size = 1955400, upload-time = "2026-02-12T10:45:18.828Z" },
+ ]
+ 
++[[package]]
++name = "rfc8785"
++version = "0.1.4"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/ef/2f/fa1d2e740c490191b572d33dbca5daa180cb423c24396b856f5886371d8b/rfc8785-0.1.4.tar.gz", hash = "sha256:e545841329fe0eee4f6a3b44e7034343100c12b4ec566dc06ca9735681deb4da", size = 14321, upload-time = "2024-09-27T16:33:31.206Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/4d/78/119878110660b2ad709888c8a1614fce7e2fab39080ab960656dc8605bf6/rfc8785-0.1.4-py3-none-any.whl", hash = "sha256:520d690b448ecf0703691c76e1a34a24ddcd4fc5bc41d589cb7c58ec651bcd48", size = 9240, upload-time = "2024-09-27T16:33:29.683Z" },
++]
++
+ [[package]]
+ name = "rlpycairo"
+ version = "0.4.0"

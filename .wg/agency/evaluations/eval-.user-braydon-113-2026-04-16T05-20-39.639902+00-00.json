@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-113-2026-04-16T05-20-39.639902+00-00",
+  "task_id": ".user-braydon-113",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.48,
+  "dimensions": {
+    "correctness": 0.45,
+    "blocking_impact": 0.65,
+    "completeness": 0.4,
+    "coordination_overhead": 0.5,
+    "efficiency": 0.7,
+    "downstream_usability": 0.35,
+    "style_adherence": 0.65,
+    "intent_fidelity": 0.595
+  },
+  "notes": "Task marked as complete, but critical evidence of delivery is missing. No artifacts were recorded despite the task being a 'persistent conversation surface' that should produce usable deliverables. The FLIP score of 0.59 (below 0.70 threshold) indicates significant intent-to-outcome fidelity issues. The ~73-second completion time suggests either efficient execution or insufficient depth. Without recorded artifacts, downstream usability is severely compromised—other agents or the user cannot consume or verify the output. The coredrift warning about auto_followups without acceptance criteria, while noted as expected for this task type, contributes to ambiguity about whether the task was fully completed. The lack of clear deliverable handoff creates coordination overhead and makes the actual completion state difficult to assess. Strengths: quick execution time, follows expected patterns for persistent conversation tasks. Weaknesses: no artifacts to verify output, FLIP verification failure, lack of clear evidence of what was delivered.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:20:39.639902+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

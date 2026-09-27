@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-2-2026-04-14T19-50-17.283528+00-00",
+  "task_id": ".user-braydon-2",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.4,
+  "dimensions": {
+    "specificity_match": 0.2,
+    "hallucination_rate": 0.75,
+    "requirement_coverage": 0.25,
+    "semantic_match": 0.6
+  },
+  "notes": "The actual task is intentionally minimal—just 'persistent conversation surface for braydon' with no acceptance criteria. The inferred task adds highly specific features (CLI interface, status monitoring, event viewing, write commands, entry point naming) that are not mentioned in the original. While both describe a 'user board', the inferred version fabricates most concrete requirements. The vague actual task provides minimal guidance beyond the file names touched and line-of-code limit.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Create a CLI user board interface for the paia-supernote service that allows users to interact with the service through command-line commands. The interface should provide status monitoring, event viewing, and write command capabilities. Include a script entry point (paia-supernote-board) that users can run from the command line to access these features.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T19:50:17.283528+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

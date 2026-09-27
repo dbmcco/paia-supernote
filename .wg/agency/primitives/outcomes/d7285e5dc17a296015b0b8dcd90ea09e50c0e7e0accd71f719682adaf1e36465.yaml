@@ -1,0 +1,35 @@
+id: d7285e5dc17a296015b0b8dcd90ea09e50c0e7e0accd71f719682adaf1e36465
+name: Working, tested code
+description: Working, tested code
+performance:
+  task_count: 5
+  avg_score: 0.476
+  evaluations:
+  - score: 0.12
+    task_id: planforge-root-paia
+    timestamp: 2026-04-14T19:05:20.399323+00:00
+    context_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.28
+    task_id: planforge-root-paia
+    timestamp: 2026-04-14T19:07:34.600514+00:00
+    context_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.5
+    task_id: repair-task-curator-pages-19-22
+    timestamp: 2026-04-15T21:20:15.468630+00:00
+    context_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.7
+    task_id: folder-support-resolve
+    timestamp: 2026-07-21T23:20:10.738995+00:00
+    context_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.78
+    task_id: folder-support-resolve
+    timestamp: 2026-07-24T20:59:51.191093+00:00
+    context_id: f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+lineage:
+  generation: 0
+  created_by: human
+  created_at: 2026-04-14T18:52:50.215851Z
+access_control:
+  owner: local
+  policy: open
+requires_human_oversight: true

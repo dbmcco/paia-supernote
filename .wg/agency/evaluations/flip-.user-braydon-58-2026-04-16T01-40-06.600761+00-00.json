@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-58-2026-04-16T01-40-06.600761+00-00",
+  "task_id": ".user-braydon-58",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.14,
+  "dimensions": {
+    "semantic_match": 0.25,
+    "requirement_coverage": 0.05,
+    "hallucination_rate": 0.95,
+    "specificity_match": 0.1
+  },
+  "notes": "The actual task is extremely high-level ('User board: braydon — persistent conversation surface') with no acceptance criteria, while the inferred task describes a specific bug fix (EOFError in non-interactive mode). The evaluator appears to have reverse-engineered a detailed technical bug fix from examining the code output, but this specific issue is not mentioned anywhere in the actual task description. Nearly all inferred requirements (EOFError handling, non-interactive environment support, specific test requirements) are fabricated from analysis of the implementation rather than derived from the actual task statement.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Fix the user board EOFError issue when running in non-interactive environments. The user board currently works fine in interactive terminals and connects to paia-events properly, but throws EOFError exceptions when run in non-interactive environments. Update the main loop to handle EOFError gracefully so the user board can run in both interactive and non-interactive modes. Ensure all existing functionality is preserved and verify the fix with tests.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:40:06.600761+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

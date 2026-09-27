@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-115-2026-04-16T05-27-00.425808+00-00",
+  "task_id": ".user-braydon-115",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.825,
+  "dimensions": {
+    "specificity_match": 0.7,
+    "requirement_coverage": 0.9,
+    "semantic_match": 0.85,
+    "hallucination_rate": 0.25
+  },
+  "notes": "The inferred task captures the core objective well — a user board for braydon with terminal interface, event integration, and persistence. However, it reframes the task from implementation ('build this') to verification ('test and validate'), which is a subtle but meaningful shift. Requirement coverage is strong (all 5 acceptance criteria are addressed), but specificity is reduced: the inferred version omits explicit commands (help, quit), loses the contract details (max_loc, pit_stop_after), and adds unrequired elements like 'non-interactive mode' and a 'report' requirement. The hallucination rate reflects these additions (~25% of the inferred details are novel).\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board implementation for braydon is working correctly. Test and validate the following functionality: 1) User board launches successfully with welcome screen, 2) Connects properly to paia-events service, 3) Interactive terminal interface with styling works as expected, 4) Handles both commands and non-interactive mode, 5) Session persistence is functioning. Report on the current status and confirm all acceptance criteria are met. The user board should be a functional interactive terminal interface with status, events, and write features.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:27:00.425808+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

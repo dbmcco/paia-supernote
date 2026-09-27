@@ -1,0 +1,12 @@
+{
+  "actor": {
+    "id": "session-54024",
+    "actor_class": "interactive",
+    "name": "codex",
+    "repo": "paia-supernote"
+  },
+  "started_at": "2026-05-05T13:03:41.883248+00:00",
+  "last_heartbeat": "2026-05-05T13:03:41.883248+00:00",
+  "current_task": "",
+  "status": "active"
+}

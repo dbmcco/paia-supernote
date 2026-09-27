@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-78-2026-04-16T03-00-26.184900+00-00",
+  "task_id": ".user-braydon-78",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.09,
+  "dimensions": {
+    "intent_fidelity": 0.06,
+    "completeness": 0.1,
+    "correctness": 0.05,
+    "downstream_usability": 0.05,
+    "efficiency": 0.15,
+    "coordination_overhead": 0.15,
+    "style_adherence": 0.1,
+    "blocking_impact": 0.1
+  },
+  "notes": "Task failed at fundamental level. FLIP verification scored 0.06 (well below 0.70 threshold), indicating systematic failure of acceptance criteria. No artifacts were recorded despite task being marked complete. Coredrift warnings (churn_loc, hardening_in_core) suggest the agent violated contract constraints (max_files, max_loc budgets). Task completed in 1.5 minutes with no visible deliverables, creating ambiguous end state. Contributing factors: (1) agent had no role or motivation assigned, (2) task acceptance criteria array was empty (underspecified), (3) task recovered from orphaned state before execution, (4) unclear what 'user board for braydon' should have been. The rapid completion time combined with verification failure and missing artifacts suggests either incomplete work or task abandonment. Work is unusable downstream and leaves significant coordination ambiguity.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:00:26.184900+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

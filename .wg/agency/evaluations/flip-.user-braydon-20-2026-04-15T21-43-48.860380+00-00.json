@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-20-2026-04-15T21-43-48.860380+00-00",
+  "task_id": ".user-braydon-20",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.47,
+  "dimensions": {
+    "hallucination_rate": 0.5,
+    "semantic_match": 0.65,
+    "requirement_coverage": 0.35,
+    "specificity_match": 0.25
+  },
+  "notes": "The actual task is sparse and vague ('User board for braydon — persistent conversation surface') with no explicit acceptance criteria. The inferred task significantly elaborates with specific technical details (terminal-based, _show_* methods, test coverage, Supernote integration) that are reasonable contextual inferences but not stated in the original. About half the inferred requirements appear fabricated from project context rather than derived from the actual task description. Both are in the same domain and address user board creation, but the inference adds considerable specificity that makes them differ in scope.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a complete user board component for the paia-supernote system. This should be a terminal-based conversation interface that allows users to interact with their Supernote content. The implementation should have methods that match the existing test expectations (specifically _show_* method naming conventions). Ensure all tests pass and the interface is fully functional for user interaction with the supernote synchronization system.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T21:43:48.860380+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

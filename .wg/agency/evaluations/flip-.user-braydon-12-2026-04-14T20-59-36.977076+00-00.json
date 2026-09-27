@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-12-2026-04-14T20-59-36.977076+00-00",
+  "task_id": ".user-braydon-12",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.04,
+  "dimensions": {
+    "semantic_match": 0.0,
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.0,
+    "hallucination_rate": 1.0
+  },
+  "notes": "The actual task is to create/maintain a 'user board' — a persistent conversation surface for braydon. The inferred task is about resolving dependency drift warnings via coredrift system. These are completely different domains with no overlap. The inference hallucinated all technical details about dependencies, coredrift alerts, and drift resolution that do not appear in the actual task description. The only minor credit (0.2 on specificity) is that the inferred version is detailed, even though it's detailed about the wrong task entirely.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Investigate and resolve the dependency drift warning flagged by coredrift. The system is showing a yellow alert for dependency_drift along with churn_files, churn_loc, and hardening_in_core issues. Please review the recent dependency changes, determine if they are intentional and necessary, and either confirm they should remain or revert them if they were unintended. Ensure the dependency changes align with the project requirements and don't introduce unnecessary drift.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T20:59:36.977076+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

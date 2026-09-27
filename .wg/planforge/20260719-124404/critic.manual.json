@@ -1,0 +1,109 @@
+{
+  "schema_version": "planforge.v2.critic",
+  "pass": false,
+  "summary": "The plan is well-scoped and mostly well-routed, but it has one structural dependency-graph hole (ingest-diff is orphaned while its behavior is asserted by downstream test nodes), inconsistent drift-gate/model metadata (depsdrift both excluded and gated; secdrift not blocking at handoff; small_model_ready contradicting premium routing), undeclared Agency profiles, an unbounded fix-loop touch set, and an unaddressed stale-lease/stalled-daemon Workgraph readiness problem that threatens the handoff acceptance criteria.",
+  "findings": [
+    {
+      "id": "F1",
+      "category": "dependency_graph_coverage",
+      "severity": "blocking",
+      "nodes": ["supernote-cloud-ledger.ingest-diff", "supernote-cloud-ledger.unit-tests", "supernote-cloud-ledger.integration-tests"],
+      "issue": "ingest-diff has no downstream dependents. unit-tests depends_on surface-adapters and integration-tests depends_on unit-tests, but neither transitively depends on ingest-diff. Yet integration-tests acceptance requires a two-poll added/updated/removed/reordered scenario and OCR-spy call-count assertions, and unit-tests asserts no OCR calls for reorder-only diffs — both of which require ingest-diff to exist. The graph could schedule or 'complete' the test nodes (and thus handoff) without ingest-diff being implemented, or with it skipped as an orphan leaf.",
+      "repair": "Add dependencies: unit-tests.depends_on should include supernote-cloud-ledger.ingest-diff (in addition to surface-adapters), and integration-tests.depends_on should include supernote-cloud-ledger.ingest-diff. Alternatively, move the OCR-skip and two-poll diff acceptance criteria plus their commands into ingest-diff.verify and keep them out of nodes that do not depend on ingest-diff."
+    },
+    {
+      "id": "F2",
+      "category": "drift_gate_consistency",
+      "severity": "blocking",
+      "nodes": ["speedrift_modules", "drift_gates", "supernote-cloud-ledger.cleanup-docs"],
+      "issue": "depsdrift is declared 'excluded' in speedrift_modules (required_by=[]) but is referenced as an active module in the 'YAGNI and dependency drift' post_task drift_gate (block_until_fixed) and in cleanup-docs.modules. The plan both excludes and enforces depsdrift, so executors cannot resolve whether a uv.lock/deps finding should block.",
+      "repair": "Pick one: either set depsdrift mode='recommended' (or required) with required_by=[cleanup-docs, final-gates] to match the gate, or remove depsdrift from drift_gates and from cleanup-docs.modules and rely solely on the uv.lock diff check in cleanup-docs.verify. Do not leave it both excluded and blocking."
+    },
+    {
+      "id": "F3",
+      "category": "missing_drift_gate_strength",
+      "severity": "blocking",
+      "nodes": ["drift_gates", "supernote-cloud-ledger.write-safety", "supernote-cloud-ledger.final-gates"],
+      "issue": "secdrift (write-route concurrency / Cloud mutation safety) is configured create_followup at post_task and is absent from the pre_handoff blocking gate (which only has qadrift, reviewdrift, coredrift). write-safety is the highest-risk area of this plan and its preservation is an explicit acceptance criterion, but a secdrift finding would not block handoff.",
+      "repair": "Either add secdrift to the pre_handoff 'final handoff gate' with response_policy=block_until_fixed, or change the post_task data/safety gate's secdrift response to block_until_fixed. Keep datadrift create_followup if desired, but secdrift must block at handoff."
+    },
+    {
+      "id": "F4",
+      "category": "weak_task_boundary",
+      "severity": "blocking",
+      "nodes": ["supernote-cloud-ledger.fix-loop"],
+      "issue": "fix-loop.touch_set is ['src/paia_supernote/', 'tests/', 'README.md', 'docs/', '.workgraph/.../fix-loop.md'] — entire source/test/doc trees. This contradicts the node's own implementation_step ('patch only the smallest source/test/doc set needed') and makes diff isolation, regression review, and the 'no unrelated files' handoff guarantee unenforceable. A whole-tree touch set lets a repair edit any file without scope discipline.",
+      "repair": "Bound fix-loop.touch_set to the specific contract modules/tests it may legitimately repair (cloud_change_ledger.py, agent_read_contracts.py, agent_write_contracts.py, contract_errors.py, uploader.py, notebook_writer.py, quick_filing_service.py, ingest_service.py, cli.py, events.py, and the named test files), plus the fix-loop.md artifact. Require per-finding explicit authorization in the node output before touching any file outside that list."
+    },
+    {
+      "id": "F5",
+      "category": "model_routing_inconsistency",
+      "severity": "blocking",
+      "nodes": ["supernote-cloud-ledger.ingest-diff", "supernote-cloud-ledger.read-contract", "supernote-cloud-ledger.write-safety", "supernote-cloud-ledger.structured-errors", "supernote-cloud-ledger.surface-adapters", "supernote-cloud-ledger.adversarial-review"],
+      "issue": "Every critical/premium node (risk=critical, route_tier=premium, selected_model=anthropic/claude-opus-4-8) also sets small_model_ready=true. This directly contradicts each node's selection_reason ('critical cross-system work requires premium reasoning') and can signal to the dispatcher that the task is eligible for downgrade to a local/cheap model, undermining the write-safety and adversarial-review routing rationale.",
+      "repair": "Set small_model_ready=false on all premium/critical nodes (ingest-diff, read-contract, write-safety, structured-errors, surface-adapters, adversarial-review). Reserve small_model_ready=true for genuinely isolated, strongly-verified leaf tasks (none currently qualify at standard+ given shared-contract justification)."
+    },
+    {
+      "id": "F6",
+      "category": "model_agency_violation",
+      "severity": "blocking",
+      "nodes": ["agency_plan.profiles", "all implementation nodes"],
+      "issue": "agency_plan.profiles declares only six profiles (contract-review, data-contract-review, write-safety-review, structured-output-review, adversarial-review, release-review), but nodes reference undeclared profiles: agency:cross-system-implementation, agency:agent-contract-review, agency:integration-review, agency:qa-contract-review, agency:integration-qa-review, agency:yagni-review, agency:qa-drift-review, agency:repair-review. These cannot be resolved against the declared registry, so the Agency-preferred/Pi-fallback contract is ambiguous at materialization.",
+      "repair": "Either add the eight missing profiles to agency_plan.profiles with their constraints, or remap each node.agency_profile to one of the six declared profiles (e.g., agent-contract-review→contract-review, qa-*-review→structured-output-review or contract-review, yagni-review→contract-review, repair-review→write-safety-review) while preserving the '-preferred-fallback-pi' suffix semantics."
+    },
+    {
+      "id": "F7",
+      "category": "unverifiable_workgraph_tasks",
+      "severity": "blocking",
+      "nodes": ["supernote-cloud-ledger.root", "supernote-cloud-ledger.handoff"],
+      "issue": "Evidence shows speedriftd daemon_state='stalled' with an active lease (lease_owner='planforge', lease_acquired_at=2026-04-14, lease_active=true, mode=supervise, dispatch_enabled=true) and the Workgraph service running with 8 alive agents occupying max_concurrent_workers=2 on unrelated organizer/flip/evaluate tasks. The plan only 'records' this conflict as a root edge case and a risk, but proceeds with commit_and_push_after_verification and 'Workgraph status is updated' as a handoff acceptance criterion. New ledger nodes may never dispatch, making the handoff acceptance unverifiable and risking collision with the stale lease.",
+      "repair": "Add a concrete pre-dispatch readiness step to supernote-cloud-ledger.root (not just inspection): release or refresh the stale April lease, confirm speedriftd daemon_state is not 'stalled' (or explicitly run in observe/manual mode for this plan), and confirm free worker capacity before materializing nodes. Make the handoff 'Workgraph status updated' acceptance conditional on confirmed dispatch, with a documented manual-runtime fallback per agency_plan.fallback_runtime if the daemon cannot be recovered."
+    }
+  ],
+  "advisory": [
+    {
+      "id": "A1",
+      "category": "write_route_concurrency",
+      "nodes": ["supernote-cloud-ledger.write-safety"],
+      "issue": "Base-revision validation is against the cached ledger revision, not a live Cloud fetch (escalation_condition acknowledges checks cannot contact Cloud during writes). A write could still clobber a Cloud change that occurred after the last poll but before the agent's write.",
+      "repair": "Document this TOCTOU window explicitly as a residual risk in write-safety output and handoff.md, and state that the ledger revision freshness is bounded by poll_interval. No code change required unless the approved design demands a live pre-write fetch."
+    },
+    {
+      "id": "A2",
+      "category": "data_api_contract_coverage",
+      "nodes": ["supernote-cloud-ledger.surface-adapters"],
+      "issue": "Acceptance says 'Existing API surface can return contract responses', but the repo appears to have no local HTTP API server (events.py publishes to an external paia-events service). This acceptance may be unverifiable; the node's own edge case admits the API surface may be absent.",
+      "repair": "Pin surface-adapters acceptance to surfaces that actually exist in-repo (CLI + events publish path) and explicitly record any 'API surface' obligation as a follow-up if no in-repo API exists, rather than asserting an unverifiable criterion."
+    },
+    {
+      "id": "A3",
+      "category": "regression_risk",
+      "nodes": ["supernote-cloud-ledger.storage"],
+      "issue": "storage.acceptance asserts the new allowlist 'does not break existing folio_sync_notebooks behavior' and adds SQLite DDL/migration against existing state_db_path, but no required unit test covers config backward-compat or migration idempotency against an existing DB.",
+      "repair": "Add two required unit-test obligations to storage.unit_tests: (a) loading config with only legacy folio_sync_notebooks preserves current behavior when no allowlist is set; (b) opening/migrating a pre-existing state_db_path fixture succeeds and preserves prior page_state rows."
+    },
+    {
+      "id": "A4",
+      "category": "model_routing",
+      "nodes": ["supernote-cloud-ledger.fix-loop", "supernote-cloud-ledger.final-gates"],
+      "issue": "fix-loop may repair blocking write-safety findings starting at standard (sonnet) with escalation only after two attempts; final-gates runs the write-safety preservation check at standard despite requires_domain_safety=true. Both are safety-adjacent.",
+      "repair": "Consider lowering fix-loop's escalation threshold to max_attempts=1 for findings classified as write-safety/security, and either justify final-gates standard routing explicitly or raise it to premium given it is the last automated write-safety gate before review."
+    },
+    {
+      "id": "A5",
+      "category": "missing_drift_gate",
+      "nodes": ["drift_gates", "speedrift_modules"],
+      "issue": "agencydrift is declared 'recommended' required_by all nodes and the agency_plan makes Agency preference a constraint, but no drift_gate includes agencydrift, so Agency-vs-Pi fallback discipline is never checked at any gate. uxdrift is similarly only covered via an eval, not a gate.",
+      "repair": "Optionally add agencydrift to the post_task gate as create_followup, or drop agencydrift to informational. Not blocking since Agency is optional with a Pi fallback."
+    }
+  ],
+  "required_repairs": [
+    "F1: wire ingest-diff as a dependency of unit-tests and integration-tests (or move OCR-skip/two-poll acceptance into ingest-diff.verify).",
+    "F2: reconcile depsdrift — either enable it to match the gate and cleanup-docs module, or remove it from drift_gates and cleanup-docs.modules.",
+    "F3: make secdrift block at handoff (add to pre_handoff gate as block_until_fixed, or change post_task secdrift to block_until_fixed).",
+    "F4: bound fix-loop.touch_set to named contract/test/doc files; remove whole-tree src/ and tests/ entries.",
+    "F5: set small_model_ready=false on all premium/critical nodes.",
+    "F6: declare or remap the eight undeclared agency_profile names to the declared profiles.",
+    "F7: add a concrete stale-lease/stalled-daemon readiness step to root and condition handoff Workgraph acceptance on confirmed dispatch."
+  ]
+}

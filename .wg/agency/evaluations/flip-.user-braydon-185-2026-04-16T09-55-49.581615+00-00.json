@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-185-2026-04-16T09-55-49.581615+00-00",
+  "task_id": ".user-braydon-185",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.62,
+  "dimensions": {
+    "specificity_match": 0.2,
+    "hallucination_rate": 0.8,
+    "semantic_match": 0.75,
+    "requirement_coverage": 0.85
+  },
+  "notes": "Both describe a user board creation task with semantic alignment on the core concept. The ACTUAL task is intentionally vague ('persistent conversation surface') with empty acceptance criteria, while INFERRED reconstructed five specific components: launcher script, interactive interface, events integration, write commands, and verification. Only the 'conversation persistence' requirement appears in both. The INFERRED version adds substantial implementation details (80% of its requirements) that go beyond what the ACTUAL contract specifies, representing reasonable inference from context but significant extrapolation beyond the minimal original spec.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board feature for the paia-supernote project that provides a complete interface for managing Supernote interactions. The implementation must include: 1) A launcher script to start the user board, 2) An interactive interface for user interactions, 3) Conversation persistence to maintain session state, 4) Events integration to handle Supernote events, and 5) Write commands functionality for sending content back to Supernote. Ensure all core functionality is properly verified and working before marking the task complete.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T09:55:49.581615+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

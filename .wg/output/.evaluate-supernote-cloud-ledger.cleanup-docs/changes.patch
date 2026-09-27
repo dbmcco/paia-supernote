@@ -1,0 +1,1014 @@
+diff --git a/README.md b/README.md
+index d90ce1e..40c7002 100644
+--- a/README.md
++++ b/README.md
+@@ -281,7 +281,8 @@ Authentication uses browser cookies obtained via Playwright (interactive login f
+ | `zai_vision_model` | — | Model ID for handwriting OCR |
+ | `zai_text_model` | — | Model ID for text tasks |
+ | `state_db_path` | `~/.paia/supernote/supernote-state.db` | SQLite state database |
+-| `folio_sync_notebooks` | `[]` | Notebooks to watch and OCR |
++| `folio_sync_notebooks` | `[]` | Notebooks to watch and OCR (also the ledger allowlist fallback when `cloud_change_ledger_notebooks` is unset) |
++| `cloud_change_ledger_notebooks` | _unset_ | Explicit allowlist for the Cloud change ledger. When present (even empty `[]`) it fully controls which notebooks are ledger-tracked; falls back to `folio_sync_notebooks` when unset |
+ | `filing_enabled` | `false` | Enable auto-filing of starred pages |
+ | `filing_dry_run` | `true` | Log filing decisions without executing |
+ | `filing_source_notebooks` | `[]` | Notebooks to file from |
+@@ -289,6 +290,32 @@ Authentication uses browser cookies obtained via Playwright (interactive login f
+ | `filing_ledger_db_path` | `~/.paia/supernote/filing-ledger.db` | Filing audit database |
+ | `events_url` | `http://localhost:3511` | PAIA events service URL (optional) |
+ 
++## Cloud Change Ledger & Agent Contracts
++
++The service keeps a durable SQLite-backed **change ledger** for an explicit
++allowlist of Cloud notebooks, and exposes cached, base-revision-guarded
++read/write contracts for agents. See
++[`docs/supernote-cloud-change-ledger-contracts.md`](docs/supernote-cloud-change-ledger-contracts.md)
++for the full reference. Summary:
++
++- **Allowlist**: only `cloud_change_ledger_notebooks` (falling back to
++  `folio_sync_notebooks`) are ledger-tracked; non-allowlisted notebooks are
++  skipped before download/parse/OCR/mutation.
++- **Cached reads** (`supernote changes`, `supernote read`) read the local ledger
++  cache without contacting Supernote Cloud. `changes` returns a replayable
++  `next_cursor` and the current `notebook_revision`.
++- **Per-agent cursors**: `supernote changes --agent <agent>` reads after that
++  agent's last cursor; `--advance` acknowledges it only after a successful read.
++- **Base-revision writes**: the `supernote.write.requested` route requires a
++  `base_notebook_revision` and fails closed on stale/missing/mismatched/
++  disallowed revisions before any apply/upload/S3 call.
++- **Structured errors**: every CLI/event/agent failure uses one shared
++  `AgentError` envelope (`error_code`, `next_actions`, `retryable`,
++  `mutation_applied`, …) with secrets redacted; `--json` is canonical for agents.
++- **TOCTOU limitation**: the write guard checks the latest *cached* ledger
++  snapshot, not a live Cloud fetch, so freshness is bounded by the configured
++  `poll_interval` plus ingest delay — it is not a live compare-and-swap.
++
+ ## License
+ 
+ MIT
+diff --git a/src/paia_supernote/cli.py b/src/paia_supernote/cli.py
+index 48e67a7..956c298 100644
+--- a/src/paia_supernote/cli.py
++++ b/src/paia_supernote/cli.py
+@@ -26,6 +26,21 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Any
+ 
++from pydantic import BaseModel
++
++from .agent_read_contracts import (
++    AdvanceAgentCursorRequest,
++    LatestNotebookStateRequest,
++    NotebookChangesRequest,
++    ReadContractError,
++    SupernoteReadContract,
++)
++from .contract_errors import (
++    AgentError,
++    agent_error_json,
++    cloud_auth_error,
++    format_agent_error,
++)
+ from .main import DEFAULT_CONFIG_PATH, _filing_destination_map, load_config
+ from .move_pipeline import (
+     MovePlan,
+@@ -61,6 +76,7 @@ class CliConfig:
+     backups_root: Path
+     destination_map: dict[str, str]
+     reader: Any
++    raw_config: dict[str, Any] | None = None
+ 
+ 
+ def load_cli_config(config_path: Path | None = None) -> CliConfig:
+@@ -71,6 +87,7 @@ def load_cli_config(config_path: Path | None = None) -> CliConfig:
+         backups_root=BACKUPS_ROOT,
+         destination_map=_filing_destination_map(raw),
+         reader=build_reader(raw),
++        raw_config=raw,
+     )
+ 
+ 
+@@ -339,6 +356,37 @@ async def cmd_auth_status(uploader: Any) -> dict:
+     }
+ 
+ 
++def cmd_changes(
++    config: CliConfig,
++    notebook: str,
++    *,
++    since: str | None = None,
++    agent: str | None = None,
++    advance: bool = False,
++    latest: bool = False,
++) -> BaseModel:
++    """Read cached ledger changes/state without Cloud or uploader access."""
++    contract = SupernoteReadContract(config.raw_config or {}, config.state_db_path)
++    if latest:
++        return contract.get_latest_notebook_state(
++            LatestNotebookStateRequest(notebook=notebook)
++        )
++    response = contract.get_changes(
++        NotebookChangesRequest(notebook=notebook, since=since, agent=agent)
++    )
++    if advance:
++        if agent is None:
++            raise SystemExit("changes --advance requires --agent")
++        return contract.advance_agent_cursor(
++            AdvanceAgentCursorRequest(
++                agent=agent,
++                notebook=notebook,
++                change_id=response.next_cursor,
++            )
++        )
++    return response
++
++
+ # ---------------------------------------------------------------------------
+ # Verbose formatting (the guidance the model reads)
+ # ---------------------------------------------------------------------------
+@@ -441,6 +489,58 @@ def format_move_result(result: MoveResult) -> str:
+     return "\n".join(lines)
+ 
+ 
++def format_changes(payload: BaseModel) -> str:
++    data = payload.model_dump(mode="json")
++    if "pages" in data:
++        lines = [
++            f"{data['notebook']} cached state at {data['notebook_revision']} ",
++            f"({data['page_count']} page(s), next cursor {data['next_cursor']}).",
++        ]
++        for page in data["pages"]:
++            preview = f" — {page['text_preview']}" if page.get("text_preview") else ""
++            lines.append(
++                f"  page {page['page_index']}: {page['page_id']} "
++                f"[{page['ocr_status']}]{preview}"
++            )
++        return "\n".join(lines)
++
++    if "changes" in data:
++        lines = [
++            f"{data['notebook']} changes since {data['cursor_kind']} "
++            f"{data['cursor']} (next cursor {data['next_cursor']})."
++        ]
++        if not data["changes"]:
++            lines.append("No cached changes found after that cursor.")
++        for change in data["changes"]:
++            idx = change["new_index"] if change["new_index"] is not None else "removed"
++            preview = (
++                f" — {change['text_preview']}" if change.get("text_preview") else ""
++            )
++            lines.append(
++                f"  #{change['change_id']} {change['change_type']} "
++                f"page {idx} ({change['page_id']}){preview}"
++            )
++        lines.append("Next: rerun with --advance --agent <agent> after consuming it.")
++        return "\n".join(lines)
++
++    if {"agent", "cursor", "advanced"}.issubset(data):
++        state = "advanced" if data["advanced"] else "unchanged"
++        return (
++            f"{data['agent']} cursor for {data['notebook']} "
++            f"{state}: {data['cursor']}"
++        )
++
++    if {"agent", "cursor"}.issubset(data):
++        return f"{data['agent']} cursor for {data['notebook']}: {data['cursor']}"
++
++    return json.dumps(data, indent=2)
++
++
++def format_contract_error(error: ReadContractError | AgentError) -> str:
++    payload = error.error if isinstance(error, ReadContractError) else error
++    return format_agent_error(payload)
++
++
+ def _guidance(command: str, notebook: str | None = None) -> str:
+     """Contextual next-step hint appended to every prose command output.
+ 
+@@ -531,6 +631,24 @@ def _build_parser() -> argparse.ArgumentParser:
+     p_remove.add_argument("--pages", required=True)
+     p_remove.add_argument("--dry-run", action="store_true")
+ 
++    p_changes = sub.add_parser(
++        "changes",
++        help="query cached ledger changes without contacting Supernote Cloud",
++    )
++    p_changes.add_argument("notebook")
++    p_changes.add_argument("--since", help="change ID or ISO timestamp cursor")
++    p_changes.add_argument("--agent", help="read changes after this agent's cursor")
++    p_changes.add_argument(
++        "--advance",
++        action="store_true",
++        help="after a successful agent query, advance that agent cursor",
++    )
++    p_changes.add_argument(
++        "--latest",
++        action="store_true",
++        help="return latest cached notebook/page state instead of changes",
++    )
++
+     p_auth = sub.add_parser("auth", help="cloud auth")
+     auth_sub = p_auth.add_subparsers(dest="auth_command", required=True)
+     auth_sub.add_parser("status")
+@@ -549,6 +667,8 @@ def _read_append_text(args: argparse.Namespace) -> str:
+ 
+ 
+ def _jsonable(obj: Any) -> Any:
++    if isinstance(obj, BaseModel):
++        return obj.model_dump(mode="json")
+     if is_dataclass(obj):
+         return asdict(obj)
+     if isinstance(obj, list) and obj and is_dataclass(obj[0]):
+@@ -656,6 +776,16 @@ async def _run_command(
+             )
+         )
+         emit(result, msg + _guidance("remove", args.notebook))
++    elif args.command == "changes":
++        result = cmd_changes(
++            config,
++            args.notebook,
++            since=args.since,
++            agent=args.agent,
++            advance=args.advance,
++            latest=args.latest,
++        )
++        emit(result, format_changes(result))
+     elif args.command == "auth":
+         if args.auth_command == "status":
+             result = await cmd_auth_status(uploader)
+@@ -677,6 +807,10 @@ async def _run_command(
+ 
+ 
+ async def _dispatch(args: argparse.Namespace, config: CliConfig) -> int:
++    if args.command == "changes":
++        await _run_command(args, config, uploader=None)
++        return 0
++
+     if args.command == "auth" and args.auth_command == "login":
+         # With SN_PHONE/SN_PASSWORD set, login is headless + automatic; otherwise
+         # a visible browser opens so a human can complete the login.
+@@ -704,8 +838,18 @@ def main(argv: list[str] | None = None) -> int:
+     config = load_cli_config(args.config)
+     try:
+         return asyncio.run(_dispatch(args, config))
++    except ReadContractError as exc:
++        if args.json:
++            print(agent_error_json(exc.error), file=sys.stderr)
++        else:
++            print(format_contract_error(exc), file=sys.stderr)
++        return 2
+     except UploadAuthError:
+-        print(auth_recovery_message(), file=sys.stderr)
++        error = cloud_auth_error(auth_recovery_message())
++        if args.json:
++            print(agent_error_json(error), file=sys.stderr)
++        else:
++            print(format_contract_error(error), file=sys.stderr)
+         return 2
+     except KeyboardInterrupt:
+         return 130
+diff --git a/src/paia_supernote/cloud_poller.py b/src/paia_supernote/cloud_poller.py
+index a596aa9..6041e22 100644
+--- a/src/paia_supernote/cloud_poller.py
++++ b/src/paia_supernote/cloud_poller.py
+@@ -6,6 +6,7 @@ ABOUTME: Polls /api/file/list/query, downloads changed files, fires callback wit
+ from __future__ import annotations
+ 
+ import asyncio
++from pathlib import PurePosixPath
+ from typing import Awaitable, Callable, Dict, Iterable, Optional
+ 
+ import structlog
+@@ -61,10 +62,11 @@ class CloudPoller:
+         self._on_poll_health = on_poll_health
+         # Start healthy; the first auth failure transitions to degraded and fires.
+         self._poll_healthy = True
++        watched_source = (
++            self.WATCHED_NOTEBOOKS if watched_notebooks is None else watched_notebooks
++        )
+         self._watched_notebooks = {
+-            str(name).strip()
+-            for name in (watched_notebooks or self.WATCHED_NOTEBOOKS)
+-            if str(name).strip()
++            str(name).strip() for name in watched_source if str(name).strip()
+         }
+         self._watched_notebook_keys = {
+             name.casefold() for name in self._watched_notebooks
+@@ -141,7 +143,7 @@ class CloudPoller:
+             if entry.get("size", 0) == 0:
+                 continue
+ 
+-            notebook_name = name[:-5]  # strip .note suffix
++            notebook_name = _notebook_name_from_file_name(name)
+             if notebook_name.casefold() not in self._watched_notebook_keys:
+                 continue
+ 
+@@ -242,3 +244,9 @@ class CloudPoller:
+             await self._on_poll_health(healthy, detail)
+         except Exception as exc:  # monitoring must never break the poll loop
+             log.warning("cloud_poll_health_callback_error", error=str(exc))
++
++
++def _notebook_name_from_file_name(file_name: str) -> str:
++    """Return display notebook stem from a Cloud file name or path."""
++    leaf = PurePosixPath(str(file_name)).name
++    return leaf[:-5] if leaf.endswith(".note") else leaf
+diff --git a/src/paia_supernote/events.py b/src/paia_supernote/events.py
+index 08d0bfe..8d17b8d 100644
+--- a/src/paia_supernote/events.py
++++ b/src/paia_supernote/events.py
+@@ -13,6 +13,9 @@ from typing import Any, Awaitable, Callable, Optional
+ 
+ import httpx
+ import structlog
++from pydantic import BaseModel
++
++from .contract_errors import format_agent_error, redact_value
+ 
+ log = structlog.get_logger(__name__)
+ 
+@@ -285,11 +288,16 @@ class EventsClient:
+         content_type: str | None,
+         page_count: int = 0,
+         error: str,
++        structured_error: BaseModel | dict[str, Any] | None = None,
++        error_message: str | None = None,
+     ) -> None:
+         """Publish supernote.write.failed with request correlation."""
+         correlation_id = str(
+             request_event_id or request_source_event_id or run_id or uuid.uuid4()
+         )
++        structured_payload = _jsonable_error_payload(structured_error)
++        if error_message is None and structured_error is not None:
++            error_message = _format_structured_error(structured_error)
+         await self._publish(
+             event_type="supernote.write.failed",
+             payload={
+@@ -301,6 +309,8 @@ class EventsClient:
+                 "content_type": content_type,
+                 "page_count": page_count,
+                 "error": error,
++                "structured_error": structured_payload,
++                "error_message": error_message or error,
+             },
+             dedupe_key=f"supernote.write.failed:{correlation_id}",
+             occurred_at=datetime.now(timezone.utc),
+@@ -334,5 +344,19 @@ class EventsClient:
+             log.warning("event_publish_failed", event_type=event_type, error=str(exc))
+ 
+ 
++def _jsonable_error_payload(error: BaseModel | dict[str, Any] | None) -> Any:
++    if error is None:
++        return None
++    if isinstance(error, BaseModel):
++        return redact_value(error.model_dump(mode="json"))
++    return redact_value(error)
++
++
++def _format_structured_error(error: BaseModel | dict[str, Any]) -> str:
++    if isinstance(error, BaseModel) and hasattr(error, "error_code"):
++        return format_agent_error(error)  # type: ignore[arg-type]
++    return str(_jsonable_error_payload(error))
++
++
+ # Backwards-compatible alias used by main.py
+ EventsManager = EventsClient
+diff --git a/src/paia_supernote/ingest_service.py b/src/paia_supernote/ingest_service.py
+index 0dc9f4d..538d126 100644
+--- a/src/paia_supernote/ingest_service.py
++++ b/src/paia_supernote/ingest_service.py
+@@ -7,15 +7,24 @@ falling back to cloud polling when not. The local path requires no auth.
+ from __future__ import annotations
+ 
+ import asyncio
++import hashlib
+ import inspect
+ from contextlib import suppress
+-import hashlib
+ from pathlib import Path
+ from typing import Any, Optional
+ 
+ import structlog
+ 
++from .cloud_change_ledger import (
++    CHANGE_ADDED,
++    CHANGE_UPDATED,
++    CloudChangeLedger,
++    NotebookSnapshot,
++    PageChangeRecord,
++    PageRevision,
++)
+ from .cloud_poller import CloudPoller
++from .config import notebook_is_ledger_allowlisted, resolve_ledger_notebooks
+ from .events import EventsClient
+ from .page_state import PageStateStore
+ from .reader import SupernoteReader, build_reader
+@@ -38,9 +47,13 @@ class IngestService:
+         self.config = config or load_config()
+         self.reader = reader or build_reader(self.config)
+         self.events = EventsClient(base_url=self.config["events_url"])
+-        self.page_state = PageStateStore(Path(self.config["state_db_path"]))
++        state_db_path = Path(self.config["state_db_path"])
++        self.page_state = PageStateStore(state_db_path)
+         self.page_state.init_schema()
++        self.ledger = CloudChangeLedger(state_db_path)
++        self.ledger.init_schema()
+         self._watched_notebook_keys = self._build_watched_notebook_keys()
++        self._cloud_watched_notebooks = resolve_ledger_notebooks(self.config)
+ 
+         # Cloud poller path (used only when Partner app sync unavailable)
+         self._uploader: Optional[SupernoteUploader] = uploader
+@@ -110,13 +123,92 @@ class IngestService:
+                 continue
+             await persist_result(result)
+ 
+-        if notebook_name.casefold() == "walk":
+-            for result in results:
+-                await self.events.publish_walk_feedback_detected(
+-                    notebook=result.notebook,
+-                    page=result.page_num,
+-                    text=result.text,
++        await self._publish_walk_feedback(notebook_name, results)
++
++    async def _on_cloud_note_changed(
++        self,
++        notebook_name: str,
++        note_bytes: bytes,
++        update_time: int | None = None,
++    ) -> None:
++        """Ledger-aware Cloud ingest: snapshot first, OCR only changed pages."""
++        if not notebook_is_ledger_allowlisted(self.config, notebook_name):
++            log.info("cloud_ingest_notebook_not_allowlisted", notebook=notebook_name)
++            return
++
++        note_hash = hashlib.sha256(note_bytes).hexdigest()
++        cloud_revision = f"{update_time or 0}:{note_hash}"
++        note_snapshot = self.reader.build_snapshot(
++            note_bytes,
++            notebook_name,
++            revision=cloud_revision,
++        )
++        page_by_index = {
++            page.page_index: page for page in note_snapshot.pages.values()
++        }
++        ledger_snapshot = NotebookSnapshot(
++            notebook=notebook_name,
++            cloud_revision=cloud_revision,
++            cloud_update_time=update_time,
++            pages=[
++                PageRevision(
++                    page_id=note_snapshot.pages[page_id].page_id,
++                    page_index=note_snapshot.pages[page_id].page_index,
++                    content_hash=note_snapshot.pages[page_id].content_hash,
+                 )
++                for page_id in note_snapshot.page_order
++            ],
++        )
++        changes = self.ledger.apply_snapshot(ledger_snapshot)
++        pages_to_ocr = _ocr_page_indexes(changes)
++        if not pages_to_ocr:
++            log.info(
++                "cloud_ingest_no_ocr_needed",
++                notebook=notebook_name,
++                changes=len(changes),
++            )
++            return
++
++        results = await self.reader.read_pages(
++            note_bytes,
++            notebook_name,
++            pages=pages_to_ocr,
++        )
++        for result in results:
++            page = page_by_index.get(result.page_num)
++            if page is None:
++                continue
++            source_revision = f"{cloud_revision}:{page.page_id}:{page.content_hash}"
++            self.page_state.upsert_ocr_page(
++                notebook=result.notebook,
++                page=result.page_num,
++                source_revision=source_revision,
++                raw_text=result.text,
++                ocr_model=self.config["zai_vision_model"],
++            )
++            self.ledger.mark_page_ocr_status(
++                result.notebook,
++                page.page_id,
++                "ready",
++            )
++            log.info(
++                "ocr_succeeded",
++                notebook=result.notebook,
++                page=result.page_num,
++                page_id=page.page_id,
++            )
++
++        await self._publish_walk_feedback(notebook_name, results)
++
++    async def _publish_walk_feedback(self, notebook_name: str, results: list) -> None:
++        if notebook_name.casefold() != "walk":
++            return
++        for result in results:
++            await self.events.publish_walk_feedback_detected(
++                notebook=result.notebook,
++                page=result.page_num,
++                text=result.text,
++            )
+ 
+     async def _on_poll_health(
+         self, healthy: bool, detail: dict[str, Any]
+@@ -179,9 +271,9 @@ class IngestService:
+         uploader = self._uploader or SupernoteUploader()
+         cloud_poller = self._cloud_poller or CloudPoller(
+             uploader=uploader,
+-            on_note_changed=self._on_note_changed,
++            on_note_changed=self._on_cloud_note_changed,
+             poll_interval=self.config["poll_interval"],
+-            watched_notebooks=self._watched_notebook_keys,
++            watched_notebooks=self._cloud_watched_notebooks,
+             process_existing_on_start=False,
+             on_poll_health=self._on_poll_health,
+         )
+@@ -229,3 +321,14 @@ class IngestService:
+ 
+         if poller_task in done:
+             poller_task.result()
++
++
++def _ocr_page_indexes(changes: list[PageChangeRecord]) -> list[int]:
++    """Return page indexes that need OCR for new or content-updated pages."""
++    indexes = {
++        change.new_index
++        for change in changes
++        if change.change_type in {CHANGE_ADDED, CHANGE_UPDATED}
++        and change.new_index is not None
++    }
++    return sorted(indexes)
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index 8591e14..7471ac8 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -20,7 +20,13 @@ from typing import Any, Callable, Dict
+ import structlog
+ import tomllib
+ 
++from .agent_write_contracts import (
++    AgentWriteRevisionError,
++    missing_notebook_conflict,
++    validate_agent_write_request,
++)
+ from .cloud_poller import CloudPoller
++from .contract_errors import agent_error_json, format_agent_error
+ from .enrich_service import EnrichService
+ from .events import EventsClient
+ from .ingest_service import IngestService
+@@ -31,9 +37,9 @@ from .model_config import (
+     resolve_supernote_zai_api_key,
+ )
+ from .notebook_artifacts import NotebookPageSpec, replace_notebook_pages
++from .notebook_writer import append_page_to_notebook
+ from .organizer_runtime import create_organizer_api
+ from .organizer_server import make_organizer_handler
+-from .notebook_writer import append_page_to_notebook
+ from .quick_filing import notebook_name_to_tag
+ from .quick_filing_service import QuickFilingService
+ from .reader import build_reader
+@@ -582,6 +588,8 @@ class SupernoteService:
+         content_type: str | None,
+         page_count: int = 0,
+         error: str,
++        structured_error: Any | None = None,
++        error_message: str | None = None,
+     ) -> None:
+         await self.events.publish_write_failed(
+             request_event_id=event_data.get("request_event_id"),
+@@ -592,6 +600,8 @@ class SupernoteService:
+             content_type=content_type,
+             page_count=page_count,
+             error=error,
++            structured_error=structured_error,
++            error_message=error_message,
+         )
+ 
+     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
+@@ -611,9 +621,6 @@ class SupernoteService:
+         try:
+             raw_agent = str(event_data["agent"])
+             agent = self._resolve_agent_name(raw_agent)
+-            notebook = event_data.get("notebook") or self.config["agent_mappings"].get(
+-                agent, {}
+-            ).get("notebook", "")
+             content = event_data.get("content", "")
+             content_type = event_data.get("content_type")
+ 
+@@ -623,12 +630,45 @@ class SupernoteService:
+                 await self._publish_write_failed(
+                     event_data,
+                     agent=raw_agent,
+-                    notebook=notebook,
++                    notebook=event_data.get("notebook"),
+                     content_type=content_type,
+                     error="unknown_agent",
+                 )
+                 return
+ 
++            requested_notebook = event_data.get("notebook")
++            if str(requested_notebook or "").strip():
++                notebook = str(requested_notebook).strip()
++            elif event_data.get("use_agent_default_notebook") is True:
++                notebook = str(
++                    self.config["agent_mappings"].get(agent, {}).get("notebook") or ""
++                ).strip()
++            else:
++                raise AgentWriteRevisionError(
++                    missing_notebook_conflict(
++                        event_data,
++                        config=self.config,
++                        resolved_agent=agent,
++                    )
++                )
++
++            if not notebook:
++                raise AgentWriteRevisionError(
++                    missing_notebook_conflict(
++                        event_data,
++                        config=self.config,
++                        resolved_agent=agent,
++                    )
++                )
++
++            validate_agent_write_request(
++                event_data,
++                config=self.config,
++                state_db_path=Path(self.config["state_db_path"]),
++                resolved_agent=agent,
++                resolved_notebook=notebook,
++            )
++
+             # Delegate task_page_curate to TaskCurator (can target tasks.note)
+             if content_type == "task_page_curate":
+                 log.info(
+@@ -797,6 +837,20 @@ class SupernoteService:
+                     error="upload_failed",
+                 )
+ 
++        except AgentWriteRevisionError as exc:
++            log.warning(
++                "write_revision_conflict",
++                conflict=exc.conflict.model_dump(),
++            )
++            await self._publish_write_failed(
++                event_data,
++                agent=agent or raw_agent,
++                notebook=notebook,
++                content_type=content_type,
++                error=agent_error_json(exc.conflict, indent=None),
++                structured_error=exc.conflict,
++                error_message=format_agent_error(exc.conflict),
++            )
+         except Exception as exc:
+             log.error("write_request_error", error=str(exc))
+             await self._publish_write_failed(
+@@ -944,7 +998,9 @@ def build_parser() -> argparse.ArgumentParser:
+         default=None,
+         help="Directory for rendered organizer page images",
+     )
+-    subparsers.add_parser("login", help="Re-authenticate with Supernote Cloud (opens browser)")
++    subparsers.add_parser(
++        "login", help="Re-authenticate with Supernote Cloud (opens browser)"
++    )
+     return parser
+ 
+ 
+@@ -952,7 +1008,10 @@ async def _run_login() -> None:
+     """Open a visible browser to refresh the Supernote Cloud session."""
+     from .uploader import SupernoteUploader
+ 
+-    print("Opening Supernote Cloud in browser — log in, then close the tab or press Ctrl+C here.")
++    print(
++        "Opening Supernote Cloud in browser — log in, "
++        "then close the tab or press Ctrl+C here."
++    )
+     uploader = SupernoteUploader(headless=False)
+     await uploader.start()
+     try:
+diff --git a/src/paia_supernote/notebook_writer.py b/src/paia_supernote/notebook_writer.py
+index f82628a..9cd292b 100644
+--- a/src/paia_supernote/notebook_writer.py
++++ b/src/paia_supernote/notebook_writer.py
+@@ -1,6 +1,6 @@
+ """
+-ABOUTME: Notebook page-append helper — wraps RATTA_RLE bytes into an existing .note file.
+-ABOUTME: Parses target notebook, appends a new page with agent content, reconstructs binary.
++ABOUTME: Notebook page-append helper — wraps RATTA_RLE bytes into a .note file.
++ABOUTME: Appends a new page with agent content, then reconstructs the binary.
+ """
+ 
+ from __future__ import annotations
+@@ -12,8 +12,8 @@ import uuid
+ from pathlib import Path
+ from typing import Union
+ 
+-import supernotelib.parser as sn_parser
+ import supernotelib.manipulator as sn_manip
++import supernotelib.parser as sn_parser
+ 
+ OFFSET_FIELDS = (
+     "RECOGNTEXT",
+@@ -53,7 +53,7 @@ def append_page_to_notebook(
+         FileNotFoundError: If note_source is a path that does not exist.
+     """
+     if isinstance(note_source, bytes):
+-        # Write bytes to a temp file so load_notebook (which requires a path) can read it
++        # Write bytes to a temp file so load_notebook can read from a path.
+         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
+         try:
+             os.write(tmp_fd, note_source)
+diff --git a/src/paia_supernote/quick_filing_service.py b/src/paia_supernote/quick_filing_service.py
+index cf0bb92..32b30ee 100644
+--- a/src/paia_supernote/quick_filing_service.py
++++ b/src/paia_supernote/quick_filing_service.py
+@@ -136,6 +136,10 @@ class QuickFilingService:
+         state so the next run resumes rather than double-applying.
+ 
+         Returns the number of completed operations.
++
++        This manual filing service is an internal/non-agent move pipeline. It is
++        intentionally exempt from the agent write request base-revision contract
++        and keeps its existing dry-run plus ``verify_before_upload`` safety hooks.
+         """
+         completed = 0
+         ready_pairs = [
+diff --git a/src/paia_supernote/reader.py b/src/paia_supernote/reader.py
+index bcc8494..5705bad 100644
+--- a/src/paia_supernote/reader.py
++++ b/src/paia_supernote/reader.py
+@@ -29,6 +29,7 @@ from .model_config import (
+     default_zai_vision_model,
+     resolve_supernote_zai_api_key,
+ )
++from .note_snapshot import NotebookSnapshot, build_snapshot_from_notebook
+ 
+ SNAPSHOT_DIR = Path.home() / ".paia" / "supernote" / "snapshots"
+ 
+@@ -116,6 +117,35 @@ class SupernoteReader:
+             self._client = anthropic.AsyncAnthropic()
+         return self._client
+ 
++    def build_snapshot(
++        self,
++        note_source: Union[str, Path, bytes],
++        notebook_name: str,
++        revision: str,
++    ) -> NotebookSnapshot:
++        """Parse a .note source into stable page IDs and content hashes."""
++        if isinstance(note_source, bytes):
++            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
++            try:
++                os.write(tmp_fd, note_source)
++                os.close(tmp_fd)
++                notebook = supernotelib.load_notebook(tmp_path)
++                return build_snapshot_from_notebook(
++                    notebook,
++                    notebook_name=notebook_name,
++                    revision=revision,
++                )
++            finally:
++                os.unlink(tmp_path)
++
++        path = Path(note_source)
++        notebook = supernotelib.load_notebook(str(path))
++        return build_snapshot_from_notebook(
++            notebook,
++            notebook_name=notebook_name,
++            revision=revision,
++        )
++
+     async def process_file(
+         self,
+         note_source: Union[str, Path, bytes],
+@@ -267,7 +297,8 @@ class SupernoteReader:
+         """Call the configured OpenAI-compatible Supernote model endpoint."""
+         if not self.zai_api_key:
+             raise RuntimeError(
+-                "The configured Supernote model API key is required when using the zai backend"
++                "The configured Supernote model API key is required when using "
++                "the zai backend"
+             )
+ 
+         payload = {
+diff --git a/src/paia_supernote/uploader.py b/src/paia_supernote/uploader.py
+index 007c0d0..de69cc1 100644
+--- a/src/paia_supernote/uploader.py
++++ b/src/paia_supernote/uploader.py
+@@ -121,6 +121,9 @@ class SupernoteUploader:
+     async def upload_notebook(self, notebook_path: str, target_name: str) -> bool:
+         """Upload .note file to Supernote Cloud (three-step flow).
+ 
++        This is the low-level mutation primitive. Agent-facing write routes must
++        perform their ledger base-revision guard before calling this method.
++
+         Safe replace strategy: record the existing file ID first, upload the new
+         version (cloud creates a versioned duplicate), then delete the OLD file
+         by its saved ID. If the upload fails, the original is untouched.
+diff --git a/tests/test_main.py b/tests/test_main.py
+index c74128b..9877d10 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -10,6 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
+ 
+ import pytest
+ 
++from paia_supernote.cloud_change_ledger import (
++    CloudChangeLedger,
++    NotebookSnapshot,
++    PageRevision,
++)
+ from paia_supernote.enrich_service import EnrichService
+ from paia_supernote.ingest_service import IngestService
+ from paia_supernote.main import (
+@@ -28,6 +33,32 @@ from paia_supernote.model_config import supernote_zai_credential_env_var
+ from paia_supernote.page_state import PageStateStore
+ from paia_supernote.uploader import SupernoteUploadConflictError
+ 
++
++def _config_with_write_revision(
++    tmp_path: Path, notebook: str, revision: str = "rev-current"
++) -> dict:
++    config = dict(DEFAULT_CONFIG)
++    config["state_db_path"] = str(tmp_path / "state.db")
++    config["cloud_change_ledger_notebooks"] = [notebook]
++    ledger = CloudChangeLedger(tmp_path / "state.db")
++    ledger.init_schema()
++    ledger.apply_snapshot(
++        NotebookSnapshot(
++            notebook=notebook,
++            cloud_revision=revision,
++            cloud_update_time=123,
++            pages=[
++                PageRevision(
++                    page_id=f"{notebook.lower()}-page-1",
++                    page_index=0,
++                    content_hash=f"{notebook.lower()}-hash-1",
++                )
++            ],
++        )
++    )
++    return config
++
++
+ # -- Config loading -----------------------------------------------------------
+ 
+ 
+@@ -465,8 +496,10 @@ class TestServiceStart:
+         service.events.start.assert_awaited_once()
+ 
+     @pytest.mark.asyncio
+-    async def test_write_request_lazy_starts_service_uploader(self) -> None:
+-        config = dict(DEFAULT_CONFIG)
++    async def test_write_request_lazy_starts_service_uploader(
++        self, tmp_path: Path
++    ) -> None:
++        config = _config_with_write_revision(tmp_path, "Walk")
+         config["service_uploader_start_mode"] = "lazy"
+         service = SupernoteService(config=config)
+         service.uploader = MagicMock()
+@@ -480,6 +513,7 @@ class TestServiceStart:
+                 "agent": "Sam",
+                 "notebook": "Walk",
+                 "content_type": "replace_pages",
++                "base_notebook_revision": "rev-current",
+                 "pages": [{"agent": "Sam", "content": "Page 1"}],
+             }
+         )
+@@ -863,7 +897,9 @@ class TestMainEntrypoint2:
+         The fix is to replace them directly on the service instance after construction.
+         """
+         # Arrange — create service then replace instance attrs with mocks
+-        service = SupernoteService(config=DEFAULT_CONFIG)
++        service = SupernoteService(
++            config=_config_with_write_revision(tmp_path, "Quick")
++        )
+         mock_uploader = AsyncMock()
+         mock_task_curator = AsyncMock()
+         mock_uploader.download_notebook = AsyncMock(return_value=b"mock_notebook_bytes")
+@@ -875,6 +911,7 @@ class TestMainEntrypoint2:
+             "notebook": "Quick",
+             "content": "some new content",
+             "content_type": "task_page_curate",
++            "base_notebook_revision": "rev-current",
+         }
+ 
+         # Act
+@@ -887,6 +924,7 @@ class TestMainEntrypoint2:
+                 "notebook": "Quick",
+                 "content": "some new content",
+                 "content_type": "task_page_curate",
++                "base_notebook_revision": "rev-current",
+                 "notebook_bytes": b"mock_notebook_bytes",
+             }
+         )
+@@ -898,7 +936,9 @@ class TestMainEntrypoint2:
+         tmp_path: Path,
+     ) -> None:
+         """content_type=replace_pages uses stable page replacement."""
+-        service = SupernoteService(config=DEFAULT_CONFIG)
++        service = SupernoteService(
++            config=_config_with_write_revision(tmp_path, "Quick")
++        )
+         mock_uploader = AsyncMock()
+         mock_uploader.download_notebook = AsyncMock(return_value=b"fake_notebook")
+         mock_uploader.upload_notebook = AsyncMock(return_value=True)
+@@ -908,6 +948,7 @@ class TestMainEntrypoint2:
+             "agent": "Sam",
+             "notebook": "Quick",
+             "content_type": "replace_pages",
++            "base_notebook_revision": "rev-current",
+             "pages": [
+                 {"agent": "Sam", "content": "Page 1"},
+                 {"agent": "Caroline", "content": "Page 2"},
+@@ -950,8 +991,12 @@ class TestMainEntrypoint2:
+         assert not _is_conflict_name("Walk.note", "Walk")
+ 
+     @pytest.mark.asyncio
+-    async def test_replace_pages_conflict_is_failed_without_retry(self) -> None:
+-        service = SupernoteService(config=DEFAULT_CONFIG)
++    async def test_replace_pages_conflict_is_failed_without_retry(
++        self, tmp_path: Path
++    ) -> None:
++        service = SupernoteService(
++            config=_config_with_write_revision(tmp_path, "Walk")
++        )
+         service.uploader = AsyncMock()
+         service.events = AsyncMock()
+         service._replace_pages_with_uploader = AsyncMock(
+@@ -963,6 +1008,7 @@ class TestMainEntrypoint2:
+                 "agent": "Sam",
+                 "notebook": "Walk",
+                 "content_type": "replace_pages",
++                "base_notebook_revision": "rev-current",
+                 "pages": [{"agent": "Sam", "content": "Page 1"}],
+             }
+         )
+@@ -976,9 +1022,11 @@ class TestMainEntrypoint2:
+ 
+     @pytest.mark.asyncio
+     async def test_replace_pages_upload_conflict_is_failed_without_fresh_retry(
+-        self,
++        self, tmp_path: Path
+     ) -> None:
+-        service = SupernoteService(config=DEFAULT_CONFIG)
++        service = SupernoteService(
++            config=_config_with_write_revision(tmp_path, "Walk")
++        )
+         service.uploader = AsyncMock()
+         service.events = AsyncMock()
+         service._replace_pages_with_uploader = AsyncMock(
+@@ -993,6 +1041,7 @@ class TestMainEntrypoint2:
+                     "agent": "Sam",
+                     "notebook": "Walk",
+                     "content_type": "replace_pages",
++                    "base_notebook_revision": "rev-current",
+                     "pages": [{"agent": "Sam", "content": "Page 1"}],
+                 }
+             )
+diff --git a/uv.lock b/uv.lock
+index eb8d117..f1654c4 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1003,14 +1003,18 @@ dev = [
+ 
+ [[package]]
+ name = "paia-contracts"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "../paia-contracts" }
+ dependencies = [
+     { name = "pydantic" },
++    { name = "rfc8785" },
+ ]
+ 
+ [package.metadata]
+-requires-dist = [{ name = "pydantic", specifier = ">=2.10" }]
++requires-dist = [
++    { name = "pydantic", specifier = ">=2.10" },
++    { name = "rfc8785", specifier = ">=0.1.4" },
++]
+ 
+ [package.metadata.requires-dev]
+ dev = [
+@@ -1503,6 +1507,15 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/8a/2e/e1798b8b248e1517e74c6cdf10dd6edd485044e7edf46b5f11ffcc5a0add/reportlab-4.4.10-py3-none-any.whl", hash = "sha256:5abc815746ae2bc44e7ff25db96814f921349ca814c992c7eac3c26029bf7c24", size = 1955400, upload-time = "2026-02-12T10:45:18.828Z" },
+ ]
+ 
++[[package]]
++name = "rfc8785"
++version = "0.1.4"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/ef/2f/fa1d2e740c490191b572d33dbca5daa180cb423c24396b856f5886371d8b/rfc8785-0.1.4.tar.gz", hash = "sha256:e545841329fe0eee4f6a3b44e7034343100c12b4ec566dc06ca9735681deb4da", size = 14321, upload-time = "2024-09-27T16:33:31.206Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/4d/78/119878110660b2ad709888c8a1614fce7e2fab39080ab960656dc8605bf6/rfc8785-0.1.4-py3-none-any.whl", hash = "sha256:520d690b448ecf0703691c76e1a34a24ddcd4fc5bc41d589cb7c58ec651bcd48", size = 9240, upload-time = "2024-09-27T16:33:29.683Z" },
++]
++
+ [[package]]
+ name = "rlpycairo"
+ version = "0.4.0"

@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-162-2026-04-16T08-28-12.975818+00-00",
+  "task_id": ".user-braydon-162",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.19,
+  "dimensions": {
+    "blocking_impact": 0.2,
+    "style_adherence": 0.5,
+    "intent_fidelity": 0.26,
+    "completeness": 0.08,
+    "efficiency": 0.25,
+    "downstream_usability": 0.08,
+    "correctness": 0.15,
+    "coordination_overhead": 0.15
+  },
+  "notes": "Task marked complete but fundamentally unusable. FLIP verification score of 0.26 (below 0.70 threshold) indicates the output does not meet acceptance criteria—a strong signal per evaluation guidelines. No artifacts were recorded despite task completion claim. The agent explored existing UserBoard context but produced no deliverables, recorded artifacts, or evidence of actual implementation. Coredrift yellow warning on churn_loc/hardening_in_core suggests scope/budget misalignment. While the agent correctly followed workgraph protocol (no unauthorized subagents), the 1.5-minute execution time combined with zero recorded output suggests either the work was not actually performed, acceptance criteria remain dangerously underspecified (task contract lists empty acceptance array), or artifact capture failed. Downstream tasks cannot consume this output without substantial rework.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:28:12.975818+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

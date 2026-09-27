@@ -1,0 +1,21 @@
+{
+  "id": "eval-.user-braydon-106-2026-04-16T04-45-53.626138+00-00",
+  "task_id": ".user-braydon-106",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.48,
+  "dimensions": {
+    "coordination_overhead": 0.4,
+    "completeness": 0.45,
+    "efficiency": 0.6,
+    "style_adherence": 0.5,
+    "downstream_usability": 0.35,
+    "blocking_impact": 0.4,
+    "correctness": 0.55
+  },
+  "notes": "The agent examined an existing user board implementation and verified it works (tests passing, UI responsive, paia-events connectivity confirmed). However, the task was left in an ambiguous state with significant unresolved issues. Critical failures: (1) No acceptance criteria were defined in the contract (empty acceptance array), making task completion unmeasurable; the agent should have flagged this rather than proceeding. (2) Contract violation: LOC churn is 962 lines vs. max_loc=800 budget; the agent acknowledged this but marked the task done anyway. (3) Coredrift status remains yellow (churn_loc, hardening_in_core); auto_followups=true was set but never triggered. (4) No artifacts recorded; it's unclear what the actual deliverable is or what changed. (5) The agent attempted to fix the contract violation using wg edit but abandoned the attempt after failure, rather than exploring alternatives. The task objective—'persistent conversation surface'—is vague and was never clarified. Work was efficient (3 min turnaround) and the agent avoided unauthorized subagents, but incomplete resolution and poor handoff documentation create downstream risk. The task should either have been split (to respect max_loc budget), acceptance criteria explicitly added before marking done, or follow-up tasks spawned per the auto_followups contract.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:45:53.626138+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

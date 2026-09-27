@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-151-2026-04-16T07-45-06.103984+00-00",
+  "task_id": ".user-braydon-151",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.9,
+  "dimensions": {
+    "hallucination_rate": 0.12,
+    "requirement_coverage": 0.9,
+    "specificity_match": 0.8,
+    "semantic_match": 0.95
+  },
+  "notes": "The inferred task accurately captures the core objective and all three acceptance criteria (interactive interface launch, command execution, session persistence). The core semantic domain is identical. Minor hallucination: the inferred version asserts the need to 'fix contract violations in the task definition, particularly around auto_followups' when the actual task shows auto_followups=false correctly set with no indication of violations needing repair. The inferred version is more detailed/specific than the original (expanding 'User board: braydon' into a full description), which adds clarity but diverges slightly from the original's sparse specificity level. Overall high fidelity with one contained misinterpretation about contract state.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Create a terminal-based user board interface for the paia-supernote service. The user board should provide an interactive conversational interface that supports basic commands including status, events, help, and write operations. Ensure session persistence works correctly. The interface should launch successfully and handle user interactions properly. Fix any contract violations in the task definition, particularly around auto_followups and acceptance criteria to prevent infinite spawning issues. All tests should pass.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:45:06.103984+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

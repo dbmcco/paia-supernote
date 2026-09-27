@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-75-2026-04-16T02-44-31.753119+00-00",
+  "task_id": ".user-braydon-75",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.08,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "semantic_match": 0.1,
+    "hallucination_rate": 1.0,
+    "specificity_match": 0.2
+  },
+  "notes": "The actual task is to create/maintain a user board (persistent conversation surface) for braydon. The inferred task is a system diagnostics check of the supernote integration (status verification, dependencies, sync folder). These are fundamentally different tasks with zero overlapping requirements. The inference appears to have reconstructed from context unrelated to the actual ground-truth task, resulting in complete hallucination of requirements and near-zero semantic overlap.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Check the current status of the supernote integration system and verify that all components are working correctly. Confirm that the supernote partner app sync folder is accessible, dependencies are installed, and the system is ready for note processing. Report back with a brief status update but don't create any files or make any changes.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:44:31.753119+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

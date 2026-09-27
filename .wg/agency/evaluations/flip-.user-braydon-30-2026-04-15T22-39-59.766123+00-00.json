@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-30-2026-04-15T22-39-59.766123+00-00",
+  "task_id": ".user-braydon-30",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.18,
+  "dimensions": {
+    "requirement_coverage": 0.1,
+    "semantic_match": 0.2,
+    "specificity_match": 0.3,
+    "hallucination_rate": 0.85
+  },
+  "notes": "The inferred task fundamentally misinterprets the actual task. The ACTUAL task is minimalist: simply create/maintain a user board for braydon (a persistent conversation surface) with no explicit acceptance criteria or file/metric constraints. The INFERRED task reconstructs a completely different scenario involving code review, contract violations, drift metrics (churn_loc, hardening_in_core), and coredrift remediation—none of which appear in the original contract. Nearly all specific requirements in the inference (violations, metrics, compliance work) are hallucinated. The only possible overlap is that both involve 'user board' in the title, but they describe entirely different work streams.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Review the existing user board implementation and address contract violations. Focus on resolving code quality issues related to churn_loc and hardening_in_core metrics that are causing coredrift yellow status. Analyze the current implementation and make necessary adjustments to bring the code into compliance with the contract requirements, or recommend splitting the task if the scope exceeds max_files/max_loc budgets.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T22:39:59.766123+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

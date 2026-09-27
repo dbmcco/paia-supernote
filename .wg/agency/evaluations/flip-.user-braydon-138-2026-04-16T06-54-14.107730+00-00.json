@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-138-2026-04-16T06-54-14.107730+00-00",
+  "task_id": ".user-braydon-138",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.52,
+  "dimensions": {
+    "requirement_coverage": 0.35,
+    "specificity_match": 0.15,
+    "hallucination_rate": 0.75,
+    "semantic_match": 0.9
+  },
+  "notes": "The actual task is extremely minimal (just 'User board for braydon — persistent conversation surface') while the inferred version is highly specific with multiple concrete features (status monitoring, event tracking, paia-events integration, CLI entry point, branded UI, etc.). Both share the same semantic core (building a conversational user board), but the inferred version speculates about ~75% of its requirements beyond what the actual task states. The vagueness of the original task description means the evaluator had to infer most implementation details from the output, rather than validating against stated requirements.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board conversational interface for the paia-supernote project with the following requirements: persistent conversation functionality, status monitoring capabilities, event tracking integration with paia-events, content writing features, session persistence, and a CLI entry point. The interface should display a branded UI and gracefully handle non-interactive environments. Ensure the implementation is fully functional and tested.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:54:14.107730+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

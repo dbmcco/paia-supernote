@@ -1,0 +1,37 @@
+diff --git a/src/paia_supernote/organizer_ui.py b/src/paia_supernote/organizer_ui.py
+index 0ed66c9..97a8f90 100644
+--- a/src/paia_supernote/organizer_ui.py
++++ b/src/paia_supernote/organizer_ui.py
+@@ -56,7 +56,7 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
+         name = str(notebook.get("name") or "")
+         active = " active" if name == current else ""
+         items.append(
+-            f'<a class="notebook{active}" href="/notebooks/{quote(name)}">{escape(name)}</a>'
++            f'<a class="notebook{active}" href="/organizer?notebook={quote(name)}">{escape(name)}</a>'
+         )
+     return "\n".join(items)
+ 
+diff --git a/tests/test_organizer_ui.py b/tests/test_organizer_ui.py
+index b36a0bb..4c7c43f 100644
+--- a/tests/test_organizer_ui.py
++++ b/tests/test_organizer_ui.py
+@@ -60,6 +60,19 @@ def test_render_index_includes_page_grid_zoom_and_filters() -> None:
+     assert html.count('class="page-tile"') == 2
+ 
+ 
++def test_render_index_sidebar_links_select_notebooks_through_organizer_route() -> None:
++    organizer_ui = _ui_module()
++
++    html = organizer_ui.render_index(
++        notebooks=[{"name": "LFW"}, {"name": "Quick Note"}],
++        snapshot=_snapshot_payload(),
++    )
++
++    assert 'href="/organizer?notebook=LFW"' in html
++    assert 'href="/organizer?notebook=Quick%20Note"' in html
++    assert 'href="/notebooks/' not in html
++
++
+ def test_render_index_marks_metadata_badges_per_page() -> None:
+     organizer_ui = _ui_module()
+ 

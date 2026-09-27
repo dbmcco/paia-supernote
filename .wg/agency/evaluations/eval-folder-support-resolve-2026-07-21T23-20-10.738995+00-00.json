@@ -1,0 +1,22 @@
+{
+  "id": "eval-folder-support-resolve-2026-07-21T23-20-10.738995+00-00",
+  "task_id": "folder-support-resolve",
+  "agent_id": "f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e",
+  "role_id": "52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925",
+  "tradeoff_id": "1caa4c3cf3d982cfc9e191da340d39b8b831f0b9bda2c740352b93f43fb64542",
+  "score": 0.7,
+  "dimensions": {
+    "style_adherence": 0.85,
+    "coordination_overhead": 0.45,
+    "downstream_usability": 0.65,
+    "efficiency": 0.65,
+    "completeness": 0.7,
+    "blocking_impact": 0.8,
+    "correctness": 0.75
+  },
+  "notes": "Agent reported a complete implementation with end-to-end verification, pushed commit, drift green, and 453 passing tests, which strongly suggests the core acceptance was met. However, no artifacts were recorded, and the task decomposition state is confusing: a generic FLIP subtask remains InProgress, downstream subtasks were duplicated/created, and the parent was marked done despite unresolved decomposition state. Good adherence to testing and push workflow, but handoff/decomposition hygiene and evidence quality were weaker.",
+  "evaluator": "pi:openai-codex:gpt-5.5",
+  "timestamp": "2026-07-21T23:20:10.738995+00:00",
+  "model": "sonnet",
+  "source": "llm"
+}

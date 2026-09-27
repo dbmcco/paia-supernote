@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-193-2026-04-16T10-23-26.300517+00-00",
+  "task_id": ".user-braydon-193",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.82,
+  "dimensions": {
+    "specificity_match": 0.8,
+    "hallucination_rate": 0.1,
+    "requirement_coverage": 0.7,
+    "semantic_match": 0.9
+  },
+  "notes": "The inferred task correctly identifies the core technical problem and solution (async main function + setuptools entry point + synchronous wrapper). It captures 2 of 3 acceptance criteria: CLI execution and async handling. However, it misses the 'all tests pass' acceptance criterion, which is a critical requirement. The inferred version also omits the domain context ('persistent conversation surface') and specific files to touch, though these are less essential for reconstruction. Technical inferences about setuptools configuration are well-grounded and not hallucinated. Overall strong semantic match with minor coverage gaps.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Fix the user board CLI entry point that is currently not working. The issue appears to be that the main() function is async but the setuptools scripts configuration cannot handle async entry points directly. Add a proper synchronous wrapper function to resolve this so the CLI command works correctly.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:23:26.300517+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

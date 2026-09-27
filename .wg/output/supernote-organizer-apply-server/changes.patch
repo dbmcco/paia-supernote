@@ -1,0 +1,259 @@
+diff --git a/src/paia_supernote/organizer_server.py b/src/paia_supernote/organizer_server.py
+index 6e90181..c3bbd7c 100644
+--- a/src/paia_supernote/organizer_server.py
++++ b/src/paia_supernote/organizer_server.py
+@@ -32,6 +32,20 @@ def make_organizer_handler(
+                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                 )
+ 
++        def do_POST(self) -> None:
++            parsed = urlparse(self.path)
++            try:
++                self._route_post(parsed.path, self._read_json_body())
++            except ValueError as exc:
++                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
++            except KeyError as exc:
++                self._send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
++            except Exception as exc:
++                self._send_json(
++                    {"error": str(exc)},
++                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
++                )
++
+         def log_message(self, _format: str, *_args: Any) -> None:
+             return
+ 
+@@ -64,6 +78,39 @@ def make_organizer_handler(
+ 
+             self.send_error(HTTPStatus.NOT_FOUND)
+ 
++        def _route_post(self, path: str, payload: dict[str, Any]) -> None:
++            parts = [unquote(part) for part in path.strip("/").split("/") if part]
++            if (
++                len(parts) == 5
++                and parts[:2] == ["api", "notebooks"]
++                and parts[3] == "reorder"
++                and parts[4] in {"preview", "apply"}
++            ):
++                expected_revision = str(payload.get("expected_revision") or "")
++                page_order = payload.get("page_order")
++                if not expected_revision or not isinstance(page_order, list):
++                    raise ValueError("expected_revision and page_order are required")
++                page_order = [str(page_id) for page_id in page_order]
++                if parts[4] == "preview":
++                    result = self._run_async(
++                        self.organizer_api.preview_reorder(
++                            parts[2],
++                            expected_revision=expected_revision,
++                            page_order=page_order,
++                        )
++                    )
++                else:
++                    result = self._run_async(
++                        self.organizer_api.apply_reorder(
++                            parts[2],
++                            expected_revision=expected_revision,
++                            page_order=page_order,
++                        )
++                    )
++                self._send_reorder_result(result)
++                return
++            self.send_error(HTTPStatus.NOT_FOUND)
++
+         def _send_organizer(self, query: dict[str, list[str]]) -> None:
+             notebooks = self._run_async(self.organizer_api.list_notebooks())
+             selected = _first(query.get("notebook"))
+@@ -93,6 +140,16 @@ def make_organizer_handler(
+             self.end_headers()
+             self.wfile.write(body)
+ 
++        def _send_reorder_result(self, result: dict[str, Any]) -> None:
++            status = HTTPStatus.OK
++            if result.get("ok") is False:
++                reason = result.get("reason")
++                if reason == "stale_revision":
++                    status = HTTPStatus.CONFLICT
++                elif reason in {"invalid_page_order", "unsupported_link_metadata"}:
++                    status = HTTPStatus.UNPROCESSABLE_ENTITY
++            self._send_json(result, status=status)
++
+         def _send_file(self, path: Path, media_type: str) -> None:
+             body = path.read_bytes()
+             self.send_response(HTTPStatus.OK)
+@@ -101,6 +158,17 @@ def make_organizer_handler(
+             self.end_headers()
+             self.wfile.write(body)
+ 
++        def _read_json_body(self) -> dict[str, Any]:
++            length = int(self.headers.get("Content-Length") or "0")
++            raw_body = self.rfile.read(length)
++            try:
++                payload = json.loads(raw_body.decode("utf-8"))
++            except json.JSONDecodeError as exc:
++                raise ValueError("malformed JSON body") from exc
++            if not isinstance(payload, dict):
++                raise ValueError("JSON body must be an object")
++            return payload
++
+     return OrganizerRequestHandler
+ 
+ 
+diff --git a/tests/test_organizer_server.py b/tests/test_organizer_server.py
+index 633b006..9faf204 100644
+--- a/tests/test_organizer_server.py
++++ b/tests/test_organizer_server.py
+@@ -5,7 +5,7 @@ import threading
+ from http.server import ThreadingHTTPServer
+ from pathlib import Path
+ from urllib.error import HTTPError
+-from urllib.request import urlopen
++from urllib.request import Request, urlopen
+ 
+ import pytest
+ from PIL import Image
+@@ -25,6 +25,10 @@ class _FakeOrganizerApi:
+         self.image_path = image_path
+         self.snapshots: list[str] = []
+         self.images: list[tuple[str, str, float]] = []
++        self.preview_result: dict = {"ok": True}
++        self.apply_result: dict = {"ok": True, "snapshot": {}}
++        self.preview_requests: list[tuple[str, str, list[str]]] = []
++        self.apply_requests: list[tuple[str, str, list[str]]] = []
+ 
+     async def list_notebooks(self) -> list[dict]:
+         return [
+@@ -65,6 +69,26 @@ class _FakeOrganizerApi:
+             "cache_hit": False,
+         }
+ 
++    async def preview_reorder(
++        self,
++        notebook_name: str,
++        *,
++        expected_revision: str,
++        page_order: list[str],
++    ) -> dict:
++        self.preview_requests.append((notebook_name, expected_revision, page_order))
++        return self.preview_result
++
++    async def apply_reorder(
++        self,
++        notebook_name: str,
++        *,
++        expected_revision: str,
++        page_order: list[str],
++    ) -> dict:
++        self.apply_requests.append((notebook_name, expected_revision, page_order))
++        return self.apply_result
++
+ 
+ class _RunningServer:
+     def __init__(self, api: _FakeOrganizerApi, *, async_runner=None) -> None:
+@@ -94,6 +118,20 @@ def _get_text(url: str) -> str:
+         return response.read().decode("utf-8")
+ 
+ 
++def _post_json(url: str, payload: dict) -> tuple[int, dict]:
++    request = Request(
++        url,
++        data=json.dumps(payload).encode("utf-8"),
++        headers={"Content-Type": "application/json"},
++        method="POST",
++    )
++    try:
++        with urlopen(request, timeout=5) as response:
++            return response.status, json.loads(response.read().decode("utf-8"))
++    except HTTPError as exc:
++        return exc.code, json.loads(exc.read().decode("utf-8"))
++
++
+ def test_api_routes_use_injected_async_runner(tmp_path: Path) -> None:
+     api = _FakeOrganizerApi(tmp_path / "page.png")
+     calls = []
+@@ -157,3 +195,86 @@ def test_unknown_route_returns_404(tmp_path: Path) -> None:
+             urlopen(f"{server.base_url}/missing", timeout=5)
+ 
+     assert exc_info.value.code == 404
++
++
++def test_preview_reorder_post_route_returns_api_result(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    api.preview_result = {"ok": True, "revision": "rev-1"}
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/reorder/preview",
++            {"expected_revision": "rev-1", "page_order": ["page-a"]},
++        )
++
++    assert status == 200
++    assert body == {"ok": True, "revision": "rev-1"}
++    assert api.preview_requests == [("LFW", "rev-1", ["page-a"])]
++
++
++def test_apply_reorder_post_route_returns_api_result(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    api.apply_result = {"ok": True, "snapshot": {"notebook_name": "LFW"}}
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/reorder/apply",
++            {"expected_revision": "rev-1", "page_order": ["page-a"]},
++        )
++
++    assert status == 200
++    assert body == {"ok": True, "snapshot": {"notebook_name": "LFW"}}
++    assert api.apply_requests == [("LFW", "rev-1", ["page-a"])]
++
++
++def test_reorder_post_route_maps_stale_revision_to_conflict(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    api.preview_result = {
++        "ok": False,
++        "reason": "stale_revision",
++        "current_revision": "rev-2",
++    }
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/reorder/preview",
++            {"expected_revision": "rev-1", "page_order": ["page-a"]},
++        )
++
++    assert status == 409
++    assert body["reason"] == "stale_revision"
++
++
++def test_reorder_post_route_maps_invalid_order_to_unprocessable(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    api.preview_result = {
++        "ok": False,
++        "reason": "invalid_page_order",
++        "error": "bad order",
++    }
++
++    with _RunningServer(api) as server:
++        status, body = _post_json(
++            f"{server.base_url}/api/notebooks/LFW/reorder/preview",
++            {"expected_revision": "rev-1", "page_order": ["page-a"]},
++        )
++
++    assert status == 422
++    assert body["reason"] == "invalid_page_order"
++
++
++def test_reorder_post_route_rejects_malformed_json(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++    request = Request(
++        "http://example.invalid",
++        data=b"{not-json",
++        headers={"Content-Type": "application/json"},
++        method="POST",
++    )
++
++    with _RunningServer(api) as server:
++        request.full_url = f"{server.base_url}/api/notebooks/LFW/reorder/preview"
++        with pytest.raises(HTTPError) as exc_info:
++            urlopen(request, timeout=5)
++
++    assert exc_info.value.code == 400

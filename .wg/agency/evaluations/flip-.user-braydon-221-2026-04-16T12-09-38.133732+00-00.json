@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-221-2026-04-16T12-09-38.133732+00-00",
+  "task_id": ".user-braydon-221",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.62,
+  "dimensions": {
+    "semantic_match": 0.75,
+    "specificity_match": 0.25,
+    "hallucination_rate": 0.4,
+    "requirement_coverage": 0.7
+  },
+  "notes": "The actual task is extremely minimal (just 'persistent conversation surface' for braydon's user board with no acceptance criteria or specifics), while the inferred version is heavily over-specified with implementation details: terminal-based interface, event integration, status monitoring, and dependency compatibility constraints. The core semantic intent (user board, persistent) is captured, but the inferred version fabricates at least 40% of its content — specific technical features like event handling and status monitoring are not mentioned in the original sparse task description. The original task essentially delegates all implementation decisions to the agent; the inferred version assumes architectural choices not stated.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board component for the paia-supernote project that provides an interactive terminal-based interface. The user board should include: 1) Event integration capabilities to handle system events, 2) Status monitoring functionality to track system state, and 3) Persistent conversation history storage and retrieval. The implementation should be integrated with the existing codebase and maintain compatibility with the current dependency structure.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T12:09:38.133732+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

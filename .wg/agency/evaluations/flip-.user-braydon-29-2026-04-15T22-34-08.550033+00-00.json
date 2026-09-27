@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-29-2026-04-15T22-34-08.550033+00-00",
+  "task_id": ".user-braydon-29",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.5,
+  "dimensions": {
+    "semantic_match": 0.65,
+    "specificity_match": 0.35,
+    "requirement_coverage": 0.4,
+    "hallucination_rate": 0.55
+  },
+  "notes": "The inferred task captures the core semantic goal of user engagement and conversation, but diverges significantly from the actual task. The actual task is deliberately abstract ('persistent conversation surface') with specific technical parameters (max_files: 25, max_loc: 800, pit_stop_after: 3), while the inferred version adds substantial project-specific context (paia-supernote focus, priorities discussion, specific workflow steps) not present in the original. The inferred version also defines completion criteria that aren't in the actual contract. More than half of the inferred requirements appear to be reasonable but non-explicit inferences rather than direct mappings from the original task specification.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Start a user board session to engage with Braydon about the paia-supernote project. Begin an interactive session to understand what specific area or functionality within the paia-supernote project the user wants to focus on or work on next. Wait for user direction on priorities and mark the task complete once engagement is established and the user has been prompted for their focus area.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T22:34:08.550033+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

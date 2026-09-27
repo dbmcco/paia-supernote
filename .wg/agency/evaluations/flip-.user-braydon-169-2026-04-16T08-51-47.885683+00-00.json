@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-169-2026-04-16T08-51-47.885683+00-00",
+  "task_id": ".user-braydon-169",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.55,
+  "dimensions": {
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.8,
+    "hallucination_rate": 0.7,
+    "semantic_match": 0.6
+  },
+  "notes": "The actual task is intentionally vague ('User board: braydon — persistent conversation surface') with minimal constraints, while the inferred task reconstructs specific implementation details (terminal-based interface, paia-events integration, test passing, interactive/non-interactive handling) that aren't explicitly stated in the original. The inferred version captures the core objective but adds ~5-6 fabricated requirements that an evaluator would reasonably infer from the codebase and work product, not from the task description itself. This mismatch occurs because actual tasks in this system are abstract/minimal, while inferred tasks reflect concrete implementation patterns.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Run and verify the user board functionality for the paia-supernote system. Check that the terminal-based conversational interface is working correctly, connects to paia-events properly, and that all tests are passing. Ensure it handles both interactive and non-interactive environments appropriately and is ready for use as a persistent conversation surface.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:51:47.885683+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

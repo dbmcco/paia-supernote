@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-131-2026-04-16T06-29-48.498702+00-00",
+  "task_id": ".user-braydon-131",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.56,
+  "dimensions": {
+    "completeness": 0.6,
+    "downstream_usability": 0.65,
+    "correctness": 0.65,
+    "coordination_overhead": 0.6,
+    "efficiency": 0.5,
+    "style_adherence": 0.7,
+    "blocking_impact": 0.75,
+    "intent_fidelity": 0.39
+  },
+  "notes": "Work completed verification: tests passing, interface launches with PAIA branding, connects to paia-events, provides status/events/conversation functionality. However, significant caution signals warrant conservative scoring. FLIP score of 0.39 (well below 0.70 threshold) contradicts passing verification—suggests implementation drifted from intended approach or quality targets despite functional correctness. Coredrift yellow warning (churn_loc, hardening_in_core) indicates unnecessary complexity introduced; recommendation to split task or adjust budgets suggests scope/approach efficiency issues. Task contract critically underspecified: acceptance criteria are empty, making true completeness assessment impossible. Task recovery from orphaned state suggests prior coordination friction. Strengths: functional verification passed, quick execution, proper test coverage, PAIA integration. Weaknesses: FLIP quality signal, coredrift hardening indicator, underspecified acceptance criteria making it impossible to validate against requirements. Recommendation: Future similar tasks must define acceptance criteria explicitly. Investigate FLIP vs. verification contradiction—either FLIP is a false alarm or verification missed systemic issues.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:29:48.498702+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-73-2026-04-16T02-39-23.580950+00-00",
+  "task_id": ".user-braydon-73",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.76,
+  "dimensions": {
+    "requirement_coverage": 0.75,
+    "specificity_match": 0.45,
+    "semantic_match": 0.88,
+    "hallucination_rate": 0.1
+  },
+  "notes": "Both describe implementing a user board for braydon, but diverge significantly in specificity. The inferred version captures the core requirements (runs without errors, session persistence, commands implemented) but abstracts away critical details: (1) Missing the paia-events service connection requirement (localhost:3511) entirely, (2) Bundles specific commands (status, events, write, help) under generic 'all required commands' without detailing their individual behaviors, (3) Lacks concrete details like session file location (~/.paia-supernote-session.json) and project constraints (max files: 25, max LOC: 800). The inferred version also adds minor reasonable engineering assumptions (module imports, proper initialization) that, while sensible, aren't explicitly in the acceptance criteria. Overall, the evaluator reconstructed the spirit of the task but missed implementation-critical specifics.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board for braydon that meets the following acceptance criteria: 1) The user board module imports correctly, 2) It initializes properly when instantiated, 3) It runs without errors, 4) It includes session persistence functionality, 5) Documentation exists for the implementation, and 6) All required commands are implemented and functional. Ensure the implementation is complete and all functionality works as expected.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:39:23.580950+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

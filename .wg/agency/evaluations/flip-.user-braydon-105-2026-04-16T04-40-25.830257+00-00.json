@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-105-2026-04-16T04-40-25.830257+00-00",
+  "task_id": ".user-braydon-105",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.59,
+  "dimensions": {
+    "semantic_match": 0.65,
+    "specificity_match": 0.2,
+    "hallucination_rate": 0.65,
+    "requirement_coverage": 0.85
+  },
+  "notes": "The actual task is extremely minimal—just 'User board: braydon — persistent conversation surface'—with no domain, implementation, or technical details specified. The inferred version reconstructed from git outputs adds substantial detail: paia-supernote context, terminal-based UI, specific commands (status/events/write/help), run_user_board.py script, and contract fixes. While these inferences are reasonable based on the implementations shown in git status and are likely correct about what was built, most of these specifics are not stated in the actual task description, making them hallucinations relative to the original. The core semantic match (user board + persistent conversation surface) is captured, but the inference dramatically over-specifies the vague original.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board interface for the paia-supernote system. Create a terminal-based UI that provides commands for status, events, write, and help functionality. The user board should serve as a persistent conversation surface for user interaction with paia-supernote. Ensure the implementation is launched via a run_user_board.py script and fix any contract configuration issues that arise during development. The solution should provide a clean interface for paia-supernote interaction and be ready for the user to interact with.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:40:25.830257+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

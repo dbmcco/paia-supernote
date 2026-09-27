@@ -1,0 +1,276 @@
+id: 20470d55b058d9432ed850fc4f767fd6a7d9180c11b17ca94b466611fa387861
+name: composition-cache-search
+description: Query the composition cache for pre-composed agents, rank by fit score, return best match. Used in performance mode.
+category: novel
+content: !name composition-cache-search
+performance:
+  task_count: 65
+  avg_score: 0.5478461538461539
+  evaluations:
+  - score: 0.5
+    task_id: .assign-planforge-root-paia
+    timestamp: 2026-04-14T19:01:07.297789+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-setup-project-structure
+    timestamp: 2026-04-14T19:03:47.889997+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-implement-fsevents-watcher
+    timestamp: 2026-04-14T19:06:36.137950+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-planforge-root-paia
+    timestamp: 2026-04-14T19:07:38.327727+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-implement-pil-page
+    timestamp: 2026-04-14T19:08:45.731726+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.665
+    task_id: setup-project-structure
+    timestamp: 2026-04-14T19:09:10.242687+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.665
+    task_id: setup-project-structure
+    timestamp: 2026-04-14T19:09:10.808129+00:00
+    context_id: experiment:novel:eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+  - score: 0.5
+    task_id: .assign-.verify-setup-project-structure
+    timestamp: 2026-04-14T19:09:19.194154+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-ratta-rle
+    timestamp: 2026-04-14T19:10:49.000037+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-implement-ratta-rle-2
+    timestamp: 2026-04-14T19:11:21.836272+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-fsevents-watcher
+    timestamp: 2026-04-14T19:11:39.301221+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.97
+    task_id: setup-project-structure
+    timestamp: 2026-04-14T19:16:43.257056+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.97
+    task_id: setup-project-structure
+    timestamp: 2026-04-14T19:16:43.805173+00:00
+    context_id: experiment:novel:eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+  - score: 0.5
+    task_id: .assign-implement-playwright-uploader
+    timestamp: 2026-04-14T19:17:50.901796+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-vision-reader
+    timestamp: 2026-04-14T19:19:29.951293+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-pil-page
+    timestamp: 2026-04-14T19:21:18.259846+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-ratta-rle-2
+    timestamp: 2026-04-14T19:22:36.196973+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-calibrate-font-sizes
+    timestamp: 2026-04-14T19:24:02.793857+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.49
+    task_id: .verify-implement-vision-reader
+    timestamp: 2026-04-14T19:27:05.127599+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.49
+    task_id: .verify-implement-vision-reader
+    timestamp: 2026-04-14T19:27:05.612931+00:00
+    context_id: experiment:novel:eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+  - score: 0.5
+    task_id: .assign-implement-paia-events
+    timestamp: 2026-04-14T19:28:22.733222+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-playwright-uploader
+    timestamp: 2026-04-14T19:30:00.600190+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.93
+    task_id: .verify-implement-vision-reader
+    timestamp: 2026-04-14T19:31:23.817856+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.93
+    task_id: .verify-implement-vision-reader
+    timestamp: 2026-04-14T19:31:25.379252+00:00
+    context_id: experiment:novel:eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+  - score: 0.5
+    task_id: .assign-implement-task-page
+    timestamp: 2026-04-14T19:33:39.571450+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-implement-snippet-detector
+    timestamp: 2026-04-14T19:33:39.606544+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-implement-folio-integration
+    timestamp: 2026-04-14T19:33:39.595736+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-paia-events
+    timestamp: 2026-04-14T19:36:45.259876+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-implement-service-daemon
+    timestamp: 2026-04-14T19:38:21.080616+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-snippet-detector
+    timestamp: 2026-04-14T19:38:21.061024+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-folio-integration
+    timestamp: 2026-04-14T19:39:13.358529+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-test-end-to
+    timestamp: 2026-04-14T19:41:30.348839+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-implement-service-daemon
+    timestamp: 2026-04-14T19:43:06.615416+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-repair-task-curator-pages-19-22
+    timestamp: 2026-04-15T21:12:36.435858+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-repair-task-curator-pages-19-22
+    timestamp: 2026-04-15T21:20:40.782297+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-drift-self-update-.user-braydon-51
+    timestamp: 2026-04-16T01:00:12.485189+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-drift-self-update-.user-braydon-51
+    timestamp: 2026-04-16T01:06:42.262673+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-durable-ingest-enrich
+    timestamp: 2026-04-17T15:18:12.566116+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-supernote-durable-ingest-enrich
+    timestamp: 2026-04-17T15:29:14.354952+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-organizer-snapshot
+    timestamp: 2026-06-08T14:00:22.287604+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.72
+    task_id: supernote-organizer-snapshot
+    timestamp: 2026-06-08T14:05:19.036139+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.72
+    task_id: supernote-organizer-snapshot
+    timestamp: 2026-06-08T14:05:19.290441+00:00
+    context_id: experiment:novel:eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+  - score: 0.78
+    task_id: supernote-organizer-snapshot
+    timestamp: 2026-06-08T14:06:21.539310+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.78
+    task_id: supernote-organizer-snapshot
+    timestamp: 2026-06-08T14:06:21.814179+00:00
+    context_id: experiment:novel:eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.root
+    timestamp: 2026-07-19T17:31:55.550193+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-supernote-organizer-reorder
+    timestamp: 2026-07-19T17:33:33.932404+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-supernote-organizer-web
+    timestamp: 2026-07-19T17:34:33.122458+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-supernote-organizer-image
+    timestamp: 2026-07-19T17:34:33.341286+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-supernote-organizer-reorder
+    timestamp: 2026-07-19T17:34:33.404813+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-.verify-supernote-organizer-final
+    timestamp: 2026-07-19T17:34:33.542041+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.ingest-diff
+    timestamp: 2026-07-19T17:34:48.868392+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.surface-adapters
+    timestamp: 2026-07-19T17:34:49.100441+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.handoff
+    timestamp: 2026-07-19T17:34:49.306061+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.write-safety
+    timestamp: 2026-07-19T17:35:03.705616+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.structured-errors
+    timestamp: 2026-07-19T17:35:03.945097+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.adversarial-review
+    timestamp: 2026-07-19T17:35:04.052229+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.cleanup-docs
+    timestamp: 2026-07-19T17:35:04.210358+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.unit-tests
+    timestamp: 2026-07-19T17:35:20.186970+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.final-gates
+    timestamp: 2026-07-19T17:35:20.404280+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.read-contract
+    timestamp: 2026-07-19T17:35:20.555393+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.fix-loop
+    timestamp: 2026-07-19T17:35:20.759780+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.integration-tests
+    timestamp: 2026-07-19T17:35:28.321609+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-drift-self-update-supernote-cloud-ledger.root
+    timestamp: 2026-07-19T17:35:28.401513+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-fix-model
+    timestamp: 2026-07-19T17:39:52.405876+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+  - score: 0.5
+    task_id: .assign-supernote-cloud-ledger.storage
+    timestamp: 2026-07-19T17:41:27.251641+00:00
+    context_id: a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c
+lineage:
+  generation: 0
+  created_by: human
+  created_at: 2026-04-14T18:52:50.213190Z
+access_control:
+  owner: local
+  policy: open

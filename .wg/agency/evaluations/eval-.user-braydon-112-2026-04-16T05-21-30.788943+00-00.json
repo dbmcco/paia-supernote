@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-112-2026-04-16T05-21-30.788943+00-00",
+  "task_id": ".user-braydon-112",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.77,
+  "dimensions": {
+    "correctness": 0.94,
+    "completeness": 0.82,
+    "downstream_usability": 0.78,
+    "blocking_impact": 0.84,
+    "intent_fidelity": 0.76,
+    "coordination_overhead": 0.71,
+    "efficiency": 0.68,
+    "style_adherence": 0.62
+  },
+  "notes": "Agent successfully verified all 5 acceptance criteria and achieved FLIP score 0.76 (above threshold). UserBoard class imports correctly, script connects to paia-events, UI displays, commands function, and session persistence works. However, task log reveals scope drift: coredrift warnings flag 'churn_loc, hardening_in_core, scope_drift' with notes about 'out-of-scope file changes.' Git status shows modifications to main.py, reader.py, task_curator.py beyond the specified touch files (user_board.py, run_user_board.py, test_user_board.py). Task log also indicates agent discovered an 'existing comprehensive terminal-based conversation interface' already implemented—unclear how much incremental work was required vs. verification of existing code. Completion in 2m 20s is either efficient verification or insufficient depth. Strengths: all criteria verified cleanly, no functional errors, FLIP passed, autonomous completion. Weaknesses: scope drift/style constraint violations, broader file changes than contract specified, unclear incremental contribution given pre-existing implementation. Score reflects solid verification work with notable scope adherence concerns.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:21:30.788943+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

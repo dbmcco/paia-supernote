@@ -1,0 +1,247 @@
+diff --git a/src/paia_supernote/organizer_api.py b/src/paia_supernote/organizer_api.py
+index 48af685..4bcf06b 100644
+--- a/src/paia_supernote/organizer_api.py
++++ b/src/paia_supernote/organizer_api.py
+@@ -29,6 +29,7 @@ class OrganizerApi:
+         self.snapshot_loader = snapshot_loader
+         self.image_cache = image_cache
+         self.page_renderer = page_renderer
++        self._snapshots: dict[tuple[str, str], NotebookSnapshot] = {}
+ 
+     async def list_notebooks(self) -> list[dict[str, Any]]:
+         entries = await _list_note_entries(self.uploader)
+@@ -57,8 +58,9 @@ class OrganizerApi:
+         page_id: str,
+         *,
+         scale: float,
++        revision: str | None = None,
+     ) -> dict[str, Any]:
+-        snapshot = await self._load_snapshot(notebook_name)
++        snapshot = await self._snapshot_for_image(notebook_name, revision)
+         if page_id not in snapshot.pages:
+             raise KeyError(f"unknown page_id: {page_id}")
+         cached = self.image_cache.get_or_render(
+@@ -213,7 +215,26 @@ class OrganizerApi:
+ 
+     async def _load_snapshot(self, notebook_name: str) -> NotebookSnapshot:
+         note_bytes = await self.uploader.download_notebook(f"{notebook_name}.note")
+-        return self.snapshot_loader(notebook_name, note_bytes)
++        snapshot = self.snapshot_loader(notebook_name, note_bytes)
++        self._snapshots[(snapshot.notebook_name, snapshot.revision)] = snapshot
++        return snapshot
++
++    async def _snapshot_for_image(
++        self,
++        notebook_name: str,
++        revision: str | None,
++    ) -> NotebookSnapshot:
++        if revision:
++            cached = self._snapshots.get((notebook_name, revision))
++            if cached is not None:
++                return cached
++            snapshot = await self._load_snapshot(notebook_name)
++            if snapshot.revision != revision:
++                raise KeyError(
++                    f"cached snapshot not found for {notebook_name}@{revision}"
++                )
++            return snapshot
++        return await self._load_snapshot(notebook_name)
+ 
+     async def _upload_note_bytes(self, note_bytes: bytes, target_name: str) -> None:
+         tmp_path = _write_temp_note(note_bytes)
+diff --git a/src/paia_supernote/organizer_server.py b/src/paia_supernote/organizer_server.py
+index b25d985..083c779 100644
+--- a/src/paia_supernote/organizer_server.py
++++ b/src/paia_supernote/organizer_server.py
+@@ -70,10 +70,24 @@ def make_organizer_handler(
+                 and parts[5] == "image"
+             ):
+                 scale = _first_float(query.get("scale"), default=0.25)
++                revision = _first(query.get("revision"))
+                 image = self._run_async(
+-                    self.organizer_api.get_page_image(parts[2], parts[4], scale=scale)
++                    self.organizer_api.get_page_image(
++                        parts[2],
++                        parts[4],
++                        scale=scale,
++                        revision=revision,
++                    )
++                )
++                self._send_file(
++                    Path(image["path"]),
++                    image.get("media_type", "image/png"),
++                    cache_control=(
++                        "public, max-age=31536000, immutable"
++                        if revision
++                        else None
++                    ),
+                 )
+-                self._send_file(Path(image["path"]), image.get("media_type", "image/png"))
+                 return
+ 
+             self.send_error(HTTPStatus.NOT_FOUND)
+@@ -184,11 +198,19 @@ def make_organizer_handler(
+                     status = HTTPStatus.INTERNAL_SERVER_ERROR
+             self._send_json(result, status=status)
+ 
+-        def _send_file(self, path: Path, media_type: str) -> None:
++        def _send_file(
++            self,
++            path: Path,
++            media_type: str,
++            *,
++            cache_control: str | None = None,
++        ) -> None:
+             body = path.read_bytes()
+             self.send_response(HTTPStatus.OK)
+             self.send_header("Content-Type", media_type)
+             self.send_header("Content-Length", str(len(body)))
++            if cache_control:
++                self.send_header("Cache-Control", cache_control)
+             self.end_headers()
+             self.wfile.write(body)
+ 
+diff --git a/src/paia_supernote/organizer_ui.py b/src/paia_supernote/organizer_ui.py
+index 6b68fb3..f1d45b5 100644
+--- a/src/paia_supernote/organizer_ui.py
++++ b/src/paia_supernote/organizer_ui.py
+@@ -64,6 +64,7 @@ def _render_notebooks(notebooks: list[dict[str, Any]], current: str) -> str:
+ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
+     pages = snapshot.get("pages") or {}
+     page_order = snapshot.get("page_order") or []
++    revision = str(snapshot.get("revision") or "")
+     tiles = []
+     for index, page_id in enumerate(page_order):
+         page = dict(pages.get(page_id) or {})
+@@ -82,12 +83,12 @@ def _render_pages(notebook_name: str, snapshot: dict[str, Any]) -> str:
+         )
+         image_src = (
+             f"/api/notebooks/{quote(notebook_name)}/pages/{quote(str(page_id))}"
+-            "/image?scale=0.25"
++            f"/image?scale=0.25&amp;revision={quote(revision)}"
+         )
+         tiles.append(
+             f"""<article class="page-tile" draggable="true" data-page-id="{escape(str(page_id))}" data-position="{index + 1}" data-starred="{str(starred).lower()}" data-headings="{heading_count}" data-keywords="{keyword_count}" data-links="{link_count}">
+   <div class="page-meta"><button class="drag-handle" type="button" aria-label="Drag page" title="Drag page">::::</button><span class="page-number">Page {page_number}</span>{badges}</div>
+-  <img src="{image_src}" alt="Page {page_number}">
++  <img src="{image_src}" alt="Page {page_number}" loading="lazy" decoding="async">
+ </article>"""
+         )
+     return "\n".join(tiles)
+diff --git a/tests/test_organizer_api.py b/tests/test_organizer_api.py
+index d097c5a..8314381 100644
+--- a/tests/test_organizer_api.py
++++ b/tests/test_organizer_api.py
+@@ -213,6 +213,43 @@ async def test_get_page_image_uses_snapshot_revision_page_id_and_cache(tmp_path)
+     assert cache.requests[0]["scale"] == 0.5
+ 
+ 
++@pytest.mark.asyncio
++async def test_get_page_image_uses_cached_revision_without_redownloading(tmp_path) -> None:
++    organizer_api = _api_module()
++    uploader = _FakeUploader()
++    cache = _FakeCache(tmp_path / "page.png")
++    api = organizer_api.OrganizerApi(
++        uploader=uploader,
++        snapshot_loader=lambda _name, _bytes: _snapshot(),
++        image_cache=cache,
++        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
++    )
++
++    await api.get_snapshot("LFW")
++    result = await api.get_page_image("LFW", "page-a", scale=0.25, revision="rev-1")
++
++    assert result["media_type"] == "image/png"
++    assert uploader.downloaded == ["LFW.note"]
++    assert cache.requests[0]["revision"] == "rev-1"
++
++
++@pytest.mark.asyncio
++async def test_get_page_image_rejects_stale_revision_after_fallback_download(tmp_path) -> None:
++    organizer_api = _api_module()
++    uploader = _FakeUploader()
++    api = organizer_api.OrganizerApi(
++        uploader=uploader,
++        snapshot_loader=lambda _name, _bytes: _snapshot(),
++        image_cache=_FakeCache(tmp_path / "page.png"),
++        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
++    )
++
++    with pytest.raises(KeyError, match="cached snapshot not found"):
++        await api.get_page_image("LFW", "page-a", scale=0.25, revision="stale-rev")
++
++    assert uploader.downloaded == ["LFW.note"]
++
++
+ @pytest.mark.asyncio
+ async def test_preview_reorder_rejects_stale_revision(tmp_path) -> None:
+     organizer_api = _api_module()
+diff --git a/tests/test_organizer_server.py b/tests/test_organizer_server.py
+index fb7cc4d..3f05909 100644
+--- a/tests/test_organizer_server.py
++++ b/tests/test_organizer_server.py
+@@ -24,7 +24,7 @@ class _FakeOrganizerApi:
+         Image.new("RGB", (12, 8), "white").save(image_path, format="PNG")
+         self.image_path = image_path
+         self.snapshots: list[str] = []
+-        self.images: list[tuple[str, str, float]] = []
++        self.images: list[tuple[str, str, float, str | None]] = []
+         self.preview_result: dict = {"ok": True}
+         self.apply_result: dict = {"ok": True, "snapshot": {}}
+         self.move_result: dict = {"ok": True}
+@@ -60,9 +60,14 @@ class _FakeOrganizerApi:
+         }
+ 
+     async def get_page_image(
+-        self, notebook_name: str, page_id: str, *, scale: float
++        self,
++        notebook_name: str,
++        page_id: str,
++        *,
++        scale: float,
++        revision: str | None = None,
+     ) -> dict:
+-        self.images.append((notebook_name, page_id, scale))
++        self.images.append((notebook_name, page_id, scale, revision))
+         return {
+             "path": str(self.image_path),
+             "media_type": "image/png",
+@@ -199,7 +204,22 @@ def test_page_image_route_streams_cached_png(tmp_path: Path) -> None:
+ 
+     assert content_type == "image/png"
+     assert body.startswith(b"\x89PNG")
+-    assert api.images == [("LFW", "page-a", 0.5)]
++    assert response.headers["Cache-Control"] is None
++    assert api.images == [("LFW", "page-a", 0.5, None)]
++
++
++def test_page_image_route_passes_revision_to_api(tmp_path: Path) -> None:
++    api = _FakeOrganizerApi(tmp_path / "page.png")
++
++    with _RunningServer(api) as server:
++        with urlopen(
++            f"{server.base_url}/api/notebooks/LFW/pages/page-a/image?scale=0.5&revision=rev-1",
++            timeout=5,
++        ) as response:
++            response.read()
++
++    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
++    assert api.images == [("LFW", "page-a", 0.5, "rev-1")]
+ 
+ 
+ def test_unknown_route_returns_404(tmp_path: Path) -> None:
+diff --git a/tests/test_organizer_ui.py b/tests/test_organizer_ui.py
+index 2d54202..49d0278 100644
+--- a/tests/test_organizer_ui.py
++++ b/tests/test_organizer_ui.py
+@@ -90,7 +90,9 @@ def test_render_index_marks_metadata_badges_per_page() -> None:
+     assert '>Heading<' in html
+     assert '>Keyword<' in html
+     assert '>Link<' in html
+-    assert 'src="/api/notebooks/LFW/pages/page-a/image?scale=0.25"' in html
++    assert 'src="/api/notebooks/LFW/pages/page-a/image?scale=0.25&amp;revision=rev-1"' in html
++    assert 'loading="lazy"' in html
++    assert 'decoding="async"' in html
+ 
+ 
+ def test_render_index_includes_drag_apply_controls_and_contract() -> None:

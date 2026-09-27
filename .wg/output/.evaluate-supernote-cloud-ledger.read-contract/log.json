@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": "2026-07-19T18:08:19.071944+00:00",
+    "user": "braydon",
+    "message": "Manual fallback evaluation: explicit cursor, timestamp cursor, per-agent cursor, cached latest state, allowlist rejection, unknown snapshot, and no-network CLI behavior are verified."
+  },
+  {
+    "timestamp": "2026-07-19T18:08:19.154117+00:00",
+    "user": "braydon",
+    "message": "Task marked as done"
+  }
+]

@@ -1,0 +1,1086 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index e0cebe3..392c61e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -18,7 +18,7 @@ dependencies = [
+     "httpx>=0.25.0",
+     "watchdog>=3.0.0",
+     "pydantic>=2.0.0",
+-    "asyncio-mqtt>=0.13.0",
++    "structlog>=23.0.0",
+ ]
+ 
+ [project.optional-dependencies]
+@@ -50,6 +50,9 @@ addopts = [
+     "--strict-markers",
+     "--strict-config",
+ ]
++markers = [
++    "integration: marks tests as integration tests (can be slow, require external dependencies)",
++]
+ 
+ [tool.black]
+ line-length = 88
+@@ -69,4 +72,4 @@ disallow_untyped_defs = true
+ select = ["E", "F", "I", "N", "W"]
+ ignore = []
+ line-length = 88
+-target-version = "py39"
+\ No newline at end of file
++target-version = "py39"
+diff --git a/src/paia_supernote/events.py b/src/paia_supernote/events.py
+index ba68837..5b510c6 100644
+--- a/src/paia_supernote/events.py
++++ b/src/paia_supernote/events.py
+@@ -1,208 +1,193 @@
+ """
+ ABOUTME: PAIA events integration module
+-Author: Braydon McCormick <braydon@braydondm.com>
+-Purpose: Handles event publishing/subscribing with paia-events system at port 3511
++ABOUTME: Publishes/polls paia-events HTTP API (port 3511) — no MQTT, no direct DB.
+ """
+ 
+-import json
+-import asyncio
+-from typing import Dict, Any, Callable, Optional
+-import asyncio_mqtt
+-from pydantic import BaseModel
+-
+-
+-class SupernoteEvent(BaseModel):
+-    """Base class for Supernote events."""
+-    event_type: str
+-    timestamp: float
+-    data: Dict[str, Any]
++from __future__ import annotations
+ 
++import asyncio
++import time
++import uuid
++from typing import Any, Callable, Awaitable, Optional
+ 
+-class WriteRequestedEvent(SupernoteEvent):
+-    """Event for requesting agent write to Supernote."""
+-    agent: str
+-    notebook: str
+-    content_type: str
+-    content: str
++import httpx
++import structlog
+ 
++log = structlog.get_logger(__name__)
+ 
+-class NoteTranscribedEvent(SupernoteEvent):
+-    """Event for transcribed note content."""
+-    notebook: str
+-    page: int
+-    text: str
++_BASE_URL = "http://localhost:3511"
++_SUBSCRIBER_NAME = "paia-supernote"
++_POLL_INTERVAL = 5.0  # seconds between inbound event polls
+ 
+ 
+-class CheckboxCompletedEvent(SupernoteEvent):
+-    """Event for completed checkbox/task."""
+-    task_id: str
+-    notebook: str
+-    page: int
++class EventsClient:
++    """HTTP client for paia-events — publish outbound, poll inbound."""
+ 
++    def __init__(self, base_url: str = _BASE_URL) -> None:
++        self._base_url = base_url
++        self._write_handler: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
++        self._poll_task: Optional[asyncio.Task[None]] = None
++        self._since_id: Optional[int] = None
+ 
+-class SnippetDetectedEvent(SupernoteEvent):
+-    """Event for detected strategy snippet."""
+-    notebook: str
+-    page: int
+-    text: str
+-    agent: str
++    # ------------------------------------------------------------------
++    # Lifecycle
++    # ------------------------------------------------------------------
+ 
++    async def start(self) -> None:
++        """Register subscriber and start inbound poll loop."""
++        await self._register_subscriber()
++        self._poll_task = asyncio.create_task(self._poll_loop())
++        log.info("events_client_started", base_url=self._base_url)
+ 
+-class EventsManager:
+-    """Manages event publishing and subscription for paia-supernote."""
++    async def stop(self) -> None:
++        """Cancel poll loop."""
++        if self._poll_task:
++            self._poll_task.cancel()
++            try:
++                await self._poll_task
++            except asyncio.CancelledError:
++                pass
++        log.info("events_client_stopped")
+ 
+-    def __init__(self, broker_host: str = "localhost", broker_port: int = 3511):
+-        """
+-        Initialize events manager.
++    # ------------------------------------------------------------------
++    # Inbound subscription
++    # ------------------------------------------------------------------
+ 
+-        Args:
+-            broker_host: MQTT broker host
+-            broker_port: MQTT broker port (paia-events default: 3511)
+-        """
+-        self.broker_host = broker_host
+-        self.broker_port = broker_port
+-        self.client: Optional[asyncio_mqtt.Client] = None
+-        self.event_handlers: Dict[str, Callable] = {}
++    def register_write_handler(
++        self, handler: Callable[[dict[str, Any]], Awaitable[None]]
++    ) -> None:
++        """Register async handler for supernote.write_requested events."""
++        self._write_handler = handler
+ 
+-    async def start(self) -> None:
+-        """Start event client and subscribe to relevant topics."""
++    async def _register_subscriber(self) -> None:
++        """Register paia-supernote as a subscriber for write_requested events."""
+         try:
+-            self.client = asyncio_mqtt.Client(
+-                hostname=self.broker_host,
+-                port=self.broker_port
+-            )
+-            await self.client.__aenter__()
++            async with httpx.AsyncClient() as client:
++                resp = await client.post(
++                    f"{self._base_url}/v1/subscribers",
++                    json={
++                        "name": _SUBSCRIBER_NAME,
++                        "event_type_prefix": "supernote.write_requested",
++                    },
++                    timeout=5.0,
++                )
++                resp.raise_for_status()
++                log.info("subscriber_registered", name=_SUBSCRIBER_NAME)
++        except httpx.HTTPError as exc:
++            # Non-fatal: if already registered or service is down, poll will still work
++            log.warning("subscriber_registration_failed", error=str(exc))
++
++    async def _poll_loop(self) -> None:
++        """Poll for inbound write_requested events on a fixed interval."""
++        while True:
++            try:
++                await self._fetch_and_dispatch()
++            except Exception as exc:
++                log.warning("poll_error", error=str(exc))
++            await asyncio.sleep(_POLL_INTERVAL)
++
++    async def _fetch_and_dispatch(self) -> None:
++        """Fetch pending events and dispatch to registered handler."""
++        if self._write_handler is None:
++            return
+ 
+-            # Subscribe to inbound events (agents → service)
+-            await self.client.subscribe("supernote/write_requested")
++        params: dict[str, Any] = {"limit": 50}
++        if self._since_id is not None:
++            params["since_id"] = self._since_id
+ 
+-            # Start message handler
+-            asyncio.create_task(self._handle_messages())
+-            print(f"Connected to paia-events at {self.broker_host}:{self.broker_port}")
++        async with httpx.AsyncClient() as client:
++            resp = await client.get(
++                f"{self._base_url}/v1/subscribers/{_SUBSCRIBER_NAME}/events",
++                params=params,
++                timeout=5.0,
++            )
++            resp.raise_for_status()
+ 
+-        except Exception as e:
+-            print(f"Failed to connect to event broker: {e}")
++        data = resp.json()
++        events: list[dict[str, Any]] = data.get("events", [])
+ 
+-    async def stop(self) -> None:
+-        """Stop event client."""
+-        if self.client:
++        for event in events:
++            event_id: int = event["id"]
++            payload: dict[str, Any] = event.get("payload", {})
+             try:
+-                await self.client.__aexit__(None, None, None)
+-            except Exception as e:
+-                print(f"Error stopping event client: {e}")
++                await self._write_handler(payload)
++            except Exception as exc:
++                log.error("write_handler_error", event_id=event_id, error=str(exc))
++            # Advance cursor even on handler error so we don't replay forever
++            if self._since_id is None or event_id > self._since_id:
++                self._since_id = event_id
++
++    # ------------------------------------------------------------------
++    # Outbound publishing
++    # ------------------------------------------------------------------
+ 
+     async def publish_note_transcribed(
+-        self, notebook: str, page: int, text: str
++        self, notebook: str, page: int, text: str, timestamp: float | None = None
+     ) -> None:
+-        """
+-        Publish note transcribed event → folio.
+-
+-        Args:
+-            notebook: Notebook name
+-            page: Page number
+-            text: Transcribed text
+-        """
+-        event = NoteTranscribedEvent(
+-            event_type="note_transcribed",
+-            timestamp=asyncio.get_event_loop().time(),
+-            data={},
+-            notebook=notebook,
+-            page=page,
+-            text=text
++        """Publish supernote.note_transcribed event."""
++        ts = timestamp if timestamp is not None else time.time()
++        await self._publish(
++            event_type="supernote.note_transcribed",
++            payload={"notebook": notebook, "page": page, "text": text, "timestamp": ts},
++            dedupe_key=f"supernote.note_transcribed:{notebook}:{page}:{int(ts)}",
+         )
+-        await self._publish("supernote/note_transcribed", event.model_dump())
+ 
+     async def publish_checkbox_completed(
+-        self, task_id: str, notebook: str, page: int
++        self,
++        task_text: str,
++        notebook: str,
++        page: int,
++        task_id: str = "",
++        tag: str = "",
+     ) -> None:
+-        """
+-        Publish checkbox completed event → paia-work.
+-
+-        Args:
+-            task_id: Task identifier
+-            notebook: Notebook name
+-            page: Page number
+-        """
+-        event = CheckboxCompletedEvent(
+-            event_type="checkbox_completed",
+-            timestamp=asyncio.get_event_loop().time(),
+-            data={},
+-            task_id=task_id,
+-            notebook=notebook,
+-            page=page
++        """Publish supernote.checkbox_completed event."""
++        _task_id = task_id or task_text[:32]
++        await self._publish(
++            event_type="supernote.checkbox_completed",
++            payload={
++                "task_id": _task_id,
++                "notebook": notebook,
++                "page": page,
++                "task_text": task_text,
++                "tag": tag,
++            },
++            dedupe_key=f"supernote.checkbox_completed:{notebook}:{page}:{_task_id}",
+         )
+-        await self._publish("supernote/checkbox_completed", event.model_dump())
+ 
+     async def publish_snippet_detected(
+         self, notebook: str, page: int, text: str, agent: str
+     ) -> None:
+-        """
+-        Publish snippet detected event → Caroline or Ingrid.
+-
+-        Args:
+-            notebook: Notebook name
+-            page: Page number
+-            text: Snippet text
+-            agent: Target agent (Caroline, Ingrid)
+-        """
+-        event = SnippetDetectedEvent(
+-            event_type="snippet_detected",
+-            timestamp=asyncio.get_event_loop().time(),
+-            data={},
+-            notebook=notebook,
+-            page=page,
+-            text=text,
+-            agent=agent
++        """Publish supernote.snippet_detected event."""
++        await self._publish(
++            event_type="supernote.snippet_detected",
++            payload={"notebook": notebook, "page": page, "text": text, "agent": agent},
++            dedupe_key=f"supernote.snippet_detected:{notebook}:{page}:{text[:32]}",
+         )
+-        await self._publish("supernote/snippet_detected", event.model_dump())
+-
+-    def register_write_handler(self, handler: Callable[[Dict[str, Any]], None]) -> None:
+-        """
+-        Register handler for write_requested events.
+-
+-        Args:
+-            handler: Function to handle write requests
+-        """
+-        self.event_handlers["write_requested"] = handler
+-
+-    async def _publish(self, topic: str, data: Dict[str, Any]) -> None:
+-        """
+-        Publish event to MQTT broker.
+-
+-        Args:
+-            topic: MQTT topic
+-            data: Event data
+-        """
+-        if not self.client:
+-            print("Event client not connected")
+-            return
+-
+-        try:
+-            message = json.dumps(data)
+-            await self.client.publish(topic, message)
+-        except Exception as e:
+-            print(f"Failed to publish to {topic}: {e}")
+-
+-    async def _handle_messages(self) -> None:
+-        """Handle incoming MQTT messages."""
+-        if not self.client:
+-            return
+ 
++    async def _publish(
++        self,
++        event_type: str,
++        payload: dict[str, Any],
++        dedupe_key: str,
++    ) -> None:
++        """POST /v1/events — fire and forget with warning on failure."""
+         try:
+-            async with self.client.messages() as messages:
+-                async for message in messages:
+-                    try:
+-                        data = json.loads(message.payload.decode())
+-                        topic_parts = message.topic.value.split("/")
+-
+-                        if len(topic_parts) >= 2:
+-                            event_type = topic_parts[1]  # e.g., "write_requested"
+-                            handler = self.event_handlers.get(event_type)
+-                            if handler:
+-                                handler(data)
+-
+-                    except Exception as e:
+-                        print(f"Error processing message: {e}")
+-
+-        except Exception as e:
+-            print(f"Error in message handler: {e}")
+\ No newline at end of file
++            async with httpx.AsyncClient() as client:
++                await client.post(
++                    f"{self._base_url}/v1/events",
++                    json={
++                        "event_type": event_type,
++                        "source_app": "paia-supernote",
++                        "source_event_id": str(uuid.uuid4()),
++                        "dedupe_key": dedupe_key,
++                        "payload": payload,
++                    },
++                    timeout=5.0,
++                )
++            log.debug("event_published", event_type=event_type)
++        except httpx.HTTPError as exc:
++            log.warning("event_publish_failed", event_type=event_type, error=str(exc))
++
++
++# Backwards-compatible alias used by main.py
++EventsManager = EventsClient
+diff --git a/src/paia_supernote/folio.py b/src/paia_supernote/folio.py
+new file mode 100644
+index 0000000..07c1d35
+--- /dev/null
++++ b/src/paia_supernote/folio.py
+@@ -0,0 +1,81 @@
++"""
++ABOUTME: Folio integration — sends transcribed Supernote content to folio for indexing.
++ABOUTME: POSTs note objects to folio's /api/folio/objects endpoint with supernote metadata.
++"""
++
++from __future__ import annotations
++
++from datetime import datetime, timezone
++from typing import Any
++
++import httpx
++import structlog
++
++log = structlog.get_logger(__name__)
++
++_DEFAULT_FOLIO_URL = "http://localhost:8000"
++
++
++async def send_to_folio(
++    notebook: str,
++    page: int,
++    text: str,
++    timestamp: str | None = None,
++    agent: str | None = None,
++    *,
++    folio_url: str = _DEFAULT_FOLIO_URL,
++) -> dict[str, Any] | None:
++    """Send a transcribed note page to folio for indexing.
++
++    Args:
++        notebook: Notebook name (e.g. 'Quick', 'LFW', 'Synth').
++        page: Page number within the notebook.
++        text: Transcribed content.
++        timestamp: ISO8601 timestamp. Defaults to now if not provided.
++        agent: Agent name that reviewed the page, or None.
++        folio_url: Base URL for folio service.
++
++    Returns:
++        The created object dict from folio, or None on failure.
++    """
++    if timestamp is None:
++        timestamp = datetime.now(timezone.utc).isoformat()
++
++    payload = {
++        "title": f"{notebook} — page {page}",
++        "content": text,
++        "path": f"supernote/{notebook}/page-{page}",
++        "object_type": "supernote-transcription",
++        "properties": {
++            "notebook": notebook,
++            "page": page,
++            "timestamp": timestamp,
++            "agent": agent,
++            "source": "supernote",
++        },
++    }
++
++    try:
++        async with httpx.AsyncClient() as client:
++            resp = await client.post(
++                f"{folio_url}/api/folio/objects",
++                json=payload,
++                timeout=10.0,
++            )
++            resp.raise_for_status()
++            result = resp.json()
++            log.info(
++                "folio_indexed",
++                notebook=notebook,
++                page=page,
++                agent=agent,
++            )
++            return result
++    except httpx.HTTPError as exc:
++        log.warning(
++            "folio_index_failed",
++            notebook=notebook,
++            page=page,
++            error=str(exc),
++        )
++        return None
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index f3e034a..31e7b37 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -113,7 +113,11 @@ class SupernoteService:
+                 # Handle checkbox completions
+                 for checkbox in item["checkbox_changes"]:
+                     await self.events.publish_checkbox_completed(
+-                        checkbox["task_text"], notebook, page
++                        task_id=checkbox.get("task_id", ""),
++                        notebook=notebook,
++                        page=page,
++                        task_text=checkbox["task_text"],
++                        tag=checkbox.get("tag", ""),
+                     )
+ 
+         except Exception as e:
+diff --git a/src/paia_supernote/writer.py b/src/paia_supernote/writer.py
+index 43a9c5a..6ff87e1 100644
+--- a/src/paia_supernote/writer.py
++++ b/src/paia_supernote/writer.py
+@@ -1,14 +1,20 @@
+ """
+ ABOUTME: Supernote page writer module
+ Author: Braydon McCormick <braydon@braydondm.com>
+-Purpose: Renders content to PIL bitmaps using agent-specific fonts for Supernote pages
++Purpose: Renders content to PIL bitmaps, sets as MAINLAYER on pages,
++         and appends pages to Supernote notebooks via supernotelib
+ """
+ 
++import io
++import secrets
++import string
+ from datetime import datetime
+ from typing import Optional
+ 
+ from PIL import Image, ImageDraw, ImageFont
+ 
++import supernotelib
++
+ from . import ratta_rle
+ 
+ 
+@@ -37,12 +43,12 @@ class SupernoteWriter:
+ 
+     def render_page(self, agent: str, content: str, content_type: str = "text") -> bytes:
+         """
+-        Render content to a .note page in the agent's font.
++        Render content to RATTA_RLE encoded bytes in the agent's font.
+ 
+-        Returns bytes representing a .note page. Layout:
+-        - Date top-right in small system font
++        Returns RATTA_RLE bytes suitable for use as a MAINLAYER bitmap. Layout:
++        - Date top-right in small system font (~28px)
+         - Body text in agent's assigned font
+-        - Agent signature bottom-left
++        - Agent signature bottom-left (~36px)
+         """
+         img = Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
+         draw = ImageDraw.Draw(img)
+@@ -86,6 +92,120 @@ class SupernoteWriter:
+         # Convert PIL image to RATTA_RLE encoded bytes
+         return ratta_rle.encode(img)
+ 
++    def build_page(self, rle_content: bytes) -> supernotelib.Page:
++        """Create a supernotelib Page with rle_content set as MAINLAYER.
++
++        The returned Page has the correct metadata structure for appending
++        to a notebook via reconstruct().
++        """
++        page_id = self._generate_page_id()
++
++        # MAINLAYER metadata (the only layer with content)
++        mainlayer_info = {
++            "LAYERTYPE": "NOTE",
++            "LAYERPROTOCOL": "RATTA_RLE",
++            "LAYERNAME": "MAINLAYER",
++            "LAYERPATH": "0",
++            "LAYERBITMAP": "0",  # placeholder — packer sets real address
++            "LAYERVECTORGRAPH": "0",
++            "LAYERRECOGN": "0",
++        }
++
++        # BGLAYER references the existing style_white background in the notebook
++        bglayer_info = {
++            "LAYERTYPE": "NOTE",
++            "LAYERPROTOCOL": "RATTA_RLE",
++            "LAYERNAME": "BGLAYER",
++            "LAYERPATH": "0",
++            "LAYERBITMAP": "0",
++            "LAYERVECTORGRAPH": "0",
++            "LAYERRECOGN": "0",
++        }
++
++        # Layers 1-3 are unused (empty dicts → name=None, skipped by packer)
++        layers = [mainlayer_info, {}, {}, {}, bglayer_info]
++
++        # Layer info JSON (uses # instead of : per Supernote format)
++        layer_info = (
++            '[{"layerId"#3,"name"#"Layer 3","isBackgroundLayer"#false,'
++            '"isAllowAdd"#false,"isCurrentLayer"#false,"isVisible"#true,'
++            '"isDeleted"#true,"isAllowUp"#false,"isAllowDown"#false},'
++            '{"layerId"#2,"name"#"Layer 2","isBackgroundLayer"#false,'
++            '"isAllowAdd"#false,"isCurrentLayer"#false,"isVisible"#true,'
++            '"isDeleted"#true,"isAllowUp"#false,"isAllowDown"#false},'
++            '{"layerId"#1,"name"#"Layer 1","isBackgroundLayer"#false,'
++            '"isAllowAdd"#false,"isCurrentLayer"#false,"isVisible"#true,'
++            '"isDeleted"#true,"isAllowUp"#false,"isAllowDown"#false},'
++            '{"layerId"#0,"name"#"Main Layer","isBackgroundLayer"#false,'
++            '"isAllowAdd"#false,"isCurrentLayer"#true,"isVisible"#true,'
++            '"isDeleted"#false,"isAllowUp"#false,"isAllowDown"#false},'
++            '{"layerId"#-1,"name"#"Background Layer","isBackgroundLayer"#true,'
++            '"isAllowAdd"#true,"isCurrentLayer"#false,"isVisible"#true,'
++            '"isDeleted"#false,"isAllowUp"#false,"isAllowDown"#false}]'
++        )
++
++        page_info = {
++            "PAGESTYLE": "style_white",
++            "PAGESTYLEMD5": "0",
++            "LAYERINFO": layer_info,
++            "LAYERSEQ": "MAINLAYER,BGLAYER",
++            "MAINLAYER": "0",
++            "LAYER1": "0",
++            "LAYER2": "0",
++            "LAYER3": "0",
++            "BGLAYER": "0",
++            "TOTALPATH": "0",
++            "THUMBNAILTYPE": "0",
++            "RECOGNSTATUS": "0",
++            "RECOGNTEXT": "0",
++            "RECOGNFILE": "0",
++            "PAGEID": page_id,
++            "RECOGNTYPE": "0",
++            "RECOGNFILESTATUS": "0",
++            "RECOGNLANGUAGE": "none",
++            "EXTERNALLINKINFO": "0",
++            "IDTABLE": "0",
++            "ORIENTATION": supernotelib.Page.ORIENTATION_VERTICAL,
++            supernotelib.fileformat.KEY_LAYERS: layers,
++        }
++
++        page = supernotelib.Page(page_info)
++        # Set MAINLAYER bitmap content (RLE bytes)
++        page.get_layer(0).set_content(rle_content)
++        return page
++
++    def append_to_notebook(
++        self, notebook_bytes: bytes, agent: str, content: str
++    ) -> bytes:
++        """Render content and append as a new page to an existing notebook.
++
++        Args:
++            notebook_bytes: Raw bytes of an existing .note file
++            agent: Agent name (Sam, Caroline, Ingrid)
++            content: Text content to render
++
++        Returns:
++            Modified .note bytes with the new page appended at the back.
++            Caller handles persistence (writing to disk / uploading).
++        """
++        rle_content = self.render_page(agent, content)
++        page = self.build_page(rle_content)
++
++        notebook = supernotelib.load(io.BytesIO(notebook_bytes))
++        notebook.pages.append(page)
++        # Update metadata total-page count so reconstruct sees the new page
++        notebook.metadata.pages.append(page.metadata)
++
++        return supernotelib.reconstruct(notebook)
++
++    @staticmethod
++    def _generate_page_id() -> str:
++        """Generate a unique page ID in the Supernote format: P<timestamp><random>."""
++        ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:20]
++        chars = string.ascii_letters + string.digits
++        rand = "".join(secrets.choice(chars) for _ in range(12))
++        return f"P{ts}{rand}"
++
+     def _load_font(self, agent: Optional[str], size: int) -> ImageFont.FreeTypeFont:
+         """Load font for agent, falling back to default if not available."""
+         font_name = self.AGENT_FONTS.get(agent, "") if agent else ""
+diff --git a/tests/test_folio.py b/tests/test_folio.py
+new file mode 100644
+index 0000000..12ad5c4
+--- /dev/null
++++ b/tests/test_folio.py
+@@ -0,0 +1,142 @@
++"""Tests for folio integration — send_to_folio() posts correct payloads."""
++
++from __future__ import annotations
++
++from datetime import datetime, timezone
++from unittest.mock import AsyncMock, MagicMock, patch
++
++import httpx
++import pytest
++
++from paia_supernote.folio import send_to_folio
++
++
++class TestSendToFolio:
++    """send_to_folio() posts correct payload to folio's objects endpoint."""
++
++    @pytest.mark.asyncio
++    async def test_posts_correct_payload(self) -> None:
++        ts = "2026-04-14T12:00:00+00:00"
++
++        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
++            mock_http = AsyncMock()
++            mock_resp = MagicMock()
++            mock_resp.raise_for_status = MagicMock()
++            mock_resp.json.return_value = {"id": "abc-123", "title": "Quick — page 1"}
++            mock_http.post.return_value = mock_resp
++            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
++            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
++
++            result = await send_to_folio(
++                notebook="Quick",
++                page=1,
++                text="Meeting notes here",
++                timestamp=ts,
++                agent="Caroline",
++            )
++
++            mock_http.post.assert_called_once()
++            call_args = mock_http.post.call_args
++            url = call_args[0][0]
++            body = call_args[1]["json"]
++
++            assert url == "http://localhost:8000/api/folio/objects"
++            assert body["title"] == "Quick — page 1"
++            assert body["content"] == "Meeting notes here"
++            assert body["object_type"] == "supernote-transcription"
++            assert body["properties"]["notebook"] == "Quick"
++            assert body["properties"]["page"] == 1
++            assert body["properties"]["timestamp"] == ts
++            assert body["properties"]["agent"] == "Caroline"
++            assert body["properties"]["source"] == "supernote"
++            assert result == {"id": "abc-123", "title": "Quick — page 1"}
++
++    @pytest.mark.asyncio
++    async def test_timestamp_is_iso8601(self) -> None:
++        """When no timestamp provided, defaults to ISO8601 now."""
++        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
++            mock_http = AsyncMock()
++            mock_resp = MagicMock()
++            mock_resp.raise_for_status = MagicMock()
++            mock_resp.json.return_value = {}
++            mock_http.post.return_value = mock_resp
++            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
++            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
++
++            await send_to_folio(notebook="Synth", page=5, text="ideas")
++
++            body = mock_http.post.call_args[1]["json"]
++            ts = body["properties"]["timestamp"]
++            # Should parse as valid ISO8601
++            parsed = datetime.fromisoformat(ts)
++            assert parsed.tzinfo is not None  # timezone-aware
++
++    @pytest.mark.asyncio
++    async def test_agent_is_none_when_no_agent(self) -> None:
++        """agent field is None when no agent reviewed the page."""
++        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
++            mock_http = AsyncMock()
++            mock_resp = MagicMock()
++            mock_resp.raise_for_status = MagicMock()
++            mock_resp.json.return_value = {}
++            mock_http.post.return_value = mock_resp
++            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
++            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
++
++            await send_to_folio(notebook="Quick", page=1, text="notes")
++
++            body = mock_http.post.call_args[1]["json"]
++            assert body["properties"]["agent"] is None
++
++    @pytest.mark.asyncio
++    async def test_source_is_always_supernote(self) -> None:
++        """source field is always 'supernote'."""
++        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
++            mock_http = AsyncMock()
++            mock_resp = MagicMock()
++            mock_resp.raise_for_status = MagicMock()
++            mock_resp.json.return_value = {}
++            mock_http.post.return_value = mock_resp
++            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
++            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
++
++            await send_to_folio(
++                notebook="LFW", page=3, text="strategy", agent="Ingrid"
++            )
++
++            body = mock_http.post.call_args[1]["json"]
++            assert body["properties"]["source"] == "supernote"
++
++    @pytest.mark.asyncio
++    async def test_returns_none_on_http_error(self) -> None:
++        """HTTP failure returns None instead of raising."""
++        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
++            mock_http = AsyncMock()
++            mock_http.post.side_effect = httpx.ConnectError("refused")
++            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
++            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
++
++            result = await send_to_folio(notebook="Quick", page=1, text="text")
++            assert result is None
++
++    @pytest.mark.asyncio
++    async def test_custom_folio_url(self) -> None:
++        """folio_url parameter overrides the default."""
++        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
++            mock_http = AsyncMock()
++            mock_resp = MagicMock()
++            mock_resp.raise_for_status = MagicMock()
++            mock_resp.json.return_value = {}
++            mock_http.post.return_value = mock_resp
++            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
++            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
++
++            await send_to_folio(
++                notebook="Quick",
++                page=1,
++                text="text",
++                folio_url="http://folio.internal:9000",
++            )
++
++            url = mock_http.post.call_args[0][0]
++            assert url == "http://folio.internal:9000/api/folio/objects"
+diff --git a/tests/test_writer.py b/tests/test_writer.py
+index 067206d..cf52a98 100644
+--- a/tests/test_writer.py
++++ b/tests/test_writer.py
+@@ -3,14 +3,21 @@ Tests for paia_supernote.writer module.
+ Tests written following TDD approach.
+ """
+ 
+-import pytest
+-from PIL import Image
+-from datetime import datetime
++import io
+ from pathlib import Path
+ 
++import pytest
++import supernotelib
++
+ from paia_supernote.writer import SupernoteWriter
+ 
+ 
++# Path to a real .note file for integration tests (Supernote Partner app sync)
++_SUPERNOTE_DIR = Path.home() / "Library/Containers/com.ratta.supernote/Data/Library/Application Support/com.ratta.supernote/908410628964298752/Supernote/Note"
++_NOTE_FIXTURE = _SUPERNOTE_DIR / "Personal.note"
++_has_note_fixture = _NOTE_FIXTURE.exists()
++
++
+ class TestSupernoteWriter:
+     """Test cases for SupernoteWriter."""
+ 
+@@ -21,13 +28,12 @@ class TestSupernoteWriter:
+ 
+     def test_renders_page_for_sam_without_exception(self):
+         """Should render a page for Sam agent without raising exception."""
+-        # This test will fail initially because render_page raises NotImplementedError
+         result = self.writer.render_page(
+             agent="Sam",
+             content=self.test_content,
+         )
+ 
+-        # Should return bytes representing a .note page
++        # Should return bytes representing RATTA_RLE encoded bitmap
+         assert isinstance(result, bytes)
+         assert len(result) > 0
+ 
+@@ -53,13 +59,11 @@ class TestSupernoteWriter:
+ 
+     def test_output_contains_more_bytes_than_empty_page(self):
+         """Should produce more bytes when content is present vs empty."""
+-        # Render with content
+         result_with_content = self.writer.render_page(
+             agent="Sam",
+             content=self.test_content,
+         )
+ 
+-        # Render with empty content
+         result_empty = self.writer.render_page(
+             agent="Sam",
+             content="",
+@@ -70,17 +74,14 @@ class TestSupernoteWriter:
+ 
+     def test_font_size_is_configurable_constant(self):
+         """Should have configurable font size constants."""
+-        # Font sizes should be accessible as class constants
+         assert hasattr(SupernoteWriter, 'BODY_FONT_SIZE')
+         assert hasattr(SupernoteWriter, 'DATE_FONT_SIZE')
+         assert hasattr(SupernoteWriter, 'SIGNATURE_FONT_SIZE')
+ 
+-        # Should be integers suitable for PIL font sizes
+         assert isinstance(SupernoteWriter.BODY_FONT_SIZE, int)
+         assert isinstance(SupernoteWriter.DATE_FONT_SIZE, int)
+         assert isinstance(SupernoteWriter.SIGNATURE_FONT_SIZE, int)
+ 
+-        # Should be reasonable values
+         assert SupernoteWriter.BODY_FONT_SIZE > 0
+         assert SupernoteWriter.DATE_FONT_SIZE > 0
+         assert SupernoteWriter.SIGNATURE_FONT_SIZE > 0
+@@ -112,4 +113,96 @@ class TestSupernoteWriter:
+         ))
+         pixels = list(date_region.getdata())
+         ink_pixels = sum(1 for p in pixels if p < 128)
+-        assert ink_pixels > 0, "Expected ink pixels in date region (top-right)"
+\ No newline at end of file
++        assert ink_pixels > 0, "Expected ink pixels in date region (top-right)"
++
++
++class TestBuildPage:
++    """Tests for MAINLAYER page construction."""
++
++    def setup_method(self):
++        self.writer = SupernoteWriter()
++
++    def test_build_page_returns_supernotelib_page(self):
++        """build_page should return a supernotelib.Page with MAINLAYER set."""
++        rle = self.writer.render_page("Sam", "test content")
++        page = self.writer.build_page(rle)
++
++        assert isinstance(page, supernotelib.Page)
++
++    def test_build_page_mainlayer_has_content(self):
++        """The MAINLAYER (layer 0) should contain the RLE bitmap."""
++        rle = self.writer.render_page("Sam", "test content")
++        page = self.writer.build_page(rle)
++
++        mainlayer = page.get_layer(0)
++        assert mainlayer.get_name() == "MAINLAYER"
++        assert mainlayer.get_protocol() == "RATTA_RLE"
++        assert mainlayer.get_content() == rle
++
++    def test_build_page_has_valid_page_id(self):
++        """Page should have a unique PAGEID starting with 'P'."""
++        rle = self.writer.render_page("Sam", "test")
++        page = self.writer.build_page(rle)
++
++        page_id = page.get_pageid()
++        assert page_id is not None
++        assert page_id.startswith("P")
++        assert len(page_id) > 20
++
++    def test_build_page_orientation_vertical(self):
++        """Page should be vertically oriented (A5X portrait)."""
++        rle = self.writer.render_page("Sam", "test")
++        page = self.writer.build_page(rle)
++
++        assert page.get_orientation() == supernotelib.Page.ORIENTATION_VERTICAL
++
++    def test_build_page_style_white(self):
++        """Page should use the standard white background style."""
++        rle = self.writer.render_page("Sam", "test")
++        page = self.writer.build_page(rle)
++
++        assert page.get_style() == "style_white"
++
++
++class TestAppendToNotebook:
++    """Integration tests for appending pages to real .note notebooks."""
++
++    def setup_method(self):
++        self.writer = SupernoteWriter()
++
++    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
++    def test_append_returns_valid_note_bytes(self):
++        """append_to_notebook should return bytes parseable by supernotelib."""
++        notebook_bytes = _NOTE_FIXTURE.read_bytes()
++        result = self.writer.append_to_notebook(notebook_bytes, "Sam", "Hello from Sam")
++
++        assert isinstance(result, bytes)
++        # Verify it's a valid notebook
++        nb = supernotelib.load(io.BytesIO(result))
++        assert nb.get_total_pages() > 0
++
++    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
++    def test_append_increases_page_count(self):
++        """Appending should add exactly one page to the notebook."""
++        notebook_bytes = _NOTE_FIXTURE.read_bytes()
++        original = supernotelib.load(io.BytesIO(notebook_bytes))
++        original_pages = original.get_total_pages()
++
++        result = self.writer.append_to_notebook(notebook_bytes, "Caroline", "Test")
++        modified = supernotelib.load(io.BytesIO(result))
++
++        assert modified.get_total_pages() == original_pages + 1
++
++    @pytest.mark.skipif(not _has_note_fixture, reason="No .note fixture file available")
++    def test_appended_page_has_mainlayer_content(self):
++        """The appended page's MAINLAYER should contain rendered bitmap data."""
++        notebook_bytes = _NOTE_FIXTURE.read_bytes()
++        result = self.writer.append_to_notebook(notebook_bytes, "Ingrid", "Test content")
++
++        nb = supernotelib.load(io.BytesIO(result))
++        last_page = nb.get_page(nb.get_total_pages() - 1)
++        mainlayer = last_page.get_layer(0)
++
++        assert mainlayer.get_name() == "MAINLAYER"
++        assert mainlayer.get_content() is not None
++        assert len(mainlayer.get_content()) > 0
+\ No newline at end of file
+diff --git a/uv.lock b/uv.lock
+index 2e9f0e9..0532a0d 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -51,18 +51,6 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/da/42/e921fccf5015463e32a3cf6ee7f980a6ed0f395ceeaa45060b61d86486c2/anyio-4.13.0-py3-none-any.whl", hash = "sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708", size = 114353, upload-time = "2026-03-24T12:59:08.246Z" },
+ ]
+ 
+-[[package]]
+-name = "asyncio-mqtt"
+-version = "0.16.2"
+-source = { registry = "https://pypi.org/simple" }
+-dependencies = [
+-    { name = "paho-mqtt" },
+-    { name = "typing-extensions", marker = "python_full_version < '3.10'" },
+-]
+-wheels = [
+-    { url = "https://files.pythonhosted.org/packages/2a/64/c8a8c2ed51f3c1f4b8d2f244424d3bad3fbd4333eb01589c6b00a6dd2c04/asyncio_mqtt-0.16.2-py3-none-any.whl", hash = "sha256:fe70ea2c648b248779a7ff3d9218262cdd739083743dfaa7c0d52ba458a8ad71", size = 17380, upload-time = "2023-06-26T19:46:48.342Z" },
+-]
+-
+ [[package]]
+ name = "backports-asyncio-runner"
+ version = "1.2.0"
+@@ -624,7 +612,7 @@ name = "exceptiongroup"
+ version = "1.3.1"
+ source = { registry = "https://pypi.org/simple" }
+ dependencies = [
+-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
++    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+ ]
+ sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
+ wheels = [
+@@ -1458,26 +1446,17 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+ ]
+ 
+-[[package]]
+-name = "paho-mqtt"
+-version = "2.1.0"
+-source = { registry = "https://pypi.org/simple" }
+-sdist = { url = "https://files.pythonhosted.org/packages/39/15/0a6214e76d4d32e7f663b109cf71fb22561c2be0f701d67f93950cd40542/paho_mqtt-2.1.0.tar.gz", hash = "sha256:12d6e7511d4137555a3f6ea167ae846af2c7357b10bc6fa4f7c3968fc1723834", size = 148848, upload-time = "2024-04-29T19:52:55.591Z" }
+-wheels = [
+-    { url = "https://files.pythonhosted.org/packages/c4/cb/00451c3cf31790287768bb12c6bec834f5d292eaf3022afc88e14b8afc94/paho_mqtt-2.1.0-py3-none-any.whl", hash = "sha256:6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee", size = 67219, upload-time = "2024-04-29T19:52:48.345Z" },
+-]
+-
+ [[package]]
+ name = "paia-supernote"
+ version = "0.1.0"
+ source = { editable = "." }
+ dependencies = [
+-    { name = "asyncio-mqtt" },
+     { name = "httpx" },
+     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+     { name = "pillow", version = "12.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+     { name = "playwright" },
+     { name = "pydantic" },
++    { name = "structlog" },
+     { name = "supernotelib" },
+     { name = "watchdog" },
+ ]
+@@ -1500,7 +1479,6 @@ dev = [
+ 
+ [package.metadata]
+ requires-dist = [
+-    { name = "asyncio-mqtt", specifier = ">=0.13.0" },
+     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+     { name = "httpx", specifier = ">=0.25.0" },
+     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
+@@ -1512,6 +1490,7 @@ requires-dist = [
+     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
++    { name = "structlog", specifier = ">=23.0.0" },
+     { name = "supernotelib", specifier = ">=0.3.0" },
+     { name = "watchdog", specifier = ">=3.0.0" },
+ ]
+@@ -2235,6 +2214,18 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/58/ed/dea90a65b7d9e69888890fb14c90d7f51bf0c1e82ad800aeb0160e4bacfd/ruff-0.15.10-py3-none-win_arm64.whl", hash = "sha256:601d1610a9e1f1c2165a4f561eeaa2e2ea1e97f3287c5aa258d3dab8b57c6188", size = 11035607, upload-time = "2026-04-09T14:05:47.593Z" },
+ ]
+ 
++[[package]]
++name = "structlog"
++version = "25.5.0"
++source = { registry = "https://pypi.org/simple" }
++dependencies = [
++    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
++]
++sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
++]
++
+ [[package]]
+ name = "supernotelib"
+ version = "0.7.0"

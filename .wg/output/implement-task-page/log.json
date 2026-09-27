@@ -1,0 +1,34 @@
+[
+  {
+    "timestamp": "2026-04-14T19:34:13.458773+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (invalid_contract) | next: Fix the wg-contract block TOML so it parses"
+  },
+  {
+    "timestamp": "2026-04-14T19:34:13.794609+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (invalid_specdrift_spec) | next: Fix the specdrift TOML block so it parses"
+  },
+  {
+    "timestamp": "2026-04-14T19:36:00.206906+00:00",
+    "actor": "agent-108",
+    "user": "braydon",
+    "message": "Spawned by coordinator --executor claude --model claude-sonnet-4-20250514"
+  },
+  {
+    "timestamp": "2026-04-14T19:36:45.191290+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (invalid_contract) | next: Fix the wg-contract block TOML so it parses"
+  },
+  {
+    "timestamp": "2026-04-14T19:36:45.409163+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (invalid_specdrift_spec) | next: Fix the specdrift TOML block so it parses"
+  },
+  {
+    "timestamp": "2026-04-14T19:37:42.730902+00:00",
+    "actor": "agent-108",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  }
+]

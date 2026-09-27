@@ -1,0 +1,29 @@
+[
+  {
+    "timestamp": "2026-04-28T00:28:39.045546+00:00",
+    "message": "Task claimed"
+  },
+  {
+    "timestamp": "2026-05-17T15:14:53.706658+00:00",
+    "actor": "reconcile",
+    "user": "braydon",
+    "message": "Reconciliation: task recovered from orphaned state (agent: (none))"
+  },
+  {
+    "timestamp": "2026-05-25T17:23:01.767524+00:00",
+    "actor": "agent-945",
+    "user": "braydon",
+    "message": "Spawned eval inline --model claude:haiku"
+  },
+  {
+    "timestamp": "2026-05-25T17:23:04.646928+00:00",
+    "user": "braydon",
+    "message": "Eval stderr: Note: task has no assigned agent — evaluating without role/tradeoff context\nwarning: Deprecated: [coordinator] table is now [dispatcher]; please rename in /Users/braydon/projects/experiments/paia-supernote/.workgraph/config.toml\nwarning: (local) config key `agent.executor = \"claude\"` is deprecated; wg now derives the handler from the model spec's provider prefix (e.g. `model = \"claude:opus\"` → claude CLI, `model = \"local:qwen3-coder\"` → nex). Remove the explicit `executor` key; use a `provider:model` value in `model` instead.\n[lightweight-llm] native anthropic call failed for role=evaluator model=haiku: Failed to create Anthropic client for lightweight call: No Anthropic API key found. Set ANTHROPIC_API_KEY environment variable, add [native_executor] api_key to .workgraph/config.toml, or create ~/.config/anthropic/api_key — falling back to claude CLI\nError: Evaluation LLM call failed\n\nCaused by:\n    Claude CLI call failed (exit Some(1)): "
+  },
+  {
+    "timestamp": "2026-05-25T17:23:04.942517+00:00",
+    "actor": "agent-945",
+    "user": "braydon",
+    "message": "Task marked as failed: wg evaluate exited with code 1\n---\nNote: task has no assigned agent — evaluating without role/tradeoff context\nwarning: Deprecated: [coordinator] table is now [dispatcher]; please rename in /Users/braydon/projects/experiments/paia-supernote/.workgraph/config.toml\nwarning: (local) config key `agent.executor = \"claude\"` is deprecated; wg now derives the handler from the model spec's provider prefix (e.g. `model = \"claude:opus\"` → claude CLI, `model = \"local:qwen3-coder\"` → nex). Remove the explicit `executor` key; use a `provider:model` value in `model` instead.\n[lightweight-llm] native anthropic call failed for role=evaluator model=haiku: Failed to create Anthropic client for lightweight call: No Anthropic API key found. Set ANTHROPIC_API_KEY environment variable, add [native_executor] api_key to .workgraph/config.toml, or create ~/.config/anthropic/api_key — falling back to claude CLI\nError: Evaluation LLM call failed\n\nCaused by:\n    Claude CLI call failed (exit Some(1)): "
+  }
+]

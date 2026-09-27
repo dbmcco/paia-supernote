@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-94-2026-04-16T03-58-42.953150+00-00",
+  "task_id": ".user-braydon-94",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.35,
+  "dimensions": {
+    "style_adherence": 0.2,
+    "blocking_impact": 0.35,
+    "downstream_usability": 0.35,
+    "correctness": 0.4,
+    "intent_fidelity": 0.305,
+    "efficiency": 0.5,
+    "coordination_overhead": 0.3,
+    "completeness": 0.3
+  },
+  "notes": "The agent produced a functional user board with passing tests and validated paia-events integration, but the work falls below expectations due to critical contract violations and verification failure. The FLIP verification score of 0.30 (vs. required 0.70 threshold) is a strong negative signal. Most critically, the agent violated the explicit contract requirement `auto_followups = true` and acknowledged this without resolving it, claiming 'cannot be resolved with available tools'—this is a style/process failure in a framework that emphasizes strict contract adherence. Additional concerns: (1) no artifacts recorded, making hand-off opaque; (2) yellow coredrift warnings suggest technical churn in core files; (3) the 1m 10s execution time combined with coredrift warnings and an unresolved contract violation suggests the agent prioritized speed over correctness. Strengths: all 8 tests pass, interactive interface works, connection validated. The task spec also lacks explicit acceptance criteria (empty acceptance array), which compounds the ambiguity. For a task marked complete with unresolved contract violations and verification failure, this represents below-expectations work requiring upstream clarification or rework.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:58:42.953150+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

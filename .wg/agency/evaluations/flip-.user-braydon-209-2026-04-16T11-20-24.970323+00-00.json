@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-209-2026-04-16T11-20-24.970323+00-00",
+  "task_id": ".user-braydon-209",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.22,
+  "dimensions": {
+    "hallucination_rate": 0.85,
+    "semantic_match": 0.35,
+    "requirement_coverage": 0.05,
+    "specificity_match": 0.25
+  },
+  "notes": "The inferred task fundamentally mischaracterizes the actual task. The actual task is a direct implementation request: 'implement a user board for braydon as a persistent conversation surface.' The inferred task instead describes preparatory/exploratory work ('explore context,' 'review codebase,' 'assess state') which are precursor activities, not the task itself. The inferred version contains almost no coverage of the core requirement (implement the board) and invents an entire exploratory workflow not present in the actual spec. The actual spec is minimal and specific; the inferred version is diffuse and process-focused. The domain overlap (paia-supernote project) prevents a complete mismatch, but the task types are fundamentally different.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Explore the current project context and prepare for implementing the user board functionality. Review the existing codebase structure, understand any recent changes or dependency issues, and assess the current state of the paia-supernote project before beginning actual user board implementation work. Focus on gathering context rather than making changes.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T11:20:24.970323+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

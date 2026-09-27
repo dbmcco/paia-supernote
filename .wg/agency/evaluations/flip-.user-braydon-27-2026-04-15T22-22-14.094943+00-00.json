@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-27-2026-04-15T22-22-14.094943+00-00",
+  "task_id": ".user-braydon-27",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.62,
+  "dimensions": {
+    "specificity_match": 0.25,
+    "semantic_match": 0.65,
+    "hallucination_rate": 0.45,
+    "requirement_coverage": 0.85
+  },
+  "notes": "The inferred task correctly identifies the core domain (user board for paia-supernote) and captures the basic intent. However, the actual task description is intentionally minimal ('persistent conversation surface'), while the inferred version substantially expands scope by adding Supernote-specific integration, session management, reader/curator component coupling, and end-to-end workflow concerns. These are reasonable contextual inferences from the project context and git status, but they represent ~45% hallucination—plausible elaborations not stated in the original sparse task. The inferred version trades the vagueness of the original for much higher specificity, which helps with implementation clarity but diverges from the actual task's minimalism.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement the user board functionality for the paia-supernote project. This should include creating or updating the user board module to handle Supernote integration, ensuring proper session management and board operations. The implementation needs to support the core Supernote workflow and integrate with the existing reader and task curator components. Focus on getting the basic user board session working end-to-end.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T22:22:14.094943+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

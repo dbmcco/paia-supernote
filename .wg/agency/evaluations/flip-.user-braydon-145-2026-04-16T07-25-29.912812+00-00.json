@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-145-2026-04-16T07-25-29.912812+00-00",
+  "task_id": ".user-braydon-145",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.52,
+  "dimensions": {
+    "hallucination_rate": 0.65,
+    "specificity_match": 0.3,
+    "requirement_coverage": 0.4,
+    "semantic_match": 0.8
+  },
+  "notes": "The inferred task correctly identifies the core goal (user board implementation) and captures the persistent nature aspect. However, it significantly hallucinated specific technical requirements—'rich terminal interface', 'event handling', 'interactive commands'—that do not appear in the actual minimal task description. The actual task is remarkably sparse, specifying only 'persistent conversation surface' with code budget constraints (max 25 files, 800 LOC). The inferred version treats these as background constraints and projects a detailed technical architecture that wasn't part of the original specification. This represents moderate semantic alignment but substantial requirement divergence.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board feature with a rich terminal interface that supports persistent sessions, event handling, and interactive commands. The implementation should be fully operational and working correctly. Ensure the code changes stay within reasonable file and line-of-code budgets to avoid excessive churn in core components.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:25:29.912812+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

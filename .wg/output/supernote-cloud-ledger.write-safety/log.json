@@ -1,0 +1,71 @@
+[
+  {
+    "timestamp": "2026-07-19T17:28:54.255323+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-07-19T17:30:04.254939+00:00",
+    "user": "braydon",
+    "message": "Task published"
+  },
+  {
+    "timestamp": "2026-07-19T17:50:00.464419+00:00",
+    "actor": "agent-1296",
+    "user": "braydon",
+    "message": "Spawned by coordinator --executor native --model openai-codex/gpt-5.5"
+  },
+  {
+    "timestamp": "2026-07-19T17:50:00.464423+00:00",
+    "actor": "spawn",
+    "message": "Pre-flight model validation: Model 'openai-codex/gpt-5.5' not found in OpenRouter model list.\n  Did you mean one of:\n    - openai/gpt-5.4\n    - openai/gpt-5.2\n    - openai/gpt-5.1\n  Hint: run `wg models search gpt-5.5` to find valid alternatives, or `wg models list` to see the local registry."
+  },
+  {
+    "timestamp": "2026-07-19T17:50:00.699666+00:00",
+    "actor": "agent-1296",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-07-19T18:08:31.788289+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry from failed (attempt #2) — reason: Dispatcher model preflight rejected unavailable OpenRouter model; manual Pi fallback"
+  },
+  {
+    "timestamp": "2026-07-19T18:08:31.866504+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task claimed by @avery"
+  },
+  {
+    "timestamp": "2026-07-19T18:08:32.354307+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T18:08:32.553407+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T18:22:47.554274+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T18:22:47.825805+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T18:22:47.929403+00:00",
+    "user": "braydon",
+    "message": "Independently verified 116 write/ledger/uploader/filing/main tests pass and focused ruff passes. Agent writes now require explicit notebook or use_agent_default_notebook=true plus base revision; stale/missing/mismatched revisions fail before mutation. TOCTOU limitation is documented. Post-task drift exit=3."
+  },
+  {
+    "timestamp": "2026-07-19T18:22:48.006411+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task pending eval (agent reported done; awaiting `.evaluate-*` to score)"
+  }
+]

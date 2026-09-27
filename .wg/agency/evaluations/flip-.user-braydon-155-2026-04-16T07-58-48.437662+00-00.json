@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-155-2026-04-16T07-58-48.437662+00-00",
+  "task_id": ".user-braydon-155",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.64,
+  "dimensions": {
+    "semantic_match": 0.85,
+    "specificity_match": 0.5,
+    "requirement_coverage": 0.35,
+    "hallucination_rate": 0.1
+  },
+  "notes": "Both describe the same core task: implementing a user board feature for paia-supernote with an interactive interface. However, the INFERRED version misses critical acceptance criteria. Specifically, it omits the session persistence requirement (~/.paia-supernote-session.json) entirely and is vague about specific user actions (check status, view events, write). The INFERRED version correctly infers a CLI entry point and integration details but lacks the specificity of the actual acceptance criteria. Semantic alignment is strong, but requirement coverage is weak due to the missing session persistence requirement and lack of explicit feature list.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board feature for the paia-supernote project that provides a CLI interface for managing Supernote user interactions. Create a command-line entry point called 'paia-supernote-board' that allows users to access and manage their Supernote board functionality. The implementation should include all core user board functionality and meet the following acceptance criteria: the CLI command should be properly accessible, the user board should provide the expected interface for Supernote operations, and all required functionality should be operational. Ensure the implementation follows the project's code standards and integrates properly with the existing paia-supernote architecture.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:58:48.437662+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

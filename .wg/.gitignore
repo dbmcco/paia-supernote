@@ -1,0 +1,23 @@
+# Workgraph gitignore
+# Agent output logs (can be large)
+agents/
+
+# Service files
+service/
+
+# Never commit credentials (Matrix config should be in ~/.config/workgraph/)
+matrix.toml
+*.secret
+*.credentials
+.coredrift/
+.specdrift/
+.datadrift/
+.archdrift/
+.depsdrift/
+.fixdrift/
+.yagnidrift/
+.qadrift/
+.debatedrift/
+.uxdrift/
+.therapydrift/
+.redrift/

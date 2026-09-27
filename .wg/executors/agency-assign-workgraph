@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ABOUTME: Calls Agency task assign for a workgraph task and outputs the composed prompt.
+# ABOUTME: Returns non-zero if Agency is unreachable or assignment fails.
+
+set -euo pipefail
+
+TASK_ID="${1:?Usage: agency-assign-workgraph TASK_ID [TASK_DESCRIPTION]}"
+TASK_DESCRIPTION="${2:-}"
+
+AGENCY_PORT="${AGENCY_PORT:-8000}"
+AGENCY_HOST="${AGENCY_HOST:-127.0.0.1}"
+AGENCY_HEALTH_TIMEOUT="${AGENCY_HEALTH_TIMEOUT:-0.5}"
+AGENCY_ASSIGN_TIMEOUT="${AGENCY_ASSIGN_TIMEOUT:-5}"
+
+# Health check — fast fail if Agency is not running
+if ! curl -sf --max-time "$AGENCY_HEALTH_TIMEOUT" \
+    "http://${AGENCY_HOST}:${AGENCY_PORT}/health" >/dev/null 2>&1; then
+  exit 1
+fi
+
+# Build task JSON for agency task assign
+TASK_JSON=$(python3 -c "
+import json, sys
+print(json.dumps([{'id': sys.argv[1], 'description': sys.argv[2]}]))
+" "$TASK_ID" "$TASK_DESCRIPTION" 2>/dev/null) || exit 1
+
+# Call agency task assign and extract the composed prompt
+RESULT=$(agency task assign \
+  --tasks "$TASK_JSON" \
+  --format json \
+  --timeout "$AGENCY_ASSIGN_TIMEOUT" \
+  --quiet 2>/dev/null) || exit 1
+
+# Extract prompt from the assignment result
+python3 -c "
+import json, sys
+
+data = json.loads(sys.stdin.read())
+
+# Agency returns a list of assignments or a dict
+if isinstance(data, list):
+    if not data:
+        sys.exit(1)
+    assignment = data[0]
+elif isinstance(data, dict):
+    assignments = data.get('assignments')
+    if isinstance(assignments, dict):
+        assignment = next(iter(assignments.values()), None)
+    elif isinstance(assignments, list):
+        assignment = assignments[0] if assignments else None
+    else:
+        assignment = data
+    if not assignment:
+        sys.exit(1)
+else:
+    sys.exit(1)
+
+# Try known fields for the composed prompt
+prompt = (
+    assignment.get('system_prompt')
+    or assignment.get('prompt')
+    or assignment.get('composed_prompt')
+    or assignment.get('instructions')
+    or ''
+)
+
+# Current Agency shape puts the prompt under agents[agent_hash].rendered_prompt
+if not prompt.strip():
+    agent_hash = assignment.get('agent_hash')
+    agents = data.get('agents', {}) if isinstance(data, dict) else {}
+    agent = agents.get(agent_hash, {}) if isinstance(agents, dict) else {}
+    prompt = (
+        agent.get('rendered_prompt')
+        or agent.get('system_prompt')
+        or agent.get('prompt')
+        or ''
+    )
+
+if not prompt.strip():
+    sys.exit(1)
+
+print(prompt)
+" <<< "$RESULT"

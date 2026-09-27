@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-75-2026-04-16T02-45-26.758929+00-00",
+  "task_id": ".user-braydon-75",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.13,
+  "dimensions": {
+    "correctness": 0.08,
+    "intent_fidelity": 0.08,
+    "efficiency": 0.2,
+    "downstream_usability": 0.05,
+    "blocking_impact": 0.2,
+    "style_adherence": 0.15,
+    "completeness": 0.05,
+    "coordination_overhead": 0.3
+  },
+  "notes": "Fundamental failure. FLIP score of 0.08 (vs. 0.70 threshold) indicates severe verification failure. No artifacts were recorded despite task completion, leaving no evidence of deliverable output. Task description was vague ('persistent conversation surface') and agent was given no explicit role or motivation to clarify scope. The 1.5-minute execution time suggests minimal substantive work occurred. Task recovery from orphaned state indicates coordination overhead and unclear handoff state. Without visible artifacts, the work is unusable for any downstream consumer. The combination of failed verification, zero artifacts, and opaque execution makes this a failing outcome despite nominal completion status.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:45:26.758929+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-196-2026-04-16T10-35-31.876990+00-00",
+  "task_id": ".user-braydon-196",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.53,
+  "dimensions": {
+    "hallucination_rate": 0.5,
+    "requirement_coverage": 0.4,
+    "specificity_match": 0.3,
+    "semantic_match": 0.75
+  },
+  "notes": "Both describe a user board component for persistent conversation, so semantic alignment is strong. However, the actual task is intentionally minimal ('persistent conversation surface' with no detailed feature list), while the inferred task prescribes 6+ specific features (terminal UI, status monitoring, events display, write functionality, etc.). Only ~50% of the inferred requirements appear in or are directly implied by the actual task description. The inferred version is also significantly MORE specific than the deliberately vague actual specification, which conflicts with the 'core' schema mode and minimal style. Key hallucinations: terminal UI capabilities, status monitoring, and events display are not mentioned in the original brief.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board component for the paia-supernote system with the following requirements: 1) Create a persistent conversation surface with terminal UI capabilities, 2) Include status monitoring functionality, 3) Add events display capability, 4) Implement write functionality for user interactions, 5) Ensure session persistence across uses, 6) All implementation must include comprehensive tests that pass, 7) Keep dependency changes minimal and stay within defined scope boundaries\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:35:31.876990+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

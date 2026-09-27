@@ -1,0 +1,25 @@
+[
+  {
+    "timestamp": "2026-04-16T12:25:46.617411+00:00",
+    "actor": "reconcile",
+    "user": "braydon",
+    "message": "Reconciliation: task recovered from orphaned state (agent: (none))"
+  },
+  {
+    "timestamp": "2026-04-16T12:27:52.536269+00:00",
+    "actor": "agent-867",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor claude --model claude-sonnet-4-20250514"
+  },
+  {
+    "timestamp": "2026-04-16T12:28:04.800118+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (churn_loc, dependency_drift, hardening_in_core) | next: Confirm the dependency change is intentional; otherwise revert"
+  },
+  {
+    "timestamp": "2026-04-16T12:28:05.671439+00:00",
+    "actor": "agent-867",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  }
+]

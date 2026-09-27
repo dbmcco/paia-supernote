@@ -1,0 +1,72 @@
+[
+  {
+    "timestamp": "2026-07-19T17:28:48.125134+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-07-19T17:30:04.254938+00:00",
+    "user": "braydon",
+    "message": "Task published"
+  },
+  {
+    "timestamp": "2026-07-19T17:35:06.705330+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task claimed by @avery"
+  },
+  {
+    "timestamp": "2026-07-19T17:35:07.287684+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T17:35:07.529795+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T17:41:23.890865+00:00",
+    "actor": "reconcile",
+    "user": "braydon",
+    "message": "Reconciliation: task recovered from orphaned state (was InProgress, agent: avery)"
+  },
+  {
+    "timestamp": "2026-07-19T17:41:30.179547+00:00",
+    "actor": "agent-1264",
+    "user": "braydon",
+    "message": "Spawned by coordinator --executor native --model zai/glm-5.2"
+  },
+  {
+    "timestamp": "2026-07-19T17:41:30.179550+00:00",
+    "actor": "spawn",
+    "message": "Pre-flight model validation: Model 'zai/glm-5.2' not found in OpenRouter model list.\n  Did you mean one of:\n    - z-ai/glm-5.1\n    - z-ai/glm-5\n    - z-ai/glm-4.7\n  Hint: run `wg models search glm-5.2` to find valid alternatives, or `wg models list` to see the local registry."
+  },
+  {
+    "timestamp": "2026-07-19T17:41:30.350127+00:00",
+    "actor": "agent-1264",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-07-19T17:49:49.924353+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T17:49:50.171130+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T17:49:50.282429+00:00",
+    "user": "braydon",
+    "message": "Verified storage slice: 41 focused/regression tests pass, ruff passes, git diff check passes, and pre-existing uv.lock/scratch files remain untouched. Post-task drift exit=3."
+  },
+  {
+    "timestamp": "2026-07-19T17:49:50.411726+00:00",
+    "actor": "agent-1264",
+    "user": "braydon",
+    "message": "Task pending eval (agent reported done; awaiting `.evaluate-*` to score)"
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-113-2026-04-16T05-19-14.838500+00-00",
+  "task_id": ".user-braydon-113",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.595,
+  "dimensions": {
+    "semantic_match": 0.7,
+    "requirement_coverage": 0.8,
+    "specificity_match": 0.3,
+    "hallucination_rate": 0.65
+  },
+  "notes": "The ACTUAL task is minimal—just 'User board: braydon' as a persistent conversation surface with technical parameters. The INFERRED version captures the core concept but adds substantial context: paia-supernote project scope, analysis/implementation work, Supernote synchronization, and AI agent interactions. These additions appear to be reasonable inferences from the project context (given the session hook mentions Supernote integration work), but they're not explicitly stated in the actual task description. The ACTUAL is generic and assumes readers know what 'user board' means; the INFERRED is much more prescriptive about what the session should accomplish. This represents moderate hallucination of functional requirements rather than the simple core task.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Start a user board session for the paia-supernote project. Initialize a persistent conversation surface that can analyze the current project state and user board implementation for ongoing Supernote device synchronization and AI agent interactions.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:19:14.838500+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

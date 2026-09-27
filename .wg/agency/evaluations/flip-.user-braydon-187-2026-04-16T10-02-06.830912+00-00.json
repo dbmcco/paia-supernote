@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-187-2026-04-16T10-02-06.830912+00-00",
+  "task_id": ".user-braydon-187",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.1,
+  "dimensions": {
+    "requirement_coverage": 0.05,
+    "hallucination_rate": 0.95,
+    "semantic_match": 0.1,
+    "specificity_match": 0.2
+  },
+  "notes": "The actual task requests a 'user board: braydon' — a persistent conversation surface with specific constraints (max_files=25, max_loc=800, pit_stop_after=3). The inferred task describes a code drift analysis evaluating quality metrics and file churn, which is a fundamentally different undertaking. The only tangential connection is both mention 'budgets for lines of code and file counts,' but in opposite contexts: the actual treats it as a constraint for the deliverable, while the inferred treats it as evaluation criteria for drift analysis. Nearly all elements of the inferred description (drift violations, code quality checks, component hardening, churn analysis) are fabricated and absent from the actual specification. The inferred output appears to misinterpret the task entirely.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Run a comprehensive code drift analysis on the current repository state to check for code quality issues, file churn, and core component hardening. Evaluate the codebase against established quality metrics and budgets for lines of code and file counts. Report any drift violations or quality concerns that need attention.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:02:06.830912+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

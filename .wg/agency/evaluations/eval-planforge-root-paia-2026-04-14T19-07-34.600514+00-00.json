@@ -1,0 +1,19 @@
+{
+  "id": "flip-planforge-root-paia-2026-04-14T19-07-34.600514+00-00",
+  "task_id": "planforge-root-paia",
+  "agent_id": "f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e",
+  "role_id": "52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925",
+  "tradeoff_id": "1caa4c3cf3d982cfc9e191da340d39b8b831f0b9bda2c740352b93f43fb64542",
+  "score": 0.28,
+  "dimensions": {
+    "semantic_match": 0.3,
+    "requirement_coverage": 0.25,
+    "specificity_match": 0.25,
+    "hallucination_rate": 0.65
+  },
+  "notes": "The inferred task describes codebase analysis and assessment work, while the actual task is to implement a bidirectional Python daemon. ACTUAL specifies concrete deliverables: read Braydon's notes into paia-work/folio and enable PAIA agents to write .note pages. INFERRED reconstructs exploratory/discovery work (analyze structure, check utilities, identify gaps) which is preparatory but not the core implementation objective. The evaluator appears to have inferred a reasonable precursor activity rather than the actual task itself. INFERRED hallucinates exploratory requirements not present in the original (codebase analysis, component identification, gap assessment) while missing the core bidirectional sync functionality requirement.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Analyze the existing paia-supernote codebase structure and identify what components are already in place for Supernote integration. Check if there are any existing utilities for file watching, note parsing, or PDF generation. Provide a brief assessment of the current state and what foundational pieces might be missing for the full Supernote sync workflow.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T19:07:34.600514+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

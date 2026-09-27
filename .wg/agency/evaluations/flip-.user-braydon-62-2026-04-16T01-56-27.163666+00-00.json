@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-62-2026-04-16T01-56-27.163666+00-00",
+  "task_id": ".user-braydon-62",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.165,
+  "dimensions": {
+    "specificity_match": 0.3,
+    "requirement_coverage": 0.15,
+    "semantic_match": 0.1,
+    "hallucination_rate": 0.8
+  },
+  "notes": "The actual task is a high-level objective to create a 'user board for braydon' as a 'persistent conversation surface.' The inferred task describes a code refactoring effort focused on modularity and separation of concerns. These are fundamentally misaligned: the actual task is goal-oriented (implement user board), while the inferred task is implementation-method-oriented (refactor code structure). The evaluator appears to have reconstructed a refactoring task by examining code changes (modified files in user_board, reader, task_curator modules) rather than inferring from the minimal, vague actual task description. The actual requirements (user board, persistent conversation surface) are nearly absent from the inferred version, which instead introduces hallucinated requirements (modularity improvements, separation of concerns, file/LOC constraints) that don't appear in the original task.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Refactor the paia-supernote codebase to improve code organization and modularity. The current structure needs to be cleaned up to better separate concerns between note reading, task curation, and user board functionality. Ensure the refactoring maintains all existing functionality while improving code maintainability. If the changes are too extensive, split the work into smaller logical chunks to stay within code quality constraints.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:56:27.163666+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-48-2026-04-16T00-49-52.647001+00-00",
+  "task_id": ".user-braydon-48",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.34,
+  "dimensions": {
+    "hallucination_rate": 0.78,
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.35,
+    "semantic_match": 0.45
+  },
+  "notes": "The inferred task heavily overreaches the actual task description. The ACTUAL task is minimal and task-centric ('User board: braydon — persistent conversation surface'), with no mention of investigations, drift findings, code quality issues, or production readiness checks. The INFERRED task fabricates ~78% of its requirements (drift analysis, UI/functionality/test checks, code quality reviews) by assuming this is a quality/review task rather than a direct implementation or maintenance task. Both mention 'user board' and 'persistent conversation surface' but the inferred version's specificity around investigation steps and coredrift analysis is entirely invented.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Investigate the current status of the user board component and address any drift findings. Check for functionality issues, UI problems, or test failures. Verify that the user board is working properly as a persistent conversation surface and resolve any code quality concerns flagged by coredrift analysis. Ensure the component is ready for production use.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T00:49:52.647001+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

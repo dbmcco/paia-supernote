@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-125-2026-04-16T06-04-35.849270+00-00",
+  "task_id": ".user-braydon-125",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.745,
+  "dimensions": {
+    "semantic_match": 1.0,
+    "hallucination_rate": 0.8,
+    "requirement_coverage": 0.9,
+    "specificity_match": 0.25
+  },
+  "notes": "The actual task is extremely sparse—only 'User board for braydon — persistent conversation surface' with empty acceptance criteria. The inferred task correctly identifies the core goal (user board, persistent interface) but hallucinated 8+ specific implementation requirements (paia-events integration, UI/styling, session management, error handling, test compliance, pattern adherence) that appear nowhere in the actual task contract. The actual task provides no acceptance criteria, touch list, or implementation details—it's a vague specification. The inferred task substantially expands scope by inferring what 'persistent conversation surface' should entail in practice, which goes well beyond what was specified.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Complete the user board implementation for the paia-supernote project. The user board should connect to paia-events for real-time updates, display a proper UI with styling and terminal formatting, handle both interactive and non-interactive environments gracefully, implement session management with data persistence on exit, and include comprehensive error handling. Ensure all existing tests continue to pass and the implementation follows the established patterns in the codebase. The user board should provide a persistent conversation interface for users interacting with the supernote system.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:04:35.849270+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

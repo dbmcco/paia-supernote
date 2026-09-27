@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-44-2026-04-16T00-25-32.123732+00-00",
+  "task_id": ".user-braydon-44",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.43,
+  "dimensions": {
+    "style_adherence": 0.5,
+    "coordination_overhead": 0.55,
+    "intent_fidelity": 0.24,
+    "correctness": 0.4,
+    "downstream_usability": 0.35,
+    "completeness": 0.55,
+    "blocking_impact": 0.7,
+    "efficiency": 0.45
+  },
+  "notes": "The agent recovered the orphaned task and completed implementation within 4 minutes, with system verification confirming the user board is 'fully functional.' However, multiple signals indicate significant deficiencies. **Critical issue:** FLIP verification failed at 0.24 (well below 0.70 threshold), which is a strong indicator of problems with intent alignment, code quality, or specification adherence. **Artifact visibility:** No artifacts were formally recorded despite this being a user-facing deliverable, making it impossible to assess what was actually delivered or how downstream consumers would interact with it. **Scope/efficiency concerns:** Coredrift flagged yellow status (churn_loc, hardening_in_core) and recommended splitting the task or adjusting budgets—suggesting the agent touched core files unnecessarily and didn't heed warnings about scope. Modified 5+ source files for what should be a focused user board component, with unclear impact. **Coordination:** Task was recovered from orphaned state but the agent ignored the coredrift warning, creating potential follow-up work. Overall, this reads as functionally complete but poorly executed—lacking documentation, proper artifact handoff, and adherence to quality gates that flagged issues during execution.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T00:25:32.123732+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

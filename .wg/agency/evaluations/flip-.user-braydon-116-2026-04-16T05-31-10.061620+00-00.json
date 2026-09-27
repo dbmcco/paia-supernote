@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-116-2026-04-16T05-31-10.061620+00-00",
+  "task_id": ".user-braydon-116",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.906,
+  "dimensions": {
+    "specificity_match": 0.6,
+    "semantic_match": 1.0,
+    "hallucination_rate": 0.14,
+    "requirement_coverage": 1.0
+  },
+  "notes": "Both descriptions clearly target the same core task: building a user board for braydon as a persistent conversation surface. All five actual acceptance criteria are captured in the inferred version (CLI interface, status monitoring, event viewing, write functionality, session persistence, events integration, and natural language processing). However, the inferred version loses specificity by omitting key details like the run_user_board.py file name and paia-events service name, opting for vaguer language like 'real-time updates' instead. The inferred version also includes one hallucinated requirement about 'including proper acceptance criteria for task completion verification,' which is meta-commentary about task verification rather than an actual system feature to implement. Overall high fidelity with minor specificity loss and one meta-level hallucination.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a comprehensive user board system with the following requirements: 1) Interactive CLI interface with status monitoring capabilities, 2) Events integration for real-time updates, 3) Session persistence to maintain state across sessions, 4) Natural language processing functionality for user interactions, 5) Ensure the user board is functional and accessible through the CLI. The implementation should provide a complete interface for users to interact with the board system and include proper acceptance criteria for task completion verification.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:31:10.061620+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

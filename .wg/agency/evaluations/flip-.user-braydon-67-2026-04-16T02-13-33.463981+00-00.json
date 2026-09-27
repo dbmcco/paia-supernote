@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-67-2026-04-16T02-13-33.463981+00-00",
+  "task_id": ".user-braydon-67",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.42,
+  "dimensions": {
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.25,
+    "semantic_match": 0.65,
+    "hallucination_rate": 0.75
+  },
+  "notes": "The actual task is extremely minimal—just 'User board: braydon' with a description of 'persistent conversation surface.' The inferred task significantly elaborates this into a detailed implementation spec with interactive terminal interface, events integration, session persistence, and note/task curation integration. While they address the same domain (user board), the inferred version adds ~7 specific requirements not present in the original task description. The original task has no acceptance criteria or explicit requirements beyond 'persistent conversation surface,' making it highly open to interpretation. The inferred version represents reasonable architectural choices for implementing such a surface, but most of the detail is inferred rather than specified in the actual task.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board system for the paia-supernote project with the following requirements: Create a comprehensive persistent conversation surface that allows users to interact with their Supernote content through an interactive terminal interface. The system should include events integration for real-time updates and session persistence to maintain user state across sessions. The implementation should provide a complete user dashboard experience that integrates with the existing note reading and task curation functionality.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:13:33.463981+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

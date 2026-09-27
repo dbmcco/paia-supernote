@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-59-2026-04-16T01-47-18.923297+00-00",
+  "task_id": ".user-braydon-59",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.62,
+  "dimensions": {
+    "requirement_coverage": 0.8,
+    "semantic_match": 0.7,
+    "hallucination_rate": 0.65,
+    "specificity_match": 0.35
+  },
+  "notes": "The actual task is extremely minimal—just 'User board: braydon — persistent conversation surface'—while the inferred version extracts and elaborates on this core concept. Both identify a user board with conversation persistence as the goal. However, the inferred version introduces substantial implementation details (terminal interface, paia-events integration, Supernote sync monitoring, user interaction with sync state) that are not present in the actual task description. These details appear reasonable given the project context but constitute hallucinations relative to the actual sparse specification. The inferred version is significantly more specific and prescriptive, whereas the actual task is deliberately high-level.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board interface for the paia-supernote system that provides an interactive terminal interface with conversation persistence, integrates with paia-events for messaging, and displays Supernote sync status monitoring. The user board should allow users to interact with their Supernote synchronization state and maintain conversation history across sessions.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:47:18.923297+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

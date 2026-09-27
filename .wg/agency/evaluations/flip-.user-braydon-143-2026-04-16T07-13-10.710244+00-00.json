@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-143-2026-04-16T07-13-10.710244+00-00",
+  "task_id": ".user-braydon-143",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.42,
+  "dimensions": {
+    "hallucination_rate": 0.85,
+    "semantic_match": 0.75,
+    "specificity_match": 0.15,
+    "requirement_coverage": 0.25
+  },
+  "notes": "The actual task is intentionally minimalist—just a title ('User board: braydon') and one sentence description ('persistent conversation surface'). The inferred task reconstructs detailed implementation requirements (terminal interface, events service integration, test coverage, production-ready) that are not present in the original. While both address the same semantic domain (a user board), the inferred version invents 85% of its specifics. The actual task deliberately omits implementation details, leaving them for the agent to determine; the reconstructed task assumes specific architectural choices (events service, terminal UI, testing) that were never stated.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a comprehensive user board with the following requirements: 1) Interactive terminal interface with proper styling, 2) Integration with the events service for real-time updates, 3) Session persistence to maintain state across interactions, 4) Complete test coverage with all tests passing, 5) Ensure the implementation is fully functional and production-ready. The user board should provide a terminal-based interface for user interaction while maintaining connection to the broader event-driven system architecture.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:13:10.710244+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

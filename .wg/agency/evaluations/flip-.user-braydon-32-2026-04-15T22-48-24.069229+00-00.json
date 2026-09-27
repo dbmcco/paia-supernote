@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-32-2026-04-15T22-48-24.069229+00-00",
+  "task_id": ".user-braydon-32",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.69,
+  "dimensions": {
+    "specificity_match": 0.4,
+    "semantic_match": 0.9,
+    "requirement_coverage": 0.6,
+    "hallucination_rate": 0.35
+  },
+  "notes": "The inferred task correctly identifies the core objective—implementing a user board for braydon in paia-supernote. However, the actual task description is extremely minimal ('User board: braydon — persistent conversation surface') with no explicit acceptance criteria, while the inferred version adds specific implementation requirements (TDD, tests passing, verification, Supernote integration) that aren't stated in the original. Some inferred requirements are reasonable from project context (TDD is mandatory in experiments), but others like 'ensure all tests pass' and 'verify functionality' are assumed rather than explicitly required by the task contract. The inferred version is significantly more specific and prescriptive than the original.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement the user board functionality for the paia-supernote project. This should include completing the user board component with all required features, ensuring all tests pass, and verifying that the functionality works correctly. Follow TDD practices and make sure the implementation integrates properly with the existing Supernote synchronization system. The task should be considered complete when all tests are passing and functionality has been verified.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T22:48:24.069229+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

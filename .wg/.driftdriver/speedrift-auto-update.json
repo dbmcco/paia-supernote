@@ -1,0 +1,18 @@
+{
+  "refresh_result": {
+    "wrote_agents_md": false,
+    "wrote_amplifier_adapter": false,
+    "wrote_amplifier_autostart_hook": false,
+    "wrote_amplifier_autostart_hooks_json": false,
+    "wrote_claude_code_hooks": false,
+    "wrote_claude_md": false,
+    "wrote_opencode_hooks": false,
+    "wrote_session_driver_executor": false,
+    "wrote_session_driver_runner": false
+  },
+  "signature": {
+    "head": "bc48312b1e5f50306e573ff88720528f0c562c74",
+    "mode": "git",
+    "status_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

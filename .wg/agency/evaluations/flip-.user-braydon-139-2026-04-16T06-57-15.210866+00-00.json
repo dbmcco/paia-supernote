@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-139-2026-04-16T06-57-15.210866+00-00",
+  "task_id": ".user-braydon-139",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.44,
+  "dimensions": {
+    "semantic_match": 0.6,
+    "hallucination_rate": 0.7,
+    "specificity_match": 0.4,
+    "requirement_coverage": 0.3
+  },
+  "notes": "The inferred task correctly identifies the core concept (user board) but diverges significantly from the actual task. The actual is intentionally abstract ('persistent conversation surface' with vague scope), while the inferred version adds domain assumptions (paia-supernote project, Supernote integration) and action directives (review, improve, fix) that are not stated in the original. The inferred version completely misses critical constraints (25 file max, 800 LOC, pit stop after 3) and the actual philosophical nature of the task. The hallucination rate is high because most specific claims in the inferred version are not directly supported by the actual task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Work on the user board functionality for the paia-supernote project. Review the current implementation and make any necessary improvements or fixes to ensure it properly handles Supernote integration.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:57:15.210866+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

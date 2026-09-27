@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-153-2026-04-16T07-53-11.746373+00-00",
+  "task_id": ".user-braydon-153",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.08,
+  "dimensions": {
+    "downstream_usability": 0.03,
+    "coordination_overhead": 0.15,
+    "style_adherence": 0.1,
+    "correctness": 0.05,
+    "intent_fidelity": 0.01,
+    "blocking_impact": 0.1,
+    "completeness": 0.08,
+    "efficiency": 0.25
+  },
+  "notes": "Task verification failed catastrophically (FLIP 0.01 vs threshold 0.70). No artifacts were recorded despite agent marking task as done. Coredrift warning (churn_loc, hardening_in_core) indicates code instability and budget pressure. The task definition itself is severely underspecified—no acceptance criteria, no clear deliverables, and vague objective—which creates ambiguity about success. The 1.5-minute completion time combined with verification failure and no artifacts suggests the agent either abandoned the task or produced unusable output. The orphaned state recovery suggests prior issues. The agent marked work complete despite clear signals of failure (yellow coredrift, FLIP 0.01), which will block downstream consumers. Key weakness: agent did not halt and diagnose before marking done. Recommendation: clarify task acceptance criteria and require verification passage before closure.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:53:11.746373+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

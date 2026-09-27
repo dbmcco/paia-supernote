@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-36-2026-04-15T23-23-25.875744+00-00",
+  "task_id": ".user-braydon-36",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.47,
+  "dimensions": {
+    "requirement_coverage": 0.4,
+    "specificity_match": 0.25,
+    "semantic_match": 0.65,
+    "hallucination_rate": 0.65
+  },
+  "notes": "The inferred task captures the core objective (implementing a user board for paia-supernote) but introduces substantial details not present in the actual task description. The actual task is intentionally minimal—just 'User board: braydon' as a 'persistent conversation surface' with file touch points. The inferred version adds specific requirements around paia-events connectivity, interface display, stability verification, and testing that do not appear in the original contract. The actual task has no explicit acceptance criteria or technical requirements beyond touching two files. Specificity mismatch is notable: the inferred task is much MORE specific, not less—suggesting the evaluator extrapolated features rather than extracted stated requirements.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement and verify the user board functionality for the paia-supernote integration. Ensure the user board properly connects to paia-events, displays the correct interface, and all core functionality is working. The user board should start correctly and maintain a stable connection to the paia-events system. Verify all components are functioning as expected through testing.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T23:23:25.875744+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

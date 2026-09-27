@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# ABOUTME: Debatedrift lane wrapper for speedrift
+# ABOUTME: Runs debate-driven design analysis and outputs drift score
+set -euo pipefail
+python3 -m driftdriver.debatedrift "$@"

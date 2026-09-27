@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-71-2026-04-16T02-29-57.824469+00-00",
+  "task_id": ".user-braydon-71",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.08,
+  "dimensions": {
+    "semantic_match": 0.1,
+    "requirement_coverage": 0.05,
+    "specificity_match": 0.1,
+    "hallucination_rate": 0.95
+  },
+  "notes": "The actual task is a simple, vague directive to create a 'user board for braydon' as a persistent conversation surface. The inferred task is a highly detailed ecosystem integration project involving bidirectional sync, agent protocols, and production hardening. These are fundamentally different scopes and domains. The inferred description appears to conflate work from prior sessions with this task, resulting in almost complete hallucination of requirements. The actual task specification includes no acceptance criteria and minimal detail.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement comprehensive integration between the paia-supernote connector and the broader PAIA ecosystem. This should include refactoring the core architecture to support bidirectional note synchronization, implementing the agent write protocol for automated note creation, and hardening the existing reader components for production use. Ensure the implementation follows the established patterns from other PAIA components and maintains compatibility with the existing task management workflow.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:29:57.824469+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

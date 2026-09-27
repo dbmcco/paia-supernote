@@ -1,0 +1,11 @@
+task_id: .verify-implement-vision-reader
+agent_id: eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+composition_id: eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0
+timestamp: 2026-04-14T19:19:29.950713+00:00
+mode:
+  type: learning
+  dimension:
+    type: novel_composition
+  bizarre_ideation: false
+assignment_source:
+  type: native

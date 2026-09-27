@@ -1,0 +1,17 @@
+{
+  "id": "flip-.archive-0-2026-04-14T19-01-17.173819+00-00",
+  "task_id": ".archive-0",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.845,
+  "dimensions": {
+    "hallucination_rate": 0.15,
+    "semantic_match": 0.95,
+    "specificity_match": 0.65,
+    "requirement_coverage": 0.85
+  },
+  "notes": "Both descriptions capture the same core task: archiving old/completed tasks in a cycle-driven process. The inferred version correctly identifies the archival purpose, task eligibility criteria, and cyclical nature. However, it loses specificity in two key areas: (1) the actual specifies 'archive.jsonl' as the destination file, while the inferred uses generic 'archive'; (2) the actual explicitly names 'coordinator cycle pattern' while the inferred uses generic 'cycle-driven process' without describing the coordinator interaction. The inferred version adds minor elaborations about mechanics ('check criteria', 'iterate through tasks') that are reasonable but not stated in the original. Overall high fidelity with minor specificity gaps.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Run an archival process to clean up and archive old or completed tasks from the workgraph task management system. Check for any tasks that meet archival criteria and move them to the archive. This should be a cycle-driven process that iterates through available tasks and archives those that are eligible for cleanup.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T19:01:17.173819+00:00",
+  "source": "flip"
+}

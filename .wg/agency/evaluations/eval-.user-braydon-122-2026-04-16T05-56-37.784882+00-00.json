@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-122-2026-04-16T05-56-37.784882+00-00",
+  "task_id": ".user-braydon-122",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.12,
+  "dimensions": {
+    "downstream_usability": 0.05,
+    "correctness": 0.1,
+    "blocking_impact": 0.15,
+    "coordination_overhead": 0.1,
+    "completeness": 0.05,
+    "intent_fidelity": 0.045,
+    "efficiency": 0.15,
+    "style_adherence": 0.2
+  },
+  "notes": "Critical failure: Task marked complete with no artifacts recorded. The desired outcome—a persistent conversation surface (user board)—has no evidence of delivery. FLIP verification failed catastrophically (0.04 vs 0.70 threshold), indicating the work does not meet basic acceptance standards. The agent also ignored a coredrift yellow alert (churn_loc, hardening_in_core) without addressing it before completion. The task specification itself is underspecified (empty acceptance criteria, vague description), but the agent did not flag this ambiguity—it simply marked the task done in 2.5 minutes with nothing to show. This creates downstream friction: there are no artifacts to hand off, no documentation of what was attempted, and no clarity on what the user board should contain or how it should function. If minimal work was actually done, this represents a failure to engage with the task. If substantial work was done but not recorded, this represents a tracking/documentation failure. Either way, the output is unusable and verification rejected it decisively.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:56:37.784882+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

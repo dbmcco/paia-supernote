@@ -1,0 +1,49 @@
+[
+  {
+    "timestamp": "2026-07-19T17:29:00.393702+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-07-19T17:30:04.254939+00:00",
+    "user": "braydon",
+    "message": "Task published"
+  },
+  {
+    "timestamp": "2026-07-19T18:39:17.195048+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task claimed by @avery"
+  },
+  {
+    "timestamp": "2026-07-19T18:39:17.634075+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T18:39:17.817224+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T18:48:03.814290+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T18:48:04.031813+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T18:48:04.135502+00:00",
+    "user": "braydon",
+    "message": "Independently verified 176 focused/regression tests pass. Added unit coverage for reorder-only OCR exclusion, stale write guards, structured error rendering/redaction, cursor bounds, and explicit empty allowlist behavior; no production code changed. Post-task drift exit=3."
+  },
+  {
+    "timestamp": "2026-07-19T18:48:08.523518+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task pending eval (agent reported done; awaiting `.evaluate-*` to score)"
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "id": "flip-supernote-organizer-final-2026-06-08T14-33-37.254541+00-00",
+  "task_id": "supernote-organizer-final",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.35,
+  "dimensions": {
+    "specificity_match": 0.3,
+    "requirement_coverage": 0.45,
+    "hallucination_rate": 0.5,
+    "semantic_match": 0.25
+  },
+  "notes": "The ACTUAL task is a verification/testing task (running existing tests and drift checks), but the INFERRED description reconstructs it as an implementation task (building modules from scratch). This is a fundamental category mismatch. The ACTUAL task explicitly requires running named test files and post-task drift checks with advisory tracking—none of which appear in the inferred version. The inferred version mischaracterizes the existing modules (already created, as shown in git status) as requiring creation, and fabricates TDD practices and specific test count targets (21+). While both tasks involve tests passing and spec documents, the actual task is about verification of existing code via drift checks, whereas the inferred version describes greenfield implementation. The inferred version captures ~45% of actual requirements but introduces substantial hallucinations (implementation-from-scratch narrative, test-writing rather than test-running focus).\n\nFLIP metadata: {\"comparison_model\":\"haiku\",\"comparison_source\":\"config\",\"inference_model\":\"haiku\",\"inference_source\":\"config\",\"inferred_prompt\":\"Implement the Supernote cloud page organizer feature with the following requirements: (1) Create organizer modules including note_reorder.py, note_snapshot.py, organizer_api.py, organizer_images.py, and organizer_ui.py in src/paia_supernote/; (2) Write comprehensive unit tests for each module (test_note_reorder.py, test_note_snapshot.py, test_organizer_api.py, test_organizer_images.py, test_organizer_ui.py) following TDD practices; (3) Integrate organizer functionality with existing services (cloud_poller, ingest_service, main, note_page_ops, uploader); (4) Include wg-contract and specdrift TOML specification blocks defining the task contract and test specifications; (5) Ensure all focused organizer tests pass (target: 21+ tests); (6) Verify full test suite runs without new failures in the organizer modules; (7) Create a feature specification document at docs/superpowers/specs/ documenting the organizer design. Accept completion with yellow advisory status if contract/spec parsing generates non-blocking warnings.\"}",
+  "evaluator": "flip:haiku+haiku",
+  "timestamp": "2026-06-08T14:33:37.254541+00:00",
+  "source": "flip"
+}

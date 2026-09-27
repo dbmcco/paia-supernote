@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-212-2026-04-16T11-35-08.121473+00-00",
+  "task_id": ".user-braydon-212",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.41,
+  "dimensions": {
+    "specificity_match": 0.25,
+    "requirement_coverage": 0.4,
+    "hallucination_rate": 0.85,
+    "semantic_match": 0.55
+  },
+  "notes": "The actual task is a minimal spec: 'User board for braydon — persistent conversation surface.' The inferred task interprets this as a verification/testing activity with extensive specific requirements (CLI entry point, paia-events integration, terminal branding, session persistence, NLP, test suite completion, dependency drift). While both address the 'user board' domain, the inferred version hallucinated most of its detail—testing procedures, verification checklists, drift reporting, and implementation checks that don't appear in the actual task. The actual task is purely creational/aspirational; the inferred task is diagnostic and quality-assurance focused. Low specificity match because the inferred version is dramatically more detailed than the terse original.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the existing user board implementation is working correctly and ready for use. Check that all core functionality is operational including: CLI entry point configuration, paia-events service integration, terminal interface with proper branding, session persistence, test suite completion, conversational interface with natural language processing, and persistent conversation history. Confirm all tests pass and the application launches successfully. Report on any dependency changes or drift issues that need attention.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T11:35:08.121473+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-164-2026-04-16T08-34-44.106172+00-00",
+  "task_id": ".user-braydon-164",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.68,
+  "dimensions": {
+    "efficiency": 0.65,
+    "coordination_overhead": 0.65,
+    "correctness": 0.85,
+    "blocking_impact": 0.8,
+    "intent_fidelity": 0.62,
+    "style_adherence": 0.6,
+    "completeness": 0.7,
+    "downstream_usability": 0.75
+  },
+  "notes": "Functionally complete — user board is operational, tests pass (8/8), module imports correctly. However, significant process violations reduce the grade: (1) Coredrift alerts for scope drift, file churn, and core hardening indicate the agent exceeded the contract's touch globs and max_loc budget; (2) Contract issue: auto_followups=true required acceptance criteria, which the agent added after-the-fact rather than working within the spec; (3) FLIP score of 0.62 (below 0.70 threshold) signals code quality or scope concerns despite verification passing. The task was orphaned initially, which may explain setup issues. Strengths: quick execution, clean module structure, good test coverage, functional output. Weaknesses: constraint violations (max_files/max_loc), scope creep, contract compliance issues. Recommendation: clarify touch globs and acceptance criteria in task setup; investigate scope drift to ensure files were correctly modified for the objective.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:34:44.106172+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

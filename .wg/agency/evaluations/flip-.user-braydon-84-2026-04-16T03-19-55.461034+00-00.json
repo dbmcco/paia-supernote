@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-84-2026-04-16T03-19-55.461034+00-00",
+  "task_id": ".user-braydon-84",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.39,
+  "dimensions": {
+    "requirement_coverage": 0.25,
+    "specificity_match": 0.25,
+    "semantic_match": 0.6,
+    "hallucination_rate": 0.75
+  },
+  "notes": "The inferred task captures the general domain (user board for braydon) but significantly diverges from the actual task. The actual task is extremely minimal—just 'User board for braydon — persistent conversation surface' with no specific feature requirements. The inferred version fabricates ~7 specific features (persistent session management, conversation history, real-time status monitoring, interactive interface, events integration, auto-refresh, graceful error handling) that don't appear in the original. Additionally, the inferred framing shifts from implementation to assessment/verification, changing the task intent. Only 'user board' and 'persistent' are clearly present in both versions.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Assess the current user board implementation in the paia-supernote project. Examine the existing code to verify it's working properly and check if any required enhancements are needed. The user board should include features like persistent session management, conversation history, real-time status monitoring, interactive interface, events integration, auto-refresh, and graceful error handling. Verify these features are present and functioning correctly.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:19:55.461034+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

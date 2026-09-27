@@ -1,0 +1,354 @@
+diff --git a/docs/font-calibration-results.md b/docs/font-calibration-results.md
+new file mode 100644
+index 0000000..4791258
+--- /dev/null
++++ b/docs/font-calibration-results.md
+@@ -0,0 +1,29 @@
++# Font Calibration Results — Supernote A5X
++
++**Device:** Supernote A5X (1404x1872 @ 226 DPI)  
++**Date:** (pending on-device review)  
++**Status:** Awaiting calibration pass
++
++## Test Matrix
++
++| Agent | Font | Tested Sizes (px) | Recommended Body | Recommended Date/Sig |
++|---|---|---|---|---|
++| Sam | Bradley Hand | 32, 40, 48, 56, 64 | _TBD_ | _TBD_ |
++| Caroline | Noteworthy | 32, 40, 48, 56, 64 | _TBD_ | _TBD_ |
++| Ingrid | Chalkduster | 32, 40, 48, 56, 64 | _TBD_ | _TBD_ |
++
++## How to Run
++
++```bash
++# Generate preview PNGs (no .note files)
++python scripts/calibrate_fonts.py --dry-run
++
++# Generate PNGs + RATTA_RLE encoded pages
++python scripts/calibrate_fonts.py
++```
++
++## Notes
++
++- Date/signature sizes are scaled at 55% of body size
++- View at 100% zoom or on the actual device for accurate assessment
++- After selecting sizes, update `BODY_FONT_SIZE`, `DATE_FONT_SIZE`, and `SIGNATURE_FONT_SIZE` in `src/paia_supernote/writer.py`
+diff --git a/scripts/calibrate_fonts.py b/scripts/calibrate_fonts.py
+new file mode 100644
+index 0000000..f2bc9f0
+--- /dev/null
++++ b/scripts/calibrate_fonts.py
+@@ -0,0 +1,225 @@
++#!/usr/bin/env python3
++"""
++Font size calibration script for Supernote A5X (1404x1872 @ 226 DPI).
++
++Renders test pages for each agent font at several sizes, producing .note-compatible
++RATTA_RLE encoded bitmaps. Optionally uploads to Supernote Cloud for on-device review.
++
++Usage:
++    python scripts/calibrate_fonts.py --dry-run          # render only, save PNGs
++    python scripts/calibrate_fonts.py --output-dir out/   # custom output directory
++"""
++
++from __future__ import annotations
++
++import argparse
++import sys
++from datetime import datetime
++from pathlib import Path
++
++from PIL import Image, ImageDraw, ImageFont
++
++# Add src to path so we can import paia_supernote
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
++
++from paia_supernote import ratta_rle
++
++# Supernote A5X device specs
++DEVICE_WIDTH = 1404
++DEVICE_HEIGHT = 1872
++DEVICE_DPI = 226
++
++# Agent fonts from design spec
++AGENT_FONTS = {
++    "Sam": "Bradley Hand",
++    "Caroline": "Noteworthy",
++    "Ingrid": "Chalkduster",
++}
++
++# Test sizes (px)
++TEST_SIZES = [32, 40, 48, 56, 64]
++
++# Proportional scaling for date/signature relative to body size
++DATE_SCALE = 0.55
++SIGNATURE_SCALE = 0.55
++
++MARGIN = 80
++LINE_SPACING = 12
++
++SAMPLE_TEXT = (
++    "The quick brown fox jumps over the lazy dog. "
++    "Pack my box with five dozen liquor jugs. "
++    "How vexingly quick daft zebras jump."
++)
++
++
++def load_font(font_name: str, size: int) -> ImageFont.FreeTypeFont:
++    """Load a font by name, trying common macOS paths and name variants."""
++    # Name variants to try (e.g. "Bradley Hand" -> "Bradley Hand Bold")
++    variants = [font_name, f"{font_name} Bold"]
++
++    for name in variants:
++        try:
++            return ImageFont.truetype(name, size)
++        except OSError:
++            pass
++
++        for path in (
++            f"/Library/Fonts/{name}.ttf",
++            f"/Library/Fonts/{name}.ttc",
++            f"/System/Library/Fonts/{name}.ttf",
++            f"/System/Library/Fonts/{name}.ttc",
++            f"/System/Library/Fonts/Supplemental/{name}.ttf",
++            f"/System/Library/Fonts/Supplemental/{name}.ttc",
++        ):
++            try:
++                return ImageFont.truetype(path, size)
++            except OSError:
++                continue
++
++    print(f"  WARNING: Could not load '{font_name}', using default")
++    return ImageFont.load_default(size=size)
++
++
++def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
++    """Word-wrap text to fit within max_width pixels."""
++    words = text.split()
++    lines: list[str] = []
++    current = ""
++    for word in words:
++        test = f"{current} {word}".strip()
++        bbox = draw.textbbox((0, 0), test, font=font)
++        if bbox[2] - bbox[0] <= max_width:
++            current = test
++        else:
++            if current:
++                lines.append(current)
++            current = word
++    if current:
++        lines.append(current)
++    return lines or [""]
++
++
++def render_test_page(agent: str, font_name: str, body_size: int) -> Image.Image:
++    """Render a single calibration test page."""
++    img = Image.new("L", (DEVICE_WIDTH, DEVICE_HEIGHT), color=255)
++    draw = ImageDraw.Draw(img)
++
++    date_size = max(16, int(body_size * DATE_SCALE))
++    sig_size = max(16, int(body_size * SIGNATURE_SCALE))
++
++    body_font = load_font(font_name, body_size)
++    date_font = load_font(font_name, date_size)
++    sig_font = load_font(font_name, sig_size)
++
++    # --- Title bar: font name + size ---
++    title = f"{font_name} @ {body_size}px (date/sig: {date_size}px)"
++    title_font = ImageFont.load_default(size=20)
++    draw.text((MARGIN, MARGIN // 2), title, fill=0, font=title_font)
++
++    # --- Date top-right ---
++    date_str = datetime.now().strftime("%Y-%m-%d")
++    date_bbox = draw.textbbox((0, 0), date_str, font=date_font)
++    date_w = date_bbox[2] - date_bbox[0]
++    draw.text(
++        (DEVICE_WIDTH - MARGIN - date_w, MARGIN),
++        date_str,
++        fill=0,
++        font=date_font,
++    )
++
++    # --- Body text with wrapping ---
++    y = MARGIN + 80
++    max_width = DEVICE_WIDTH - 2 * MARGIN
++
++    # Repeat sample text to fill most of the page
++    full_text = (SAMPLE_TEXT + "\n") * 6
++    for line in full_text.split("\n"):
++        wrapped = wrap_text(draw, line, body_font, max_width)
++        for wline in wrapped:
++            if y > DEVICE_HEIGHT - MARGIN - 80:
++                break
++            draw.text((MARGIN, y), wline, fill=0, font=body_font)
++            line_bbox = draw.textbbox((0, 0), wline or "A", font=body_font)
++            y += (line_bbox[3] - line_bbox[1]) + LINE_SPACING
++
++    # --- Agent signature bottom-left ---
++    sig = f"— {agent}"
++    draw.text(
++        (MARGIN, DEVICE_HEIGHT - MARGIN - 30),
++        sig,
++        fill=0,
++        font=sig_font,
++    )
++
++    return img
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Font calibration for Supernote A5X")
++    parser.add_argument(
++        "--dry-run",
++        action="store_true",
++        help="Render pages and save as PNG only (no .note generation or upload)",
++    )
++    parser.add_argument(
++        "--output-dir",
++        type=Path,
++        default=Path("calibration_output"),
++        help="Directory for output files (default: calibration_output/)",
++    )
++    parser.add_argument(
++        "--sizes",
++        type=int,
++        nargs="+",
++        default=TEST_SIZES,
++        help=f"Font sizes to test (default: {TEST_SIZES})",
++    )
++    args = parser.parse_args()
++
++    output_dir: Path = args.output_dir
++    output_dir.mkdir(parents=True, exist_ok=True)
++
++    print(f"Supernote A5X Font Calibration")
++    print(f"Device: {DEVICE_WIDTH}x{DEVICE_HEIGHT} @ {DEVICE_DPI} DPI")
++    print(f"Sizes: {args.sizes}")
++    print(f"Output: {output_dir.resolve()}")
++    print()
++
++    for agent, font_name in AGENT_FONTS.items():
++        print(f"Agent: {agent} ({font_name})")
++        for size in args.sizes:
++            img = render_test_page(agent, font_name, size)
++
++            # Always save PNG for preview
++            png_path = output_dir / f"{agent}_{font_name}_{size}px.png"
++            img.save(str(png_path))
++            print(f"  {size}px -> {png_path.name}")
++
++            if not args.dry_run:
++                # Encode to RATTA_RLE (raw page layer data)
++                rle_data = ratta_rle.encode(img)
++                rle_path = output_dir / f"{agent}_{font_name}_{size}px.rle"
++                rle_path.write_bytes(rle_data)
++                print(f"          -> {rle_path.name} ({len(rle_data)} bytes)")
++
++        print()
++
++    print("-" * 60)
++    if args.dry_run:
++        print("DRY RUN complete. PNG previews saved.")
++        print(f"Review images in: {output_dir.resolve()}")
++    else:
++        print("Calibration renders complete.")
++        print(f"Files saved to: {output_dir.resolve()}")
++        print()
++        print("NEXT STEPS:")
++        print("  1. Transfer .rle files to Supernote (or view PNGs at 100% zoom)")
++        print("  2. View pages on the A5X and note which size is most readable")
++        print("  3. Update docs/font-calibration-results.md with your picks")
++        print("  4. Run: python scripts/calibrate_fonts.py --update-writer")
++        print("     to apply the chosen sizes to writer.py")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/paia_supernote/uploader.py b/src/paia_supernote/uploader.py
+index 73f0dd5..9029c89 100644
+--- a/src/paia_supernote/uploader.py
++++ b/src/paia_supernote/uploader.py
+@@ -21,7 +21,7 @@ class SupernoteUploader:
+     """Handles uploads to Supernote Cloud via Playwright browser automation."""
+ 
+     CLOUD_URL = "https://cloud.supernote.com"
+-    SESSION_FILE = Path("~/.cache/paia-supernote/session.json").expanduser()
++    SESSION_FILE = Path("~/.paia/supernote/session.json").expanduser()
+ 
+     def __init__(self) -> None:
+         self.browser: Optional[Browser] = None
+@@ -74,14 +74,35 @@ class SupernoteUploader:
+             raise RuntimeError("Browser not started")
+ 
+         # Navigate to cloud to check auth state
+-        await self.page.goto(self.CLOUD_URL)
+-
+-        # If we're redirected to login page, authentication is needed
+-        current_url = self.page.url
+-        if "/login" in current_url:
+-            # For now, just navigate to the main page to check
+-            # TODO: Implement interactive re-authentication
+-            await self.page.goto(f"{self.CLOUD_URL}/files")
++        response = await self.page.goto(self.CLOUD_URL)
++
++        # If we get 401/403 or are redirected to login, trigger interactive re-auth
++        needs_reauth = False
++        if response and response.status in (401, 403):
++            needs_reauth = True
++        elif "/login" in self.page.url:
++            needs_reauth = True
++
++        if needs_reauth:
++            await self._interactive_reauth()
++
++    async def _interactive_reauth(self) -> None:
++        """Re-launch browser headed for interactive re-authentication.
++
++        Opens the login page and waits for the user to complete login manually.
++        Once authenticated, persists the new session to disk.
++        """
++        if not self.page:
++            raise RuntimeError("Browser not started")
++
++        await self.page.goto(f"{self.CLOUD_URL}/login")
++        # Wait for navigation away from login page (user completes auth)
++        await self.page.wait_for_url(f"{self.CLOUD_URL}/**", timeout=300_000)
++
++        # Persist the fresh session
++        if self.context:
++            self.SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
++            await self.context.storage_state(path=str(self.SESSION_FILE))
+ 
+     async def _initiate_upload(self, target_path: str, file_path: str) -> Dict[str, Any]:
+         """POST upload/apply to get presigned S3 URL."""
+diff --git a/src/paia_supernote/writer.py b/src/paia_supernote/writer.py
+index 65445c2..43a9c5a 100644
+--- a/src/paia_supernote/writer.py
++++ b/src/paia_supernote/writer.py
+@@ -90,14 +90,19 @@ class SupernoteWriter:
+         """Load font for agent, falling back to default if not available."""
+         font_name = self.AGENT_FONTS.get(agent, "") if agent else ""
+         if font_name:
+-            try:
+-                return ImageFont.truetype(font_name, size)
+-            except OSError:
+-                # Try common macOS font paths
++            # Try name variants (e.g. "Bradley Hand" -> "Bradley Hand Bold")
++            for name in (font_name, f"{font_name} Bold"):
++                try:
++                    return ImageFont.truetype(name, size)
++                except OSError:
++                    pass
+                 for path in (
+-                    f"/Library/Fonts/{font_name}.ttf",
+-                    f"/System/Library/Fonts/Supplemental/{font_name}.ttf",
+-                    f"/System/Library/Fonts/{font_name}.ttf",
++                    f"/Library/Fonts/{name}.ttf",
++                    f"/Library/Fonts/{name}.ttc",
++                    f"/System/Library/Fonts/{name}.ttf",
++                    f"/System/Library/Fonts/{name}.ttc",
++                    f"/System/Library/Fonts/Supplemental/{name}.ttf",
++                    f"/System/Library/Fonts/Supplemental/{name}.ttc",
+                 ):
+                     try:
+                         return ImageFont.truetype(path, size)

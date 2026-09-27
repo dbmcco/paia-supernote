@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-19-2026-04-15T21-37-23.551428+00-00",
+  "task_id": ".user-braydon-19",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.4,
+  "dimensions": {
+    "requirement_coverage": 0.25,
+    "hallucination_rate": 0.8,
+    "specificity_match": 0.2,
+    "semantic_match": 0.65
+  },
+  "notes": "The actual task is intentionally minimal—just 'User board for braydon — persistent conversation surface' with no specific acceptance criteria or requirements. The inferred task describes a much more elaborate implementation featuring rich terminal UI, paia-events integration, activity monitoring, commands, session persistence, and testing. While both refer to creating a user board for conversation, the inferred version extracts specific technical implementation details that were not present in the original task. The actual task appears to have delegated implementation specificity to the agent; the inferred version reconstructs what the agent chose to build, not what was explicitly requested.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Enhance the user board component with a rich terminal UI interface that includes conversation tracking, enhanced commands, and session persistence. The user board should connect to paia-events for activity monitoring and provide a comprehensive conversational interface. Implement extensive enhancements to improve the user experience, ensure proper integration with the existing paia-events system, and include testing to verify the user board works correctly with rich UI display and activity tracking capabilities.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T21:37:23.551428+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

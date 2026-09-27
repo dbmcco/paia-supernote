@@ -1,0 +1,17 @@
+{
+  "id": "flip-supernote-organizer-apply-final-2026-07-08T12-31-26.470234+00-00",
+  "task_id": "supernote-organizer-apply-final",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.33,
+  "dimensions": {
+    "semantic_match": 0.35,
+    "requirement_coverage": 0.22,
+    "specificity_match": 0.4,
+    "hallucination_rate": 0.55
+  },
+  "notes": "The actual task is to verify tests and restart the organizer service on a specific tailnet address, with git operations and drift checks. The inferred version misreads this as a task to fix TOML parsing errors in configuration blocks. While both mention running tests, the inferred version fabricates an entire problem statement (invalid_contract/invalid_specdrift_spec errors, TOML syntax fixes) that does not appear in the actual task. The inferred version also omits critical operational requirements: restarting the organizer on 100.77.214.44:18765, committing scoped files, and the touch-set/model-route metadata. Coverage of actual requirements is low (~22%), and ~55% of inferred content is not grounded in the original task description.\n\nFLIP metadata: {\"comparison_model\":\"pi:openai-codex/gpt-5.5\",\"comparison_source\":\"config\",\"inference_model\":\"pi:openai-codex/gpt-5.5\",\"inference_source\":\"config\",\"inferred_prompt\":\"Fix TOML parsing errors in the wg-contract and specdrift blocks so they parse correctly. The Coredrift and Specdrift validation systems are reporting invalid_contract and invalid_specdrift_spec errors. Find and correct the TOML syntax issues in these configuration blocks (likely in CLAUDE.md or a related manifest file). Acceptance criteria: (1) Coredrift validation passes (no invalid_contract error), (2) Specdrift validation passes (no invalid_specdrift_spec error), (3) All tests pass (focused test suite: tests/test_organizer_api.py, tests/test_organizer_server.py, tests/test_organizer_ui.py, tests/test_note_reorder.py, tests/test_note_page_ops.py; full test suite), (4) Server starts and responds to smoke test GET requests (e.g., /api/notebooks endpoint returns 200), (5) No regressions in existing functionality. Do not perform real Supernote Cloud writes. Minor post-task drift warnings (yellow advisory level) from generated parser warnings are acceptable if the underlying parsing errors are resolved.\"}",
+  "evaluator": "flip:pi:openai-codex/gpt-5.5+pi:openai-codex/gpt-5.5",
+  "timestamp": "2026-07-08T12:31:26.470234+00:00",
+  "source": "flip"
+}

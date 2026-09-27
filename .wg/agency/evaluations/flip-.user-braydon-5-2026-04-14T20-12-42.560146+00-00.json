@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-5-2026-04-14T20-12-42.560146+00-00",
+  "task_id": ".user-braydon-5",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.36,
+  "dimensions": {
+    "semantic_match": 0.45,
+    "requirement_coverage": 0.35,
+    "specificity_match": 0.25,
+    "hallucination_rate": 0.75
+  },
+  "notes": "The actual task is minimal (just 'User board: braydon' as a persistent conversation surface with no explicit requirements), while the inferred task reconstructs a detailed state-assessment workflow with specific files and examination procedures. The semantic overlap is moderate—both are about user boards, but the inferred task assumes this is about examining current implementation rather than creating/maintaining the surface itself. The inferred version adds substantial detail (paia-supernote context, user_board.py, state assessment framing, issues/gaps identification) that isn't explicitly stated in the actual task, resulting in significant hallucination. The actual task's vagueness makes complete requirement matching impossible.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Examine the current state of the user board implementation in the paia-supernote project. Review the user_board.py module and related files to understand what has been built so far, assess the current functionality, and identify any issues or gaps. This is a state assessment task - focus on understanding what exists rather than making changes.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T20:12:42.560146+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

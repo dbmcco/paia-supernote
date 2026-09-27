@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-90-2026-04-16T03-43-10.515334+00-00",
+  "task_id": ".user-braydon-90",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.8,
+  "dimensions": {
+    "hallucination_rate": 0.6,
+    "requirement_coverage": 1.0,
+    "specificity_match": 0.4,
+    "semantic_match": 0.95
+  },
+  "notes": "Both describe the same core task: a persistent conversation surface user board for paia-supernote. All explicit acceptance criteria (module imports, executable script, interactive CLI, session persistence) are captured in the inferred version. However, the actual task description is intentionally minimal ('User board for braydon — persistent conversation surface'), while the inferred version significantly elaborates with specific features not mentioned in the original: status monitoring, event tracking, content writing, comprehensive help system, and beautiful UI. These are reasonable inferences from 'persistent conversation surface' but represent meaningful inference beyond what was explicitly specified. The hallucination_rate reflects this gap between the lean actual description and the more elaborate inferred elaboration.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board interface for the paia-supernote system that provides an interactive CLI for users to monitor and interact with their Supernote synchronization. The user board should include: 1) Status monitoring capabilities to track sync state and device connectivity, 2) Event tracking to show real-time updates from the Supernote Partner app, 3) Content writing functionality to allow agents to write notes back to Supernote pages, 4) A comprehensive help system with commands for status/events/write/help, 5) Session persistence that saves conversation history to ~/.paia-supernote-session.json, 6) A beautiful terminal UI for user interaction. Ensure the user board module can be imported successfully and create a run_user_board.py script that can be executed directly. The implementation should serve as a persistent conversation surface between users and the paia-supernote system.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:43:10.515334+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

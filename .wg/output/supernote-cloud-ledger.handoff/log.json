@@ -1,0 +1,71 @@
+[
+  {
+    "timestamp": "2026-07-19T17:29:10.635902+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-07-19T17:30:04.254936+00:00",
+    "user": "braydon",
+    "message": "Task published"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:16.072936+00:00",
+    "actor": "agent-1346",
+    "user": "braydon",
+    "message": "Spawned by coordinator --executor native --model zai/glm-5.2"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:16.072942+00:00",
+    "actor": "spawn",
+    "message": "Pre-flight model validation: Model 'zai/glm-5.2' not found in OpenRouter model list.\n  Did you mean one of:\n    - z-ai/glm-5.1\n    - z-ai/glm-5\n    - z-ai/glm-4.7\n  Hint: run `wg models search glm-5.2` to find valid alternatives, or `wg models list` to see the local registry."
+  },
+  {
+    "timestamp": "2026-07-19T19:28:16.230079+00:00",
+    "actor": "agent-1346",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:45.847747+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry from failed (attempt #2) — reason: Dispatcher preflight rejected unavailable OpenRouter ZAI model; manual Pi handoff"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:45.912781+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task claimed by @avery"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:46.345243+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:46.512534+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T19:31:28.538232+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T19:31:28.719934+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T19:31:28.801861+00:00",
+    "user": "braydon",
+    "message": "Handoff artifact written. Commit 0dcfcb3 contains only scoped feature files and is pushed. Full tests 415 passed, integrations 11 passed, lock check passed; pre-existing uv.lock/scratch restored untouched. Dispatcher remains paused for unrelated legacy manual claims; manual-Pi fallback recorded. Post-task drift exit=3."
+  },
+  {
+    "timestamp": "2026-07-19T19:31:28.865257+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task pending eval (agent reported done; awaiting `.evaluate-*` to score)"
+  }
+]

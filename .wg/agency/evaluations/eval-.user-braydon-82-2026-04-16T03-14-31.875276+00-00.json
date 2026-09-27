@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-82-2026-04-16T03-14-31.875276+00-00",
+  "task_id": ".user-braydon-82",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.43,
+  "dimensions": {
+    "completeness": 0.4,
+    "downstream_usability": 0.3,
+    "coordination_overhead": 0.55,
+    "blocking_impact": 0.5,
+    "efficiency": 0.35,
+    "correctness": 0.45,
+    "intent_fidelity": 0.66,
+    "style_adherence": 0.6
+  },
+  "notes": "Task marked as complete but verification failed (FLIP 0.66 below 0.70 threshold). No artifacts were recorded despite claims of 'fully functional' interface, making the work impossible to assess or build upon. The task itself was underspecified with empty acceptance criteria, yet the agent did not flag this before marking done. The 2.5-minute completion time is suspiciously fast for a 'persistent conversation surface with enhanced interface'—either scope was minimal or work was incomplete. The task log shows validation of existing functionality rather than clear implementation steps. Without recorded artifacts, downstream tasks have nothing to consume, and future reviewers cannot verify the claimed functionality. The agent's recovery from orphaned state, coredrift warnings, and lack of concrete deliverables suggest the work needs substantial rework or clarification. The primary failure is verification + lack of artifacts; without these, the task must be considered incomplete regardless of agent claims.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:14:31.875276+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

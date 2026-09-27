@@ -1,0 +1,266 @@
+diff --git a/README.md b/README.md
+index 40c7002..843e9b2 100644
+--- a/README.md
++++ b/README.md
+@@ -301,9 +301,14 @@ for the full reference. Summary:
+ - **Allowlist**: only `cloud_change_ledger_notebooks` (falling back to
+   `folio_sync_notebooks`) are ledger-tracked; non-allowlisted notebooks are
+   skipped before download/parse/OCR/mutation.
+-- **Cached reads** (`supernote changes`, `supernote read`) read the local ledger
+-  cache without contacting Supernote Cloud. `changes` returns a replayable
+-  `next_cursor` and the current `notebook_revision`.
++- **Cached reads** (`supernote changes`) read the local ledger cache without
++  contacting Supernote Cloud. `changes` returns a replayable `next_cursor` and
++  the current `notebook_revision`. `supernote changes <notebook> --latest`
++  returns the cached snapshot with a text preview; add `--include-text` (with
++  `--json`) to get the full cached page OCR for every page without Cloud access.
++  The existing `supernote read` command remains the direct current-notebook read
++  path; the cache-backed full-page command is the `changes --latest --include-text`
++  form.
+ - **Per-agent cursors**: `supernote changes --agent <agent>` reads after that
+   agent's last cursor; `--advance` acknowledges it only after a successful read.
+ - **Base-revision writes**: the `supernote.write.requested` route requires a
+diff --git a/docs/supernote-cloud-change-ledger-contracts.md b/docs/supernote-cloud-change-ledger-contracts.md
+index 0b84a2f..c96ca8d 100644
+--- a/docs/supernote-cloud-change-ledger-contracts.md
++++ b/docs/supernote-cloud-change-ledger-contracts.md
+@@ -56,16 +56,24 @@ Supernote Cloud. This makes reads fast, replayable, and safe to retry.
+ ```text
+ supernote changes <notebook>                          # all cached changes since the start
+ supernote changes <notebook> --since <change-id|iso>  # replayable explicit cursor
+-supernote changes <notebook> --latest                 # latest cached notebook/page state + OCR
+-supernote read <notebook> --pages <indexes>           # full cached OCR text for a page
++supernote changes <notebook> --latest                 # latest cached notebook/page state + OCR preview
++supernote changes <notebook> --latest --include-text --json  # full cached page OCR for the notebook
++supernote read <notebook> --pages <indexes>           # direct current-notebook read path
+ ```
+ 
+ - Every changes response returns `next_cursor` (a monotonic change ID) and the
+   current `notebook_revision`. Pass that cursor back as `--since` for an
+   auditable, replayable read.
+ - `--latest` returns the current cached snapshot: notebook revision, page count,
+-  ordered pages with their stable page IDs, content hashes, OCR status, and text
+-  preview.
++  ordered pages with their stable page IDs, content hashes, OCR status, and a
++  text **preview**. By default the full OCR `text` is omitted (it is `null`).
++- `--include-text` (requires `--latest`, canonical with `--json`) fills in the
++  full cached page OCR `text` for each page from the local ledger cache. This is
++  the full cached page-read command: it returns every cached page's OCR text
++  without contacting Supernote Cloud or constructing the uploader. Outside
++  `--latest` it is rejected (changes responses carry a preview, not full text).
++- The existing `supernote read` command remains the direct current-notebook read
++  path; it is not the cache-backed command described in this section.
+ - Repeated reads of unchanged cached state are idempotent and produce no new
+   change records.
+ - If no cached snapshot exists yet for an allowlisted notebook, the read returns
+diff --git a/src/paia_supernote/cli.py b/src/paia_supernote/cli.py
+index 956c298..1446358 100644
+--- a/src/paia_supernote/cli.py
++++ b/src/paia_supernote/cli.py
+@@ -364,13 +364,16 @@ def cmd_changes(
+     agent: str | None = None,
+     advance: bool = False,
+     latest: bool = False,
++    include_text: bool = False,
+ ) -> BaseModel:
+     """Read cached ledger changes/state without Cloud or uploader access."""
+     contract = SupernoteReadContract(config.raw_config or {}, config.state_db_path)
+     if latest:
+         return contract.get_latest_notebook_state(
+-            LatestNotebookStateRequest(notebook=notebook)
++            LatestNotebookStateRequest(notebook=notebook, include_text=include_text)
+         )
++    if include_text:
++        raise SystemExit("changes --include-text requires --latest")
+     response = contract.get_changes(
+         NotebookChangesRequest(notebook=notebook, since=since, agent=agent)
+     )
+@@ -648,6 +651,14 @@ def _build_parser() -> argparse.ArgumentParser:
+         action="store_true",
+         help="return latest cached notebook/page state instead of changes",
+     )
++    p_changes.add_argument(
++        "--include-text",
++        action="store_true",
++        help=(
++            "with --latest, return full cached page OCR text "
++            "(default latest output is preview-only)"
++        ),
++    )
+ 
+     p_auth = sub.add_parser("auth", help="cloud auth")
+     auth_sub = p_auth.add_subparsers(dest="auth_command", required=True)
+@@ -784,6 +795,7 @@ async def _run_command(
+             agent=args.agent,
+             advance=args.advance,
+             latest=args.latest,
++            include_text=args.include_text,
+         )
+         emit(result, format_changes(result))
+     elif args.command == "auth":
+diff --git a/tests/integration/test_agent_contract_surfaces.py b/tests/integration/test_agent_contract_surfaces.py
+index 647918b..5559ac1 100644
+--- a/tests/integration/test_agent_contract_surfaces.py
++++ b/tests/integration/test_agent_contract_surfaces.py
+@@ -38,6 +38,7 @@ from paia_supernote.cloud_change_ledger import (
+ from paia_supernote.contract_errors import format_agent_error, make_agent_error
+ from paia_supernote.events import EventsClient
+ from paia_supernote.main import DEFAULT_CONFIG, SupernoteService
++from paia_supernote.page_state import PageStateStore
+ 
+ # ---------------------------------------------------------------------------
+ # Shared fixtures
+@@ -136,6 +137,49 @@ def test_cli_changes_latest_returns_cached_state_without_cloud(
+     assert captured.err == ""
+ 
+ 
++@pytest.mark.integration
++def test_cli_changes_latest_include_text_returns_full_cached_ocr(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """``changes --latest --include-text --json`` returns full cached OCR for
++    ready pages, while the default ``--latest`` run stays preview-only."""
++    state_db = tmp_path / "state.db"
++    _seed_snapshot(
++        tmp_path,
++        _NOTEBOOK,
++        "rev-1",
++        pages=[PageRevision("p-1", 0, "hash-1")],
++    )
++    page_state = PageStateStore(state_db)
++    page_state.init_schema()
++    page_state.upsert_ocr_page(
++        _NOTEBOOK, 0, "rev-1:p-1:hash-1", "full cached OCR for page one", "m"
++    )
++    ledger = CloudChangeLedger(state_db)
++    ledger.mark_page_ocr_status(_NOTEBOOK, "p-1", "ready")
++    monkeypatch.setattr(cli, "load_cli_config", lambda path=None: _cli_config(tmp_path))
++
++    # Full cached OCR is returned only when --include-text is passed.
++    rc = cli.main(["--json", "changes", _NOTEBOOK, "--latest", "--include-text"])
++    captured = capsys.readouterr()
++    assert rc == 0
++    pages = json.loads(captured.out)["pages"]
++    assert pages[0]["page_id"] == "p-1"
++    assert pages[0]["text"] == "full cached OCR for page one"
++    assert pages[0]["ocr_status"] == "ready"
++    assert pages[0]["text_preview"] == "full cached OCR for page one"
++    # The cached read never contacts Cloud (no structured error on stderr).
++    assert captured.err == ""
++
++    # Default latest stays preview-only: text is null, preview is populated.
++    cli.main(["--json", "changes", _NOTEBOOK, "--latest"])
++    default_pages = json.loads(capsys.readouterr().out)["pages"]
++    assert default_pages[0]["text"] is None
++    assert default_pages[0]["text_preview"] == "full cached OCR for page one"
++
++
+ @pytest.mark.integration
+ def test_cli_changes_returns_cached_change_batches_and_cursor(
+     tmp_path: Path,
+diff --git a/tests/test_agent_read_contracts.py b/tests/test_agent_read_contracts.py
+index 3ba86d1..3c3c5b1 100644
+--- a/tests/test_agent_read_contracts.py
++++ b/tests/test_agent_read_contracts.py
+@@ -112,6 +112,58 @@ def test_cached_latest_notebook_state_returns_pages_and_ocr_without_cloud(
+     assert response.pages[2].text_preview == "new page two text"
+ 
+ 
++def test_latest_include_text_cli_returns_full_cached_ocr_without_uploader(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """``supernote changes --latest --include-text --json`` returns full cached
++    page OCR from the local SQLite cache without constructing SupernoteUploader,
++    while the default ``--latest`` run stays preview-only (text is null).
++    """
++    _, db_path, _, _ = _seed_contract(tmp_path)
++    config = CliConfig(
++        ledger_db_path=tmp_path / "filing.db",
++        state_db_path=db_path,
++        backups_root=tmp_path / "backups",
++        destination_map={},
++        reader=object(),
++        raw_config={"cloud_change_ledger_notebooks": ["Quick"]},
++    )
++
++    def fail_uploader(*args, **kwargs):
++        raise AssertionError(
++            "changes --latest must not instantiate Cloud uploader"
++        )
++
++    monkeypatch.setattr(cli, "load_cli_config", lambda path=None: config)
++    monkeypatch.setattr(cli, "SupernoteUploader", fail_uploader)
++
++    # Full cached OCR is returned only when --include-text is passed.
++    rc = cli.main(["--json", "changes", "Quick", "--latest", "--include-text"])
++    full_payload = json.loads(capsys.readouterr().out)
++    assert rc == 0
++    assert full_payload["notebook"] == "Quick"
++    assert full_payload["notebook_revision"] == "rev-2"
++    full_pages = {page["page_id"]: page for page in full_payload["pages"]}
++    assert full_pages["p0"]["text"] == "updated page zero text"
++    assert full_pages["p2"]["text"] == "new page two text"
++    assert full_pages["p0"]["ocr_status"] == "ready"
++    assert full_pages["p0"]["text_preview"] == "updated page zero text"
++
++    # Default latest stays preview-only: text is null, preview is populated.
++    rc = cli.main(["--json", "changes", "Quick", "--latest"])
++    preview_payload = json.loads(capsys.readouterr().out)
++    assert rc == 0
++    preview_pages = {page["page_id"]: page for page in preview_payload["pages"]}
++    assert preview_pages["p0"]["text"] is None
++    assert preview_pages["p0"]["text_preview"] == "updated page zero text"
++
++    # --include-text without --latest is rejected rather than silently ignored.
++    with pytest.raises(SystemExit):
++        cli.main(["--json", "changes", "Quick", "--include-text"])
++
++
+ def test_explicit_change_cursor_returns_ordered_cached_changes(
+     tmp_path: Path,
+ ) -> None:
+diff --git a/uv.lock b/uv.lock
+index eb8d117..f1654c4 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1003,14 +1003,18 @@ dev = [
+ 
+ [[package]]
+ name = "paia-contracts"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "../paia-contracts" }
+ dependencies = [
+     { name = "pydantic" },
++    { name = "rfc8785" },
+ ]
+ 
+ [package.metadata]
+-requires-dist = [{ name = "pydantic", specifier = ">=2.10" }]
++requires-dist = [
++    { name = "pydantic", specifier = ">=2.10" },
++    { name = "rfc8785", specifier = ">=0.1.4" },
++]
+ 
+ [package.metadata.requires-dev]
+ dev = [
+@@ -1503,6 +1507,15 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/8a/2e/e1798b8b248e1517e74c6cdf10dd6edd485044e7edf46b5f11ffcc5a0add/reportlab-4.4.10-py3-none-any.whl", hash = "sha256:5abc815746ae2bc44e7ff25db96814f921349ca814c992c7eac3c26029bf7c24", size = 1955400, upload-time = "2026-02-12T10:45:18.828Z" },
+ ]
+ 
++[[package]]
++name = "rfc8785"
++version = "0.1.4"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/ef/2f/fa1d2e740c490191b572d33dbca5daa180cb423c24396b856f5886371d8b/rfc8785-0.1.4.tar.gz", hash = "sha256:e545841329fe0eee4f6a3b44e7034343100c12b4ec566dc06ca9735681deb4da", size = 14321, upload-time = "2024-09-27T16:33:31.206Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/4d/78/119878110660b2ad709888c8a1614fce7e2fab39080ab960656dc8605bf6/rfc8785-0.1.4-py3-none-any.whl", hash = "sha256:520d690b448ecf0703691c76e1a34a24ddcd4fc5bc41d589cb7c58ec651bcd48", size = 9240, upload-time = "2024-09-27T16:33:29.683Z" },
++]
++
+ [[package]]
+ name = "rlpycairo"
+ version = "0.4.0"

@@ -1,0 +1,18 @@
+{
+  "id": "flip-supernote-organizer-snapshot-2026-06-08T14-05-19.036139+00-00",
+  "task_id": "supernote-organizer-snapshot",
+  "agent_id": "eea940a6f6be13d60578dee27be1f4bade4fcaab05bbbe54b9c5ef4b2d05eae0",
+  "role_id": "a5cf2358cbe7d70e41053be8d51dabc14b5ce2bdd5f2c5e855c77a0bf2ea749c",
+  "tradeoff_id": "03b3c27a422fd7b2f76da1572c344fe83bfa265eec0020a6b7f7ec42eea243bb",
+  "score": 0.72,
+  "dimensions": {
+    "semantic_match": 0.95,
+    "hallucination_rate": 0.15,
+    "specificity_match": 0.35,
+    "requirement_coverage": 0.62
+  },
+  "notes": "The inferred version correctly captures the core task (implement snapshot model via TDD/Speedrift) but misses crucial domain-specific requirements. Actual task specifies detailed page record structure (page_id as key, page metadata, star state, headings, keywords, links, content hash, image dimensions) and build mechanisms (from fake objects and .note bytes), plus immutability constraint—all absent from inferred. Inferred adds hallucinated acceptance criterion about tests/test_note_page_ops.py (not in actual task). Both versions align on methodology (TDD, Speedrift, pytest verification) but inferred is significantly less specific about the data model and domain contracts that are central to the actual task.\n\nFLIP metadata: {\"comparison_model\":\"haiku\",\"comparison_source\":\"config\",\"inference_model\":\"haiku\",\"inference_source\":\"config\",\"inferred_prompt\":\"Implement the note_snapshot module for paia-supernote using Speedrift and TDD. Create the paia_supernote.note_snapshot module with corresponding unit tests that pass. Follow the Speedrift spec defined in docs/superpowers/specs/2026-06-08-build-the-supernote-cloud-page-organizer-with-speedrift-and-test-spec.md. Ensure all contract and spec TOML blocks parse correctly without errors. Acceptance criteria: (1) paia_supernote.note_snapshot module exists and is importable, (2) tests/test_note_snapshot.py passes with `uv run pytest tests/test_note_snapshot.py -q`, (3) related tests pass with `uv run pytest tests/test_note_page_ops.py tests/test_note_snapshot.py -q`, (4) no coredrift or specdrift parsing errors in the final drift check. Complete the full TDD cycle from red test to green test.\"}",
+  "evaluator": "flip:haiku+haiku",
+  "timestamp": "2026-06-08T14:05:19.036139+00:00",
+  "source": "flip"
+}

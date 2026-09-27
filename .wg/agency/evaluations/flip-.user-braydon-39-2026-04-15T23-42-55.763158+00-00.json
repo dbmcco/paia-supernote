@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-39-2026-04-15T23-42-55.763158+00-00",
+  "task_id": ".user-braydon-39",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.0,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "semantic_match": 0.0,
+    "hallucination_rate": 1.0,
+    "specificity_match": 0.0
+  },
+  "notes": "The actual task is about creating/maintaining a 'user board' for braydon—a persistent conversation surface. The inferred task describes codebase analysis, technical debt assessment, and refactoring recommendations. These are entirely unrelated. No aspect of the actual task (user board, conversation surface, persistence) appears in the inference. The inferred task appears to be a complete hallucination of code quality/analysis work that is not present in the original task description at all.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Analyze the current codebase for code quality issues, technical debt, and areas with high churn or instability, particularly focusing on core components. Identify files or modules that may need refactoring or hardening. Provide an assessment of the codebase's current state and any areas of concern that should be addressed.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T23:42:55.763158+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

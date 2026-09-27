@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-119-2026-04-16T05-42-59.261550+00-00",
+  "task_id": ".user-braydon-119",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.825,
+  "dimensions": {
+    "specificity_match": 0.55,
+    "semantic_match": 0.95,
+    "requirement_coverage": 0.85,
+    "hallucination_rate": 0.1
+  },
+  "notes": "Both describe implementing a user board for 'braydon' with session management, core commands (status, events, write, help), and documentation. The inferred version captures all major acceptance criteria but with less specificity—it omits exact file paths (run_user_board.py, USER_BOARD.md), the session file path (/.paia-supernote-session.json), and execution constraints (max_files: 25, max_loc: 800). The inferred version adds 'terminal interface' and 'event handling' as general capabilities, which are reasonable interpretations but not explicit in the actual. Overall strong semantic alignment but noticeably lower specificity and missing constraint details.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement and verify user board functionality for user 'braydon'. The user board should include: terminal interface, event handling, status monitoring, and write capabilities. Ensure the following acceptance criteria are met: 1) Import functionality works correctly, 2) Initialization process works, 3) Session management is implemented, 4) Core commands are implemented and functional, 5) Documentation exists and is complete. Verify that the user board system is fully functional for the specified user.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T05:42:59.261550+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-180-2026-04-16T09-36-30.935961+00-00",
+  "task_id": ".user-braydon-180",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.48,
+  "dimensions": {
+    "hallucination_rate": 0.75,
+    "requirement_coverage": 0.4,
+    "semantic_match": 0.7,
+    "specificity_match": 0.25
+  },
+  "notes": "The actual task is extremely minimal (title + one sentence: 'persistent conversation surface') with zero acceptance criteria. The inferred task reconstructs detailed technical requirements (terminal UI, paia-events connection, command processing) by examining the output. Both describe the same core goal (user board for braydon with persistence), yielding good semantic match, but the inference adds substantial specificity not present in the original description. Most inferred requirements (5-6 out of 6) appear to be reverse-engineered from the implementation rather than stated in the original task.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement and verify a user board interface for the paia-supernote project that provides an interactive terminal UI for managing Supernote integration with PAIA agents. Requirements: 1) Launch without errors, 2) Interactive terminal UI with status bar, 3) Connect to paia-events service, 4) Session persistence functionality, 5) Command processing for help, status, events, and write commands, 6) Handle both interactive and non-interactive environments gracefully. Verify the implementation works correctly and all components function as expected.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T09:36:30.935961+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

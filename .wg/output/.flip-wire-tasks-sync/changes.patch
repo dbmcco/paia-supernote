@@ -1,0 +1,13 @@
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index e57cae1..5612904 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -36,7 +36,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
+     "ollama_url": "http://localhost:11434",
+     "events_url": "http://localhost:3511",
+     "folio_url": "http://localhost:3512",
+-    "work_url": "http://localhost:3513",
++    "work_url": "http://localhost:3560",
+     "agent_mappings": {
+         "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
+         "Caroline": {"font": "Noteworthy", "notebook": "LFW"},

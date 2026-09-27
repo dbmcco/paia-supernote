@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-99-2026-04-16T04-20-38.531569+00-00",
+  "task_id": ".user-braydon-99",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.33,
+  "dimensions": {
+    "intent_fidelity": 0.45,
+    "downstream_usability": 0.15,
+    "efficiency": 0.5,
+    "completeness": 0.2,
+    "coordination_overhead": 0.6,
+    "style_adherence": 0.55,
+    "correctness": 0.25,
+    "blocking_impact": 0.3
+  },
+  "notes": "The agent was assigned a vaguely-defined task ('User board for braydon — persistent conversation surface') with zero acceptance criteria and no clear specification of the deliverable. The agent spent ~2 minutes checking prerequisites (found paia-events responding, Supernote directory missing) and fixing a contract violation (auto_followups = false), then marked the task as done without producing any artifacts or deliverable. The FLIP verification failed (0.45 vs 0.70 threshold), which strongly signals incomplete work. Critical failures: (1) no artifacts recorded despite the task asking for a 'persistent conversation surface'; (2) task marked done without resolving the missing Supernote prerequisite or building the actual interface; (3) no handoff of usable output to downstream tasks. The agent followed workgraph conventions and documented findings clearly in the task log, earning partial credit for coordination. However, the core objective—delivering a user board—was not addressed. The underspecified acceptance criteria made the task ambiguous, but the agent should have either flagged this as blocking or produced a reasonable interpretation of the requirement. This work is below expectations and would require significant rework to be useful.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:20:38.531569+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

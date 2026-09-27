@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-61-2026-04-16T01-54-32.493368+00-00",
+  "task_id": ".user-braydon-61",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.42,
+  "dimensions": {
+    "semantic_match": 0.65,
+    "specificity_match": 0.2,
+    "hallucination_rate": 0.85,
+    "requirement_coverage": 0.3
+  },
+  "notes": "The actual task is extremely lean and abstract—just 'user board: braydon' with 'persistent conversation surface' as the goal. The inferred version substantially elaborates with specific implementation details (terminal interface, status monitoring, event handling, NLP, auto-refresh, test coverage, Supernote device integration) that are not in the original task. While the core concept of 'persistent conversation surface' appears in both, the inferred task adds ~85% content not explicitly stated in the actual task. The actual task omits its constraint parameters (max_files: 25, max_loc: 800, pit_stop_after: 3, auto_followups: true) and has no explicit acceptance criteria. The evaluator has made substantial inferences from project context rather than the task description itself.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a comprehensive user board terminal interface for the paia-supernote system that provides a persistent conversation surface for interacting with Supernote devices. The interface should include: status monitoring capabilities, event handling for real-time updates, write capabilities to send content back to the Supernote, session persistence to maintain state across interactions, natural language processing for intuitive user commands, auto-refresh functionality for live updates, and a full terminal-based UI. Ensure comprehensive test coverage for all components and functionality. The user board should serve as the primary interaction point between users and their Supernote devices, enabling both reading from and writing to notebooks through a conversational interface.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T01:54:32.493368+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

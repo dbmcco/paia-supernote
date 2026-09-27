@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-27-2026-04-15T22-25-18.096929+00-00",
+  "task_id": ".user-braydon-27",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.3,
+  "dimensions": {
+    "blocking_impact": 0.3,
+    "style_adherence": 0.3,
+    "completeness": 0.25,
+    "downstream_usability": 0.2,
+    "intent_fidelity": 0.62,
+    "efficiency": 0.4,
+    "coordination_overhead": 0.25,
+    "correctness": 0.35
+  },
+  "notes": "Task marked complete despite significant issues. Primary failures: (1) **Artifacts not recorded** — critical coordination failure; downstream consumers have no visibility into what was built. (2) **Contract violations** — LOC churn of 955 lines exceeds max_loc budget of 800; coredrift flagged yellow status. (3) **Verification failure** — FLIP score 0.62 is below 0.70 threshold. (4) **Task underspecification** — Task has auto_followups:true but no acceptance criteria. Agent should have flagged this before marking done. (5) **Vague objective** — 'User board for braydon — persistent conversation surface' lacks technical specification (format, structure, location, content). Agent completed work in ~40 seconds without clarifying what success looks like. (6) **No evidence of completion** — no task log entries, no artifacts, only git changes visible. Strengths: agent did touch relevant files (user_board.py, task_curator.py) and produced working code based on git status. Weaknesses: violated contract bounds, failed verification, provided no artifact documentation, did not flag missing acceptance criteria, did not clarify vague requirements. Recommendation: require artifact recording and verification passage before marking tasks done; flag underspecified acceptance criteria immediately.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T22:25:18.096929+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

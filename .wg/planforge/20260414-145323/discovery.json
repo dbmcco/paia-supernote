@@ -1,0 +1,34 @@
+{
+  "problem": "Braydon's Supernote A5X is a handwriting-first e-ink device he uses for tasks, strategy notes, and structured thinking. Currently it is an isolated surface — PAIA agents cannot read his handwritten notes nor write content back. He wants the device to be a bidirectional interface: agents write native .note pages in their own font styles, and Braydon writes tasks and snippets that agents pick up and act on.",
+  "stakeholders": "Braydon — uses Supernote daily for task management, strategic thinking, meeting prep. Pain point: friction between digital work board (paia-work) and physical notation style. No current path from handwritten task to paia-work without manual reentry.",
+  "prior_attempts": "PDF drop path tested and proven working — PDF appeared on device via Supernote Cloud API. Rejected in favor of native .note format because PDF cannot be checked off with Supernote pen, cannot be indexed page-by-page by supernotelib, and doesn't integrate with Braydon's existing notebook structure. sncloud Python library broken against current API — CSRF/cookie auth mismatch.",
+  "constraints": [
+    "Must use native .note format (not PDF) for write path",
+    "Supernote Cloud auth is session-cookie + CSRF based, not Bearer tokens — requires Playwright browser session for upload/apply and upload/finish",
+    "S3 PUT for actual content upload — no auth needed, presigned URL",
+    "RATTA_RLE encoder must be built from scratch (decoder exists in supernotelib as reference)",
+    "Read path depends on Partner app sync to local folder — acceptable dependency, already installed",
+    "No USB required — cloud sync is the bus",
+    "Must integrate with existing paia-events bus on port 3511",
+    "Must integrate with paia-work on port 3560 for checkbox completions",
+    "All transcriptions go to folio"
+  ],
+  "out_of_scope": [
+    "Synthesized vector stroke handwriting (future consideration)",
+    "PDF delivery path (proven but superseded by .note)",
+    "Other PAIA agents beyond Sam, Caroline, Ingrid",
+    "Supernote devices other than Braydon's A5X",
+    "Scheduled daily briefs — agents write only when they have signal worth writing",
+    "Direct paia-memory writes (goes via folio's existing pipeline)"
+  ],
+  "success_criteria": [
+    "Sam can write a curated task page to Quick.note in Bradley Hand font — page appears on device after next sync",
+    "Braydon writes a □/○ tagged task anywhere on the page — Sam's next read cycle picks it up and creates a paia-work task",
+    "Braydon checks a box on the device — checkbox_completed event fires → paia-work marks task done",
+    "Caroline detects a strategy snippet in LFW.note — initiates browser discussion → writes clarified thinking back to notebook and folio",
+    "Ingrid does same for Synth.note",
+    "All transcribed content indexed in folio by notebook + page + date",
+    "Service runs as Python daemon integrated with paia-events",
+    "Playwright session persists to disk and re-authenticates on expiry without manual intervention"
+  ]
+}

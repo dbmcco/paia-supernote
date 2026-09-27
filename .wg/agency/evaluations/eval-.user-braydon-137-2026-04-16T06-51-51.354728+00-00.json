@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-137-2026-04-16T06-51-51.354728+00-00",
+  "task_id": ".user-braydon-137",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.54,
+  "dimensions": {
+    "correctness": 0.6,
+    "efficiency": 0.5,
+    "downstream_usability": 0.6,
+    "coordination_overhead": 0.4,
+    "blocking_impact": 0.5,
+    "completeness": 0.75,
+    "intent_fidelity": 0.67,
+    "style_adherence": 0.45
+  },
+  "notes": "Agent completed a functional implementation (tests pass, imports work, events integration verified) but with significant contract violations. Coredrift warnings escalated to explicitly flag scope_drift and churn_loc issues, indicating out-of-scope file modifications beyond the authorized touch globs. FLIP verification failed at 0.67 (below 0.70 threshold), signaling intent fidelity issues. Critical failure: agent marked task done without addressing warnings, leaving scope violations unresolved. This creates downstream coordination overhead. While the feature functionally works and was delivered quickly, the contract constraint violations and failure to respond to drift warnings are fundamental failures in task adherence. The work is usable but shipped with technical debt.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:51:51.354728+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

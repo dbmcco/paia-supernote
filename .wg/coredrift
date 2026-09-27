@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOL="coredrift"
+FOUND=""
+IFS=':' read -r -a PARTS <<< "${PATH:-}"
+for p in "${PARTS[@]}"; do
+  [[ -z "$p" ]] && continue
+  if [[ "$p" == "$WG_DIR" ]]; then
+    continue
+  fi
+  if [[ -x "$p/$TOOL" ]]; then
+    FOUND="$p/$TOOL"
+    break
+  fi
+done
+if [[ -z "$FOUND" ]]; then
+  echo "error: $TOOL not found on PATH (portable wrapper)" >&2
+  exit 2
+fi
+exec "$FOUND" "$@"

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-147-2026-04-16T07-29-56.780790+00-00",
+  "task_id": ".user-braydon-147",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.73,
+  "dimensions": {
+    "semantic_match": 0.85,
+    "specificity_match": 0.4,
+    "requirement_coverage": 0.75,
+    "hallucination_rate": 0.15
+  },
+  "notes": "Core semantic alignment is strong: both describe a terminal-based conversational interface connecting to paia-events with styled output. However, the inferred version omits the critical 'write functionality to Supernote notebooks' acceptance criterion and downplays persistent session/conversation history. The inferred version is notably less specific (generic 'test complete functionality' vs explicit acceptance criteria), and introduces a requirement about handling non-interactive environments not present in the original spec. Requirement coverage captures ~75% of acceptance criteria but misses the write capability entirely.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board implementation is fully functional and properly integrated. The user board should be a terminal-based conversational interface that connects to paia-events. Ensure it displays a styled terminal interface and handles both interactive and non-interactive environments gracefully. Test the complete functionality and confirm all components are working as expected.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:29:56.780790+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-95-2026-04-16T04-06-42.376093+00-00",
+  "task_id": ".user-braydon-95",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.7,
+  "dimensions": {
+    "style_adherence": 0.65,
+    "efficiency": 0.65,
+    "blocking_impact": 0.75,
+    "coordination_overhead": 0.7,
+    "correctness": 0.75,
+    "intent_fidelity": 0.71,
+    "downstream_usability": 0.75,
+    "completeness": 0.7
+  },
+  "notes": "Agent successfully completed the user board task with all five acceptance criteria verified (✅) and FLIP score of 0.71 passing the 0.70 threshold. The work is functionally correct and complete. However, the task log reveals significant concerns: (1) yellow coredrift detected on churn_loc, hardening_in_core, and scope_drift, indicating code changes extended beyond specified touch files; (2) the user board was already fully implemented before agent work began, making the agent's actual contribution unclear from logs; (3) task contract had to be updated mid-execution to resolve scope conflicts. The agent appears to have adapted pragmatically—verifying existing functionality and adjusting the contract—but this creates ambiguity about whether out-of-scope changes were properly handled. Verification passing is the strongest positive signal. Recommend: in future similar cases, explicitly document the decision to update contracts versus reverting changes, and provide clearer visibility into which changes were agent-initiated versus pre-existing.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:06:42.376093+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

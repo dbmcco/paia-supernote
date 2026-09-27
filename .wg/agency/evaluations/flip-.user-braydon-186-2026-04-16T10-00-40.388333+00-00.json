@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-186-2026-04-16T10-00-40.388333+00-00",
+  "task_id": ".user-braydon-186",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.84,
+  "dimensions": {
+    "hallucination_rate": 0.15,
+    "specificity_match": 0.6,
+    "semantic_match": 0.95,
+    "requirement_coverage": 0.85
+  },
+  "notes": "Strong semantic alignment—both describe implementing a user board interface for persistent conversation. The inferred version captures most acceptance criteria (launches correctly, displays information, connects to paia-events, provides interface). Main gaps: doesn't explicitly mention the specific commands (help, status, clear, quit) or reference the contract's file limits/structure. Inferred version is less specific overall (generic 'interface' vs. named requirements), but doesn't hallucinate—it adds reasonable context like 'test coverage' and 'CLI entry point' that are implied by the original's mention of test files and run_user_board.py.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board interface that launches and displays correctly, connects to the paia-events service, and includes comprehensive test coverage. The implementation should include both a CLI entry point and direct script functionality. Ensure all contract configurations are properly set up and all tests pass. The user board should provide a functional interface for user interaction and successfully integrate with the existing paia-events infrastructure.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:00:40.388333+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

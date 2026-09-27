@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-81-2026-04-16T03-08-12.667166+00-00",
+  "task_id": ".user-braydon-81",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.04,
+  "dimensions": {
+    "hallucination_rate": 1.0,
+    "semantic_match": 0.0,
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.0
+  },
+  "notes": "The inferred task is almost entirely hallucinated. The actual task is simply 'User board: braydon — persistent conversation surface' with no refactoring, code quality, or architectural requirements. The inferred description fabricated a major refactoring effort apparently from context clues (modified paia-supernote files in git status). None of the inferred requirements (refactoring, hardening, technical debt, code quality, synchronization components) appear in the actual task description. The only genuine match is the file/LOC budgets mentioned in the contract, but these are constraints, not task focus.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Refactor and harden the core components of the paia-supernote integration system. Focus on improving code quality, reducing technical debt, and strengthening the core architecture. The task may involve significant code changes across multiple files to improve maintainability and robustness of the Supernote file reading and synchronization components. Complete the refactoring while staying within reasonable file and line-of-code modification budgets.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:08:12.667166+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

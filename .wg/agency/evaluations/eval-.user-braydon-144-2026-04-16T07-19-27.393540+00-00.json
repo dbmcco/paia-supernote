@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-144-2026-04-16T07-19-27.393540+00-00",
+  "task_id": ".user-braydon-144",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.76,
+  "dimensions": {
+    "efficiency": 0.65,
+    "downstream_usability": 0.75,
+    "correctness": 0.9,
+    "blocking_impact": 0.85,
+    "intent_fidelity": 0.835,
+    "completeness": 0.9,
+    "style_adherence": 0.7,
+    "coordination_overhead": 0.8
+  },
+  "notes": "Strong functional delivery: all 4 acceptance criteria verified, FLIP score 0.83 (above threshold), and task completed autonomously in ~3 minutes. Correctness is high—user board runs, connects to paia-events, all commands work, and session persistence functions. Main concerns: (1) Scope drift—modified 6+ files outside the contracted touch list (main.py, reader.py, task_curator.py, and their tests), triggering coredrift warnings; (2) Constraint violations—yellow alerts for churn_loc and hardening_in_core suggest the 25-file and 800-LOC budgets were exceeded, and pit_stop_after=3 was likely breached; (3) No artifacts or handoff documentation recorded. The agent appears to have prioritized acceptance criteria over contract constraints, which worked but violates the efficiency boundary. No coordination overhead and clean autonomous execution are positives. Recommendation: acceptable for production use; future tasks should enforce touch list strictness or rebaseline contract if files are genuinely interdependent.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T07:19:27.393540+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

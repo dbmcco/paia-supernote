@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# ABOUTME: Repo-local Workgraph guard for manual-owner assist sessions
+# ABOUTME: Converts terminal done/fail commands into log+unclaim while WG_MANUAL_OWNER_ASSIST=1
+
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+resolve_real_wg() {
+  local filtered=""
+  local first=1
+  IFS=':' read -r -a entries <<< "${PATH:-}"
+  for entry in "${entries[@]}"; do
+    if [[ "$entry" == "$SELF_DIR" ]]; then
+      continue
+    fi
+    if [[ $first -eq 1 ]]; then
+      filtered="$entry"
+      first=0
+    else
+      filtered="${filtered}:$entry"
+    fi
+  done
+  PATH="$filtered" command -v wg
+}
+
+REAL_WG="${WG_REAL_BIN:-}"
+if [[ -z "$REAL_WG" ]]; then
+  REAL_WG="$(resolve_real_wg || true)"
+fi
+if [[ -z "$REAL_WG" ]]; then
+  echo "error: unable to resolve real wg binary" >&2
+  exit 127
+fi
+
+manual_owner_active() {
+  [[ "${WG_MANUAL_OWNER_ASSIST:-}" == "1" ]] && [[ -n "${WG_TASK_ID:-}" ]]
+}
+
+subcommand=""
+task_arg=""
+expect_value_for=""
+for arg in "$@"; do
+  if [[ -n "$expect_value_for" ]]; then
+    expect_value_for=""
+    continue
+  fi
+  case "$arg" in
+    --dir)
+      expect_value_for="dir"
+      ;;
+    --json)
+      ;;
+    -*)
+      ;;
+    *)
+      if [[ -z "$subcommand" ]]; then
+        subcommand="$arg"
+      elif [[ -z "$task_arg" ]]; then
+        task_arg="$arg"
+        break
+      fi
+      ;;
+  esac
+done
+
+if manual_owner_active && [[ "$task_arg" == "${WG_TASK_ID:-}" ]] && [[ "$subcommand" == "done" || "$subcommand" == "fail" ]]; then
+  owner="${WG_MANUAL_OWNER_ID:-the owner}"
+  reason=""
+  if [[ "$subcommand" == "fail" ]]; then
+    prev=""
+    for arg in "$@"; do
+      if [[ "$prev" == "--reason" ]]; then
+        reason="$arg"
+        break
+      fi
+      prev="$arg"
+    done
+  fi
+
+  message="Advisory worker believes this task is ready for ${owner} review; leaving it open."
+  if [[ "$subcommand" == "fail" ]]; then
+    if [[ -n "$reason" ]]; then
+      message="Advisory worker needs ${owner} input: ${reason}"
+    else
+      message="Advisory worker needs ${owner} input before this task can continue."
+    fi
+  fi
+
+  "$REAL_WG" log "${WG_TASK_ID}" "$message" >/dev/null 2>&1 || true
+  exec "$REAL_WG" unclaim "${WG_TASK_ID}"
+fi
+
+exec "$REAL_WG" "$@"

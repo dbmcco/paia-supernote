@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-167-2026-04-16T08-45-02.488099+00-00",
+  "task_id": ".user-braydon-167",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.28,
+  "dimensions": {
+    "blocking_impact": 0.35,
+    "downstream_usability": 0.25,
+    "coordination_overhead": 0.3,
+    "style_adherence": 0.3,
+    "correctness": 0.25,
+    "efficiency": 0.35,
+    "completeness": 0.3,
+    "intent_fidelity": 0.365
+  },
+  "notes": "Agent marked task as done despite critical verification failure (FLIP 0.36 vs 0.70 required) and coredrift warnings (churn_loc, hardening_in_core). The task itself was fundamentally underspecified with empty acceptance criteria and vague objective, but the agent should have flagged this ambiguity rather than proceeding to completion. No artifacts were recorded despite claiming validation of existing implementation. The coredrift warnings indicate the agent violated declared LOC/file constraints. While the investigation and validation approach were reasonable, the combination of verification failure, budget constraint violation, unmarked artifacts, and the decision to mark done despite these signals indicates the work did not meet acceptance standards. The task required either clarification of acceptance criteria before completion or an explicit escalation rather than a done status.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:45:02.488099+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-198-2026-04-16T10-42-06.579021+00-00",
+  "task_id": ".user-braydon-198",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.0,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.0,
+    "hallucination_rate": 1.0,
+    "semantic_match": 0.0
+  },
+  "notes": "Complete misalignment. The actual task is about creating/maintaining a persistent conversation surface (user board for braydon), while the inferred task describes investigating and resolving coredrift dependency warnings. These are entirely different domains with no overlap. The inferred task appears to be describing a drift/dependency issue resolution task, which bears no relation to the user board objective. The inference system appears to have reconstructed a completely unrelated task.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Investigate and resolve the coredrift yellow warning for dependency_drift and hardening_in_core. Check if the recent dependency changes are intentional and properly implemented, or if they need to be reverted. Confirm the dependency change is intentional and resolve the drift warning, or revert the changes if they appear to be unintentional.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:42:06.579021+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

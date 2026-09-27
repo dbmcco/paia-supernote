@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-97-2026-04-16T04-10-11.904244+00-00",
+  "task_id": ".user-braydon-97",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.06,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "semantic_match": 0.05,
+    "specificity_match": 0.2,
+    "hallucination_rate": 1.0
+  },
+  "notes": "The actual task is about creating a 'user board for braydon — persistent conversation surface' (a workspace/UI feature). The inferred task is entirely about checking coredrift status, resolving budget limit warnings, and adjusting max_files/max_loc thresholds. These are fundamentally different domains. The inferred reconstruction appears to have been derived from context clues in the working directory (the coredrift warnings visible in git status or project configuration) rather than from the actual task output. Zero actual requirements from the task appear in the inference; essentially all inferred requirements are fabricated based on environmental signals rather than task intent.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Check the current coredrift status for the paia-supernote project and resolve any yellow warnings related to file/line-of-code budget limits. If the current thresholds are too restrictive, adjust the max_files and max_loc budgets in the drift contract to appropriate values for this codebase size, or recommend task splitting if needed.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T04:10:11.904244+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

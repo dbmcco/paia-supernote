@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-8-2026-04-14T20-28-02.900861+00-00",
+  "task_id": ".user-braydon-8",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.25,
+  "dimensions": {
+    "specificity_match": 0.2,
+    "hallucination_rate": 0.8,
+    "semantic_match": 0.4,
+    "requirement_coverage": 0.1
+  },
+  "notes": "The actual task is a high-level objective ('user board for braydon — persistent conversation surface') with minimal explicit requirements (empty acceptance/touch lists). The inferred task heavily hallucinated specific technical details (launcher script, async main function bugs, paia-supernote project context) that do not appear in the original. The inferred version assumes bugs need fixing, whereas the actual task simply asks for a persistent conversation surface with no mention of defects. While both relate to a 'user board' domain, the actual task is aspirational/creative (provide feature) while inferred is reactive/diagnostic (fix bugs). Nearly 80% of the inferred requirements are fabricated.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Fix the user board functionality in the paia-supernote project. There appears to be an issue with the launcher script's async main function that needs to be resolved. Check the current status of the existing user board implementation and tests, fix any bugs found, and verify that the user board functionality works correctly.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T20:28:02.900861+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

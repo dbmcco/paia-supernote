@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-47-2026-04-16T00-41-54.001339+00-00",
+  "task_id": ".user-braydon-47",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.025,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "hallucination_rate": 0.95,
+    "specificity_match": 0.1,
+    "semantic_match": 0.0
+  },
+  "notes": "The actual and inferred tasks are fundamentally different. The actual task is to create/maintain a 'user board' (a persistent conversation surface) for the user braydon. The inferred task is a detailed project investigation about Supernote functionality. The evaluator appears to have confused context from the project README with the actual task requirements. No requirements from the original task description (creating a user board) are present in the inferred description. Nearly all inferred content (Supernote investigation, codebase review, assessing functionality, identifying gaps) is absent from the actual task statement.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Investigate the current state of the Supernote integration project. Review the existing codebase, assess what functionality has been implemented for reading and writing Supernote files, and provide a status update on the project's progress. Focus on understanding the current capabilities and any gaps that need to be addressed.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T00:41:54.001339+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

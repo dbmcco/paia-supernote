@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-50-2026-04-16T00-57-08.319953+00-00",
+  "task_id": ".user-braydon-50",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.08,
+  "dimensions": {
+    "specificity_match": 0.15,
+    "requirement_coverage": 0.02,
+    "semantic_match": 0.05,
+    "hallucination_rate": 0.95
+  },
+  "notes": "The actual task is minimal and focused: create a user board for braydon as a persistent conversation surface. The inferred task is entirely fabricated—it describes analyzing the paia-supernote project state, reviewing implementations, checking dependencies, and planning bidirectional sync. These are fundamentally different tasks operating in different domains (UI/interface creation vs. project analysis). The inferred description appears to confuse the surrounding session context (loaded from startup hooks about prior paia-supernote work) with the actual task being requested. Nearly all inferred requirements are hallucinated; almost none map to the original brief task title.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Analyze the current state of the paia-supernote project and provide a brief overview of what has been implemented so far, including any existing capabilities for reading Supernote files, current dependencies, and what still needs to be built to achieve full bidirectional sync with Supernote devices.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T00:57:08.319953+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

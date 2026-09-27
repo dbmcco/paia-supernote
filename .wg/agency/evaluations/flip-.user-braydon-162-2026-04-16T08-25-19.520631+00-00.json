@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-162-2026-04-16T08-25-19.520631+00-00",
+  "task_id": ".user-braydon-162",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.26,
+  "dimensions": {
+    "semantic_match": 0.35,
+    "requirement_coverage": 0.15,
+    "specificity_match": 0.25,
+    "hallucination_rate": 0.75
+  },
+  "notes": "The ACTUAL task is a lean, goal-focused directive: 'User board: braydon — persistent conversation surface' with no explicit requirements. The INFERRED task misinterprets this as an exploratory analysis task, adding specific feature exploration (terminal UI, conversation history, event display, status monitoring, write functionality) that do not appear in the original. The actual task appears to be about implementing/maintaining the user board itself, not analyzing existing implementation. The inferred version's exploratory framing ('Explore', 'Analyze', 'Provide a summary') contradicts the actual task's directive nature. High hallucination rate due to specific features and analysis methodology being assumed rather than specified.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Explore the existing UserBoard implementation in the paia-supernote project. Analyze the current codebase to understand what functionality is already in place, including any terminal-based UI components, conversation history features, event display capabilities, status monitoring, and write functionality. Provide a summary of the existing implementation to understand what's already built before proceeding with additional requirements.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:25:19.520631+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

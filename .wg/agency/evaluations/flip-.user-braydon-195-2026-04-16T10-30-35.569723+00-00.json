@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-195-2026-04-16T10-30-35.569723+00-00",
+  "task_id": ".user-braydon-195",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.378,
+  "dimensions": {
+    "requirement_coverage": 0.2,
+    "hallucination_rate": 0.65,
+    "specificity_match": 0.5,
+    "semantic_match": 0.45
+  },
+  "notes": "The actual task is deliberately minimal—just 'User board: braydon' with no acceptance criteria—while the inferred task substantially elaborates it into a testing/verification exercise with 'report results' and 'ensure features work properly.' The inferred version correctly identifies the domain (user boards, user braydon) but inverts the intent: actual implies *providing* the user board feature, inferred assumes it exists and needs *testing*. This represents ~65% hallucination of context (testing framework, existing implementation assumption, reporting requirements) not present in the original sparse contract.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the user board functionality works correctly for user braydon. Test the existing implementation to ensure all user board features are functioning properly and report the results.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:30:35.569723+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

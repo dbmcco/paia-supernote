@@ -1,0 +1,21 @@
+{
+  "id": "eval-.user-braydon-178-2026-04-16T09-32-58.529647+00-00",
+  "task_id": ".user-braydon-178",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.75,
+  "dimensions": {
+    "efficiency": 0.55,
+    "coordination_overhead": 0.65,
+    "completeness": 0.95,
+    "blocking_impact": 0.8,
+    "correctness": 0.85,
+    "style_adherence": 0.6,
+    "downstream_usability": 0.75
+  },
+  "notes": "Agent successfully delivered all functional acceptance criteria within the user board implementation: terminal UI, session persistence, paia-events integration, and write functionality all verified working. However, significant scope violation: the task contract explicitly specified touch files (user_board.py, run_user_board.py, test_user_board.py, USER_BOARD.md) but the agent modified 6 out-of-scope files (main.py, reader.py, task_curator.py, and their tests). Coredrift system flagged this as 'scope_drift' with yellow alerts, which the agent acknowledged but did not address or revert. This creates ambiguity about whether those modifications were intentional dependencies or accidental coupling, complicating downstream coordination. The work itself is reliable and complete functionally, but the constraint violation and lack of response to system warnings prevents it from reaching 'Exceptional' (0.8+) status. Recommend: clarify scope boundaries in future contracts and ensure agents revert out-of-scope changes or explicitly justify them.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T09:32:58.529647+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

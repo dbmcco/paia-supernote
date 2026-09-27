@@ -1,0 +1,1975 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index e0cebe3..6ea055d 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -14,11 +14,12 @@ requires-python = ">=3.9"
+ dependencies = [
+     "supernotelib>=0.3.0",
+     "Pillow>=10.0.0",
++    "anthropic>=0.25.0",
+     "playwright>=1.40.0",
+     "httpx>=0.25.0",
+     "watchdog>=3.0.0",
+     "pydantic>=2.0.0",
+-    "asyncio-mqtt>=0.13.0",
++    "structlog>=23.0.0",
+ ]
+ 
+ [project.optional-dependencies]
+@@ -40,6 +41,7 @@ where = ["src"]
+ 
+ [project.scripts]
+ paia-supernote = "paia_supernote.main:main"
++paia-supernote-board = "paia_supernote.user_board:main"
+ 
+ [tool.pytest.ini_options]
+ testpaths = ["tests"]
+@@ -49,6 +51,10 @@ python_functions = ["test_*"]
+ addopts = [
+     "--strict-markers",
+     "--strict-config",
++    "-m", "not integration",
++]
++markers = [
++    "integration: marks tests as integration tests (can be slow, require external dependencies)",
+ ]
+ 
+ [tool.black]
+@@ -69,4 +75,4 @@ disallow_untyped_defs = true
+ select = ["E", "F", "I", "N", "W"]
+ ignore = []
+ line-length = 88
+-target-version = "py39"
+\ No newline at end of file
++target-version = "py39"
+diff --git a/src/paia_supernote/__init__.py b/src/paia_supernote/__init__.py
+index 03447c2..58c133d 100644
+--- a/src/paia_supernote/__init__.py
++++ b/src/paia_supernote/__init__.py
+@@ -13,6 +13,7 @@ __all__ = [
+     "ratta_rle",
+     "reader",
+     "uploader",
++    "user_board",
+     "watcher",
+     "writer",
+ ]
+\ No newline at end of file
+diff --git a/src/paia_supernote/events.py b/src/paia_supernote/events.py
+index ba68837..5b510c6 100644
+--- a/src/paia_supernote/events.py
++++ b/src/paia_supernote/events.py
+@@ -1,208 +1,193 @@
+ """
+ ABOUTME: PAIA events integration module
+-Author: Braydon McCormick <braydon@braydondm.com>
+-Purpose: Handles event publishing/subscribing with paia-events system at port 3511
++ABOUTME: Publishes/polls paia-events HTTP API (port 3511) — no MQTT, no direct DB.
+ """
+ 
+-import json
+-import asyncio
+-from typing import Dict, Any, Callable, Optional
+-import asyncio_mqtt
+-from pydantic import BaseModel
+-
+-
+-class SupernoteEvent(BaseModel):
+-    """Base class for Supernote events."""
+-    event_type: str
+-    timestamp: float
+-    data: Dict[str, Any]
++from __future__ import annotations
+ 
++import asyncio
++import time
++import uuid
++from typing import Any, Callable, Awaitable, Optional
+ 
+-class WriteRequestedEvent(SupernoteEvent):
+-    """Event for requesting agent write to Supernote."""
+-    agent: str
+-    notebook: str
+-    content_type: str
+-    content: str
++import httpx
++import structlog
+ 
++log = structlog.get_logger(__name__)
+ 
+-class NoteTranscribedEvent(SupernoteEvent):
+-    """Event for transcribed note content."""
+-    notebook: str
+-    page: int
+-    text: str
++_BASE_URL = "http://localhost:3511"
++_SUBSCRIBER_NAME = "paia-supernote"
++_POLL_INTERVAL = 5.0  # seconds between inbound event polls
+ 
+ 
+-class CheckboxCompletedEvent(SupernoteEvent):
+-    """Event for completed checkbox/task."""
+-    task_id: str
+-    notebook: str
+-    page: int
++class EventsClient:
++    """HTTP client for paia-events — publish outbound, poll inbound."""
+ 
++    def __init__(self, base_url: str = _BASE_URL) -> None:
++        self._base_url = base_url
++        self._write_handler: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
++        self._poll_task: Optional[asyncio.Task[None]] = None
++        self._since_id: Optional[int] = None
+ 
+-class SnippetDetectedEvent(SupernoteEvent):
+-    """Event for detected strategy snippet."""
+-    notebook: str
+-    page: int
+-    text: str
+-    agent: str
++    # ------------------------------------------------------------------
++    # Lifecycle
++    # ------------------------------------------------------------------
+ 
++    async def start(self) -> None:
++        """Register subscriber and start inbound poll loop."""
++        await self._register_subscriber()
++        self._poll_task = asyncio.create_task(self._poll_loop())
++        log.info("events_client_started", base_url=self._base_url)
+ 
+-class EventsManager:
+-    """Manages event publishing and subscription for paia-supernote."""
++    async def stop(self) -> None:
++        """Cancel poll loop."""
++        if self._poll_task:
++            self._poll_task.cancel()
++            try:
++                await self._poll_task
++            except asyncio.CancelledError:
++                pass
++        log.info("events_client_stopped")
+ 
+-    def __init__(self, broker_host: str = "localhost", broker_port: int = 3511):
+-        """
+-        Initialize events manager.
++    # ------------------------------------------------------------------
++    # Inbound subscription
++    # ------------------------------------------------------------------
+ 
+-        Args:
+-            broker_host: MQTT broker host
+-            broker_port: MQTT broker port (paia-events default: 3511)
+-        """
+-        self.broker_host = broker_host
+-        self.broker_port = broker_port
+-        self.client: Optional[asyncio_mqtt.Client] = None
+-        self.event_handlers: Dict[str, Callable] = {}
++    def register_write_handler(
++        self, handler: Callable[[dict[str, Any]], Awaitable[None]]
++    ) -> None:
++        """Register async handler for supernote.write_requested events."""
++        self._write_handler = handler
+ 
+-    async def start(self) -> None:
+-        """Start event client and subscribe to relevant topics."""
++    async def _register_subscriber(self) -> None:
++        """Register paia-supernote as a subscriber for write_requested events."""
+         try:
+-            self.client = asyncio_mqtt.Client(
+-                hostname=self.broker_host,
+-                port=self.broker_port
+-            )
+-            await self.client.__aenter__()
++            async with httpx.AsyncClient() as client:
++                resp = await client.post(
++                    f"{self._base_url}/v1/subscribers",
++                    json={
++                        "name": _SUBSCRIBER_NAME,
++                        "event_type_prefix": "supernote.write_requested",
++                    },
++                    timeout=5.0,
++                )
++                resp.raise_for_status()
++                log.info("subscriber_registered", name=_SUBSCRIBER_NAME)
++        except httpx.HTTPError as exc:
++            # Non-fatal: if already registered or service is down, poll will still work
++            log.warning("subscriber_registration_failed", error=str(exc))
++
++    async def _poll_loop(self) -> None:
++        """Poll for inbound write_requested events on a fixed interval."""
++        while True:
++            try:
++                await self._fetch_and_dispatch()
++            except Exception as exc:
++                log.warning("poll_error", error=str(exc))
++            await asyncio.sleep(_POLL_INTERVAL)
++
++    async def _fetch_and_dispatch(self) -> None:
++        """Fetch pending events and dispatch to registered handler."""
++        if self._write_handler is None:
++            return
+ 
+-            # Subscribe to inbound events (agents → service)
+-            await self.client.subscribe("supernote/write_requested")
++        params: dict[str, Any] = {"limit": 50}
++        if self._since_id is not None:
++            params["since_id"] = self._since_id
+ 
+-            # Start message handler
+-            asyncio.create_task(self._handle_messages())
+-            print(f"Connected to paia-events at {self.broker_host}:{self.broker_port}")
++        async with httpx.AsyncClient() as client:
++            resp = await client.get(
++                f"{self._base_url}/v1/subscribers/{_SUBSCRIBER_NAME}/events",
++                params=params,
++                timeout=5.0,
++            )
++            resp.raise_for_status()
+ 
+-        except Exception as e:
+-            print(f"Failed to connect to event broker: {e}")
++        data = resp.json()
++        events: list[dict[str, Any]] = data.get("events", [])
+ 
+-    async def stop(self) -> None:
+-        """Stop event client."""
+-        if self.client:
++        for event in events:
++            event_id: int = event["id"]
++            payload: dict[str, Any] = event.get("payload", {})
+             try:
+-                await self.client.__aexit__(None, None, None)
+-            except Exception as e:
+-                print(f"Error stopping event client: {e}")
++                await self._write_handler(payload)
++            except Exception as exc:
++                log.error("write_handler_error", event_id=event_id, error=str(exc))
++            # Advance cursor even on handler error so we don't replay forever
++            if self._since_id is None or event_id > self._since_id:
++                self._since_id = event_id
++
++    # ------------------------------------------------------------------
++    # Outbound publishing
++    # ------------------------------------------------------------------
+ 
+     async def publish_note_transcribed(
+-        self, notebook: str, page: int, text: str
++        self, notebook: str, page: int, text: str, timestamp: float | None = None
+     ) -> None:
+-        """
+-        Publish note transcribed event → folio.
+-
+-        Args:
+-            notebook: Notebook name
+-            page: Page number
+-            text: Transcribed text
+-        """
+-        event = NoteTranscribedEvent(
+-            event_type="note_transcribed",
+-            timestamp=asyncio.get_event_loop().time(),
+-            data={},
+-            notebook=notebook,
+-            page=page,
+-            text=text
++        """Publish supernote.note_transcribed event."""
++        ts = timestamp if timestamp is not None else time.time()
++        await self._publish(
++            event_type="supernote.note_transcribed",
++            payload={"notebook": notebook, "page": page, "text": text, "timestamp": ts},
++            dedupe_key=f"supernote.note_transcribed:{notebook}:{page}:{int(ts)}",
+         )
+-        await self._publish("supernote/note_transcribed", event.model_dump())
+ 
+     async def publish_checkbox_completed(
+-        self, task_id: str, notebook: str, page: int
++        self,
++        task_text: str,
++        notebook: str,
++        page: int,
++        task_id: str = "",
++        tag: str = "",
+     ) -> None:
+-        """
+-        Publish checkbox completed event → paia-work.
+-
+-        Args:
+-            task_id: Task identifier
+-            notebook: Notebook name
+-            page: Page number
+-        """
+-        event = CheckboxCompletedEvent(
+-            event_type="checkbox_completed",
+-            timestamp=asyncio.get_event_loop().time(),
+-            data={},
+-            task_id=task_id,
+-            notebook=notebook,
+-            page=page
++        """Publish supernote.checkbox_completed event."""
++        _task_id = task_id or task_text[:32]
++        await self._publish(
++            event_type="supernote.checkbox_completed",
++            payload={
++                "task_id": _task_id,
++                "notebook": notebook,
++                "page": page,
++                "task_text": task_text,
++                "tag": tag,
++            },
++            dedupe_key=f"supernote.checkbox_completed:{notebook}:{page}:{_task_id}",
+         )
+-        await self._publish("supernote/checkbox_completed", event.model_dump())
+ 
+     async def publish_snippet_detected(
+         self, notebook: str, page: int, text: str, agent: str
+     ) -> None:
+-        """
+-        Publish snippet detected event → Caroline or Ingrid.
+-
+-        Args:
+-            notebook: Notebook name
+-            page: Page number
+-            text: Snippet text
+-            agent: Target agent (Caroline, Ingrid)
+-        """
+-        event = SnippetDetectedEvent(
+-            event_type="snippet_detected",
+-            timestamp=asyncio.get_event_loop().time(),
+-            data={},
+-            notebook=notebook,
+-            page=page,
+-            text=text,
+-            agent=agent
++        """Publish supernote.snippet_detected event."""
++        await self._publish(
++            event_type="supernote.snippet_detected",
++            payload={"notebook": notebook, "page": page, "text": text, "agent": agent},
++            dedupe_key=f"supernote.snippet_detected:{notebook}:{page}:{text[:32]}",
+         )
+-        await self._publish("supernote/snippet_detected", event.model_dump())
+-
+-    def register_write_handler(self, handler: Callable[[Dict[str, Any]], None]) -> None:
+-        """
+-        Register handler for write_requested events.
+-
+-        Args:
+-            handler: Function to handle write requests
+-        """
+-        self.event_handlers["write_requested"] = handler
+-
+-    async def _publish(self, topic: str, data: Dict[str, Any]) -> None:
+-        """
+-        Publish event to MQTT broker.
+-
+-        Args:
+-            topic: MQTT topic
+-            data: Event data
+-        """
+-        if not self.client:
+-            print("Event client not connected")
+-            return
+-
+-        try:
+-            message = json.dumps(data)
+-            await self.client.publish(topic, message)
+-        except Exception as e:
+-            print(f"Failed to publish to {topic}: {e}")
+-
+-    async def _handle_messages(self) -> None:
+-        """Handle incoming MQTT messages."""
+-        if not self.client:
+-            return
+ 
++    async def _publish(
++        self,
++        event_type: str,
++        payload: dict[str, Any],
++        dedupe_key: str,
++    ) -> None:
++        """POST /v1/events — fire and forget with warning on failure."""
+         try:
+-            async with self.client.messages() as messages:
+-                async for message in messages:
+-                    try:
+-                        data = json.loads(message.payload.decode())
+-                        topic_parts = message.topic.value.split("/")
+-
+-                        if len(topic_parts) >= 2:
+-                            event_type = topic_parts[1]  # e.g., "write_requested"
+-                            handler = self.event_handlers.get(event_type)
+-                            if handler:
+-                                handler(data)
+-
+-                    except Exception as e:
+-                        print(f"Error processing message: {e}")
+-
+-        except Exception as e:
+-            print(f"Error in message handler: {e}")
+\ No newline at end of file
++            async with httpx.AsyncClient() as client:
++                await client.post(
++                    f"{self._base_url}/v1/events",
++                    json={
++                        "event_type": event_type,
++                        "source_app": "paia-supernote",
++                        "source_event_id": str(uuid.uuid4()),
++                        "dedupe_key": dedupe_key,
++                        "payload": payload,
++                    },
++                    timeout=5.0,
++                )
++            log.debug("event_published", event_type=event_type)
++        except httpx.HTTPError as exc:
++            log.warning("event_publish_failed", event_type=event_type, error=str(exc))
++
++
++# Backwards-compatible alias used by main.py
++EventsManager = EventsClient
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index f3e034a..3334656 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -4,209 +4,280 @@ Author: Braydon McCormick <braydon@braydondm.com>
+ Purpose: Main daemon that orchestrates file watching, content processing, and agent integration
+ """
+ 
++from __future__ import annotations
++
++import argparse
+ import asyncio
++import os
+ import signal
+ import sys
+-from typing import Dict, Any
++import tomllib
+ from pathlib import Path
++from typing import Any, Dict
++
++import structlog
+ 
+-from .events import EventsManager
+-from .watcher import SupernoteWatcher
++from .events import EventsClient
++from .cloud_poller import CloudPoller
+ from .reader import SupernoteReader
+ from .writer import SupernoteWriter
+ from .uploader import SupernoteUploader
++from .notebook_writer import append_page_to_notebook
++
++log = structlog.get_logger(__name__)
++
++DEFAULT_CONFIG_PATH = Path("~/.paia/supernote/config.toml").expanduser()
++
++DEFAULT_CONFIG: Dict[str, Any] = {
++    "poll_interval": 60,
++    "events_url": "http://localhost:3511",
++    "folio_url": "http://localhost:3512",
++    "work_url": "http://localhost:3513",
++    "agent_mappings": {
++        "Sam": {"font": "Bradley Hand", "notebook": "Quick"},
++        "Caroline": {"font": "Noteworthy", "notebook": "LFW"},
++        "Ingrid": {"font": "Chalkduster", "notebook": "Synth"},
++    },
++}
++
++
++def load_config(config_path: Path | None = None) -> Dict[str, Any]:
++    """Load config from TOML file, falling back to env vars and defaults.
++
++    Precedence: env vars > TOML file > defaults.
++    """
++    config = dict(DEFAULT_CONFIG)
++
++    path = config_path or DEFAULT_CONFIG_PATH
++    if path.exists():
++        with open(path, "rb") as f:
++            file_config = tomllib.load(f)
++        # Flatten nested TOML sections into our config dict
++        if "supernote" in file_config:
++            sn = file_config["supernote"]
++            if "poll_interval" in sn:
++                config["poll_interval"] = int(sn["poll_interval"])
++        if "services" in file_config:
++            svc = file_config["services"]
++            for key in ("events_url", "folio_url", "work_url"):
++                if key in svc:
++                    config[key] = svc[key]
++        if "agents" in file_config:
++            config["agent_mappings"] = file_config["agents"]
++
++    # Env var overrides
++    if env_poll := os.environ.get("SUPERNOTE_POLL_INTERVAL"):
++        config["poll_interval"] = int(env_poll)
++    if env_events := os.environ.get("PAIA_EVENTS_URL"):
++        config["events_url"] = env_events
++    if env_folio := os.environ.get("PAIA_FOLIO_URL"):
++        config["folio_url"] = env_folio
++    if env_work := os.environ.get("PAIA_WORK_URL"):
++        config["work_url"] = env_work
++
++    return config
+ 
+ 
+ class SupernoteService:
+     """Main paia-supernote service that coordinates all components."""
+ 
+-    def __init__(self):
+-        """Initialize the Supernote service."""
+-        self.events = EventsManager()
+-        self.watcher = SupernoteWatcher(on_note_changed=self._on_note_changed)
++    def __init__(self, config: Dict[str, Any] | None = None) -> None:
++        self.config = config or load_config()
++        self.events = EventsClient(base_url=self.config["events_url"])
+         self.reader = SupernoteReader()
+         self.writer = SupernoteWriter()
+         self.uploader = SupernoteUploader()
+-        self.running = False
++        self.cloud_poller = CloudPoller(
++            uploader=self.uploader,
++            on_note_changed=self._on_note_changed,
++            poll_interval=self.config["poll_interval"],
++        )
++        self._shutdown_event = asyncio.Event()
+ 
+     async def start(self) -> None:
+         """Start the Supernote service."""
+-        print("Starting paia-supernote service...")
++        log.info("service_starting", config_keys=list(self.config.keys()))
+ 
+-        try:
+-            # Start events connection
+-            await self.events.start()
+-            self.events.register_write_handler(self._handle_write_request)
++        # Start events connection
++        await self.events.start()
++        self.events.register_write_handler(self._handle_write_request)
+ 
+-            # Start uploader browser session
+-            await self.uploader.start()
++        # Start uploader browser session (also used by cloud poller for API calls)
++        await self.uploader.start()
+ 
+-            # Start file watcher
+-            self.watcher.start()
++        # Start cloud poller (no Partner app needed)
++        self.cloud_poller.start()
+ 
+-            self.running = True
+-            print("paia-supernote service started successfully")
++        log.info("service_started")
+ 
+-            # Keep service running
+-            while self.running:
+-                await asyncio.sleep(1)
+-
+-        except Exception as e:
+-            print(f"Failed to start service: {e}")
+-            await self.stop()
++        # Wait for shutdown signal
++        await self._shutdown_event.wait()
+ 
+     async def stop(self) -> None:
+-        """Stop the Supernote service."""
+-        print("Stopping paia-supernote service...")
+-        self.running = False
++        """Stop the Supernote service, flushing pending ops."""
++        log.info("service_stopping")
+ 
+-        # Stop components
+-        try:
+-            self.watcher.stop()
+-            await self.uploader.stop()
+-            await self.events.stop()
+-        except Exception as e:
+-            print(f"Error during shutdown: {e}")
++        await self.cloud_poller.stop()
++        await self.uploader.stop()
++        await self.events.stop()
+ 
+-        print("paia-supernote service stopped")
++        self._shutdown_event.set()
++        log.info("service_stopped")
+ 
+-    def _on_note_changed(self, file_path: Path, notebook_name: str) -> None:
+-        """
+-        Handle file change events from watcher.
++    async def _on_note_changed(self, notebook_name: str, note_bytes: bytes) -> None:
++        """Handle change events from the cloud poller."""
++        log.info("note_changed", notebook=notebook_name, size=len(note_bytes))
++        await self._process_file_change(notebook_name, note_bytes)
+ 
+-        Args:
+-            file_path: Path to changed .note file
+-            notebook_name: Extracted notebook name (stem of the file)
+-        """
+-        print(f"Processing file change: {file_path} ({notebook_name})")
++    async def _process_file_change(self, notebook_name: str, note_bytes: bytes) -> None:
++        """Process a changed .note file through the read pipeline."""
++        try:
++            read_results = await self.reader.process_file(note_bytes, notebook_name)
+ 
+-        # Process file asynchronously
+-        asyncio.create_task(self._process_file_change(str(file_path), notebook_name))
++            for result in read_results:
++                # All transcriptions go to folio
++                await self.events.publish_note_transcribed(
++                    result.notebook, result.page_num, result.text
++                )
+ 
+-    async def _process_file_change(self, file_path: str, notebook_name: str) -> None:
+-        """
+-        Process a changed .note file.
++                if result.content_type == "task":
++                    await self._handle_task_content(result)
++                elif result.content_type == "snippet":
++                    await self._handle_strategy_snippet(result)
+ 
+-        Args:
+-            file_path: Path to changed .note file
+-            notebook_name: Extracted notebook name
+-        """
+-        try:
+-            # Extract and transcribe content
+-            content_items = await self.reader.process_file(file_path)
+-
+-            for item in content_items:
+-                notebook = notebook_name
+-                page = item["page_number"]
+-                text = item["transcription"]
+-                content_type = item["content_type"]
+-
+-                # Publish transcription to folio
+-                await self.events.publish_note_transcribed(notebook, page, text)
+-
+-                # Handle content type specific processing
+-                if content_type == "task":
+-                    await self._handle_task_content(item, notebook)
+-                elif content_type == "strategy_snippet":
+-                    await self._handle_strategy_snippet(item, notebook)
+-
+-                # Handle checkbox completions
+-                for checkbox in item["checkbox_changes"]:
++                for checkbox in result.checkboxes:
+                     await self.events.publish_checkbox_completed(
+-                        checkbox["task_text"], notebook, page
++                        task_id="",
++                        notebook=result.notebook,
++                        page=result.page_num,
++                        task_text=checkbox.task_text,
++                        tag=checkbox.tag,
+                     )
+ 
+-        except Exception as e:
+-            print(f"Error processing file change {file_path}: {e}")
++        except Exception as exc:
++            log.error("file_processing_error", notebook=notebook_name, error=str(exc))
+ 
+-    async def _handle_task_content(self, item: Dict[str, Any], notebook: str) -> None:
+-        """
+-        Handle task content (□/○ markers).
+-
+-        Args:
+-            item: Content item with task information
+-            notebook: Notebook name
+-        """
+-        # TODO: Extract new □/○ tasks and add to paia-work
+-        print(f"Task content detected in {notebook}: {item['transcription'][:100]}...")
+-
+-    async def _handle_strategy_snippet(self, item: Dict[str, Any], notebook: str) -> None:
+-        """
+-        Handle strategy snippet detection.
+-
+-        Args:
+-            item: Content item with snippet information
+-            notebook: Notebook name
+-        """
+-        # Route to appropriate agent based on notebook
+-        agent = "Caroline" if notebook == "LFW" else "Ingrid"
++    async def _handle_task_content(self, result) -> None:
++        """Handle task content (box/circle markers)."""
++        log.info("task_content_detected", notebook=result.notebook,
++                 preview=result.text[:100])
+ 
++    async def _handle_strategy_snippet(self, result) -> None:
++        """Handle strategy snippet detection — route to appropriate agent."""
++        agent = "Caroline" if result.notebook == "LFW" else "Ingrid"
+         await self.events.publish_snippet_detected(
+-            notebook=notebook,
+-            page=item["page_number"],
+-            text=item["transcription"],
+-            agent=agent
++            notebook=result.notebook,
++            page=result.page_num,
++            text=result.text,
++            agent=agent,
+         )
+ 
+     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
+-        """
+-        Handle write request events from agents.
++        """Handle write request events from agents.
+ 
+-        Args:
+-            event_data: Write request event data
++        Pipeline: download from cloud → render_page → append → upload/replace.
++        Does not require Partner app sync — reads directly from Supernote Cloud.
+         """
++        import tempfile
++        import os
++
+         try:
+             agent = event_data["agent"]
+             notebook = event_data["notebook"]
+-            content_type = event_data["content_type"]
+-            content = event_data["content"]
++            content = event_data.get("content", "")
++            target_name = f"{notebook}.note"
++
++            log.info("write_request_received", agent=agent, notebook=notebook)
+ 
+-            print(f"Processing write request from {agent} to {notebook}")
++            # Step 1: Download the current notebook from cloud
++            notebook_bytes = await self.uploader.download_notebook(target_name)
++            log.info("notebook_downloaded", target_name=target_name,
++                     size=len(notebook_bytes))
+ 
+-            # Render content to .note page (RATTA_RLE encoded bitmap)
+-            page_data = self.writer.render_page(agent, content, content_type)
++            # Step 2: Render page content to RATTA_RLE bytes
++            ratta_rle_bytes = self.writer.render_page(agent, content)
+ 
+-            # Determine notebook path
+-            # TODO: merge page_data into existing notebook via supernotelib.merge()
+-            notebook_path = str(
+-                Path(f"~/Supernote/{notebook}.note").expanduser()
+-            )
++            # Step 3: Append page to the downloaded notebook bytes
++            updated_bytes = append_page_to_notebook(notebook_bytes, ratta_rle_bytes)
+ 
+-            # Upload to cloud
+-            success = await self.uploader.upload_notebook(
+-                notebook_path, f"{notebook}.note"
+-            )
++            # Step 4: Write updated notebook to a temp file and upload
++            with tempfile.NamedTemporaryFile(
++                suffix=".note", delete=False, dir="/tmp"
++            ) as tmp:
++                tmp.write(updated_bytes)
++                tmp_path = tmp.name
++
++            try:
++                success = await self.uploader.upload_notebook(tmp_path, target_name)
++            finally:
++                os.unlink(tmp_path)
+ 
+             if success:
+-                print(f"Successfully wrote {agent}'s content to {notebook}")
++                log.info("write_complete", agent=agent, notebook=notebook)
+             else:
+-                print(f"Failed to upload {agent}'s content to {notebook}")
++                log.warning("write_upload_failed", agent=agent, notebook=notebook)
++
++        except Exception as exc:
++            log.error("write_request_error", error=str(exc))
++
++
++def _configure_logging() -> None:
++    """Configure structlog for JSON output to stdout."""
++    structlog.configure(
++        processors=[
++            structlog.contextvars.merge_contextvars,
++            structlog.processors.add_log_level,
++            structlog.processors.TimeStamper(fmt="iso"),
++            structlog.dev.ConsoleRenderer()
++            if sys.stderr.isatty()
++            else structlog.processors.JSONRenderer(),
++        ],
++        logger_factory=structlog.PrintLoggerFactory(),
++    )
++
++
++def build_parser() -> argparse.ArgumentParser:
++    """Build the CLI argument parser."""
++    parser = argparse.ArgumentParser(
++        prog="paia-supernote",
++        description="PAIA service for bidirectional Supernote device integration",
++    )
++    parser.add_argument(
++        "--config",
++        type=Path,
++        default=None,
++        help=f"Path to config TOML file (default: {DEFAULT_CONFIG_PATH})",
++    )
++    return parser
++
++
++def main(argv: list[str] | None = None) -> None:
++    """Main entry point for paia-supernote service."""
++    parser = build_parser()
++    args = parser.parse_args(argv)
+ 
+-        except Exception as e:
+-            print(f"Error handling write request: {e}")
++    _configure_logging()
+ 
++    config = load_config(args.config)
++    service = SupernoteService(config=config)
+ 
+-def main() -> None:
+-    """Main entry point for paia-supernote service."""
+-    service = SupernoteService()
++    loop = asyncio.new_event_loop()
+ 
+-    # Setup signal handlers for graceful shutdown
+-    def signal_handler(signum, frame):
+-        print(f"Received signal {signum}, shutting down...")
+-        asyncio.create_task(service.stop())
++    def _signal_handler() -> None:
++        log.info("shutdown_signal_received")
++        loop.create_task(service.stop())
+ 
+-    signal.signal(signal.SIGINT, signal_handler)
+-    signal.signal(signal.SIGTERM, signal_handler)
++    for sig in (signal.SIGINT, signal.SIGTERM):
++        loop.add_signal_handler(sig, _signal_handler)
+ 
+     try:
+-        # Run the service
+-        asyncio.run(service.start())
++        loop.run_until_complete(service.start())
+     except KeyboardInterrupt:
+-        print("Service interrupted")
+-    except Exception as e:
+-        print(f"Service error: {e}")
+-        sys.exit(1)
++        log.info("service_interrupted")
++    finally:
++        loop.run_until_complete(loop.shutdown_asyncgens())
++        loop.close()
+ 
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    main()
+diff --git a/src/paia_supernote/reader.py b/src/paia_supernote/reader.py
+index 8076924..207480b 100644
+--- a/src/paia_supernote/reader.py
++++ b/src/paia_supernote/reader.py
+@@ -7,12 +7,14 @@ Purpose: Processes changed .note files, extracts content via vision, and classif
+ import base64
+ import hashlib
+ import json
++import os
+ import re
++import tempfile
+ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
+ from io import BytesIO
+ from pathlib import Path
+-from typing import List, Dict, Any, Optional
++from typing import List, Dict, Any, Optional, Union
+ 
+ import supernotelib
+ from supernotelib.converter import ImageConverter
+@@ -54,17 +56,43 @@ class SupernoteReader:
+             self._client = anthropic.AsyncAnthropic()
+         return self._client
+ 
+-    async def process_file(self, file_path: str) -> List[ReadResult]:
+-        """Process a changed .note file and extract content."""
++    async def process_file(
++        self, note_source: Union[str, Path, bytes], notebook_name: Optional[str] = None
++    ) -> List[ReadResult]:
++        """Process a .note file and extract content.
++
++        Args:
++            note_source: Path to a local .note file (str or Path), or raw .note bytes
++                         downloaded from cloud.
++            notebook_name: Override for the notebook name. Required when note_source
++                           is bytes. When note_source is a path, defaults to the stem.
++        """
++        if isinstance(note_source, bytes):
++            if notebook_name is None:
++                raise ValueError("notebook_name is required when note_source is bytes")
++            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
++            try:
++                os.write(tmp_fd, note_source)
++                os.close(tmp_fd)
++                return await self._process_path(tmp_path, notebook_name)
++            finally:
++                os.unlink(tmp_path)
++        else:
++            path = Path(note_source)
++            name = notebook_name or path.stem
++            return await self._process_path(str(path), name)
++
++    async def _process_path(self, file_path: str, notebook_name: str) -> List[ReadResult]:
++        """Internal: load notebook from path and process all pages."""
+         notebook = supernotelib.load_notebook(file_path)
+         converter = ImageConverter(notebook)
+-        notebook_name = Path(file_path).stem
+ 
+         results = []
+         for page_num in range(notebook.get_total_pages()):
+             page_image = converter.convert(page_num)
+ 
+-            if not self.page_changed(file_path, page_num, page_image):
++            # Use notebook_name as the stable key (file_path may be a temp path)
++            if not self.page_changed(notebook_name, page_num, page_image):
+                 continue
+ 
+             transcription = await self._transcribe_page(page_image)
+@@ -73,7 +101,7 @@ class SupernoteReader:
+ 
+             content_type = await self.classify_content(transcription)
+             newly_checked = self.detect_checkbox_changes(
+-                file_path, page_num, transcription
++                notebook_name, page_num, transcription
+             )
+ 
+             result = ReadResult(
+@@ -125,10 +153,9 @@ class SupernoteReader:
+         return response.content[0].text
+ 
+     def detect_checkbox_changes(
+-        self, file_path: str, page_num: int, text: str
++        self, notebook_name: str, page_num: int, text: str
+     ) -> List[CheckboxItem]:
+         """Detect checkbox changes between current and prior snapshot."""
+-        notebook_name = Path(file_path).stem
+         snapshot_path = SNAPSHOT_DIR / f"{notebook_name}_page_{page_num}.json"
+ 
+         # Extract currently checked items with their tags
+@@ -195,13 +222,13 @@ class SupernoteReader:
+ 
+         return "general"
+ 
+-    def page_changed(self, file_path: str, page_num: int, page_image) -> bool:
++    def page_changed(self, notebook_name: str, page_num: int, page_image) -> bool:
+         """Check if a page has changed by comparing MD5 checksums."""
+         img_buffer = BytesIO()
+         page_image.save(img_buffer, format="PNG")
+         current_checksum = hashlib.md5(img_buffer.getvalue()).hexdigest()
+ 
+-        key = f"{file_path}:{page_num}"
++        key = f"{notebook_name}:{page_num}"
+         previous_checksum = self.page_checksums.get(key)
+ 
+         self.page_checksums[key] = current_checksum
+diff --git a/src/paia_supernote/uploader.py b/src/paia_supernote/uploader.py
+index cd65b0f..da89eb4 100644
+--- a/src/paia_supernote/uploader.py
++++ b/src/paia_supernote/uploader.py
+@@ -1,17 +1,21 @@
+ """
+-ABOUTME: Supernote Cloud uploader module
+-Author: Braydon McCormick <braydon@braydondm.com>
+-Purpose: Pushes merged .note files to Supernote Cloud using Playwright browser automation
+-
+-NOTE: The three-step upload flow (upload/apply → S3 PUT → upload/finish) requires an
+-authenticated Supernote Cloud session.  The auth + upload API calls need to be developed
+-against a live session — they are stubbed with clear raise points until that calibration
+-pass happens.  See design spec "Known Open Items #3".
++ABOUTME: Supernote Cloud uploader — three-step flow (apply → S3 PUT → finish).
++ABOUTME: Uses Playwright browser context for auth; httpx for the direct S3 PUT.
++
++Upload flow (calibrated against live Supernote Cloud 2026-04-14):
++  1. POST /api/file/upload/apply  → presigned S3 URL + s3Authorization + xamzDate
++  2. PUT  <s3_url>                → S3 direct upload (Authorization + x-amz-date headers)
++  3. POST /api/file/upload/finish → { innerName: <s3_object_key>, ... }
++
++All notebooks (Quick.note, LFW.note, Synth.note) live in the "Note" folder,
++directoryId = NOTE_FOLDER_ID.  Files sync at SYNC_BASE on Mac.
+ """
+ 
+ import hashlib
+-from typing import Optional, Dict, Any
++import io
+ from pathlib import Path
++from typing import Any, Dict, List, Optional
++from urllib.parse import urlparse
+ 
+ import httpx
+ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+@@ -27,6 +31,15 @@ class SupernoteUploader:
+     CLOUD_URL = "https://cloud.supernote.com"
+     SESSION_FILE = Path("~/.paia/supernote/session.json").expanduser()
+ 
++    # All user notebooks live in the "Note" folder on the cloud
++    NOTE_FOLDER_ID = "955311389939859457"
++
++    # Local Partner-app sync path
++    SYNC_BASE = Path(
++        "~/Library/Containers/com.ratta.supernote/Data/Library/"
++        "Application Support/com.ratta.supernote/908410628964298752/Supernote/Note"
++    ).expanduser()
++
+     def __init__(self) -> None:
+         self.browser: Optional[Browser] = None
+         self.context: Optional[BrowserContext] = None
+@@ -36,7 +49,7 @@ class SupernoteUploader:
+     async def start(self) -> None:
+         """Launch browser and restore session if available."""
+         self._playwright = await async_playwright().start()
+-        self.browser = await self._playwright.chromium.launch(headless=False)
++        self.browser = await self._playwright.chromium.launch(headless=True)
+ 
+         if self.SESSION_FILE.exists():
+             self.context = await self.browser.new_context(
+@@ -46,6 +59,7 @@ class SupernoteUploader:
+             self.context = await self.browser.new_context()
+ 
+         self.page = await self.context.new_page()
++        await self.page.goto(f"{self.CLOUD_URL}/#/home", wait_until="networkidle")
+ 
+     async def stop(self) -> None:
+         """Persist session and close browser."""
+@@ -58,165 +72,254 @@ class SupernoteUploader:
+         if self._playwright:
+             await self._playwright.stop()
+ 
+-    async def upload_notebook(self, notebook_path: str, target_path: str) -> bool:
++    async def upload_notebook(self, notebook_path: str, target_name: str) -> bool:
+         """Upload .note file to Supernote Cloud (three-step flow).
+ 
++        Safe replace strategy: record the existing file ID first, upload the new
++        version (cloud creates a versioned duplicate), then delete the OLD file
++        by its saved ID. If the upload fails, the original is untouched.
++
++        Args:
++            notebook_path: Local path to the .note file.
++            target_name:   Cloud filename, e.g. "Quick.note".
++
+         On 401/403 from the apply step, triggers interactive re-auth and retries once.
++        Returns True on success.
+         """
+         if not self.page:
+             raise RuntimeError("Browser not started. Call start() first.")
+ 
+         await self._ensure_authenticated()
+ 
++        # Record existing file IDs BEFORE uploading — we'll clean them up after
++        existing_ids = await self._find_file_ids(target_name)
++
+         try:
+-            upload_info = await self._initiate_upload(target_path, notebook_path)
++            upload_info = await self._initiate_upload(notebook_path, target_name)
+         except UploadAuthError:
+             await self._interactive_reauth()
+-            upload_info = await self._initiate_upload(target_path, notebook_path)
++            upload_info = await self._initiate_upload(notebook_path, target_name)
+ 
+         await self._upload_to_s3(notebook_path, upload_info)
+-        await self._finish_upload(upload_info)
++        await self._finish_upload(notebook_path, target_name, upload_info)
++
++        # Upload succeeded — now safe to remove the old version(s)
++        if existing_ids:
++            await self._delete_by_ids(existing_ids)
++
+         return True
+ 
+-    # ----- stubs: require live session calibration (spec Known Open Items #3) -----
++    async def download_notebook(self, target_name: str) -> bytes:
++        """Download a .note file from Supernote Cloud by filename.
++
++        Looks up the file ID in the Note folder, fetches a presigned download
++        URL via /api/file/download/url, then GETs the bytes from S3.
++
++        Args:
++            target_name: Cloud filename, e.g. "Quick.note".
++
++        Returns:
++            Raw .note bytes.
++
++        Raises:
++            RuntimeError: If browser not started, file not found, or download fails.
++        """
++        if not self.page:
++            raise RuntimeError("Browser not started. Call start() first.")
++
++        file_ids = await self._find_file_ids(target_name)
++        if not file_ids:
++            raise RuntimeError(f"{target_name!r} not found in Note folder")
++
++        # Use the most recent entry (first ID since list/query returns newest-first by time)
++        file_id = file_ids[0]
++
++        result = await self._api_call("/api/file/download/url", {
++            "id": file_id,
++            "type": "1",
++        })
++        if result["status"] != 200 or not isinstance(result["body"], dict):
++            raise RuntimeError(
++                f"download/url failed ({result['status']}): {result['body']}"
++            )
++
++        download_url = result["body"].get("url")
++        if not download_url:
++            raise RuntimeError(f"No URL in download/url response: {result['body']}")
++
++        async with httpx.AsyncClient() as client:
++            response = await client.get(download_url, timeout=120.0)
++            response.raise_for_status()
++            return response.content
++
++    async def _find_file_ids(self, target_name: str) -> List[str]:
++        """Return cloud file IDs matching target_name in the Note folder."""
++        result = await self._api_call("/api/file/list/query", {
++            "directoryId": self.NOTE_FOLDER_ID,
++            "pageNo": 1,
++            "pageSize": 200,
++            "order": "time",
++            "sequence": "desc",
++            "filterType": 0,
++        })
++        if result["status"] != 200 or not isinstance(result["body"], dict):
++            return []
++        files = result["body"].get("userFileVOList", [])
++        return [
++            f["id"] for f in files
++            if f.get("fileName") == target_name and f.get("isFolder") == "N"
++        ]
++
++    async def _delete_by_ids(self, file_ids: list) -> None:
++        """Delete cloud files by ID list. No-op on empty list."""
++        if not file_ids:
++            return
++        await self._api_call("/api/file/delete", {
++            "idList": file_ids,
++            "directoryId": self.NOTE_FOLDER_ID,
++        })
+ 
+     async def _ensure_authenticated(self) -> None:
+-        """Check auth state; re-authenticate interactively when token expires."""
++        """Check auth state; trigger interactive re-auth when session expired."""
+         if not self.page:
+             raise RuntimeError("Browser not started")
+ 
+-        # Navigate to cloud to check auth state
+-        response = await self.page.goto(self.CLOUD_URL)
++        response = await self.page.goto(f"{self.CLOUD_URL}/#/home")
+ 
+-        # If we get 401/403 or are redirected to login, trigger interactive re-auth
+         needs_reauth = False
+         if response and response.status in (401, 403):
+             needs_reauth = True
+-        elif "/login" in self.page.url:
++        elif "login" in self.page.url:
+             needs_reauth = True
+ 
+         if needs_reauth:
+             await self._interactive_reauth()
+ 
+     async def _interactive_reauth(self) -> None:
+-        """Re-launch browser headed for interactive re-authentication.
+-
+-        Opens the login page and waits for the user to complete login manually.
+-        Once authenticated, persists the new session to disk.
+-        """
++        """Open login page and wait for user to complete authentication."""
+         if not self.page:
+             raise RuntimeError("Browser not started")
+ 
+-        await self.page.goto(f"{self.CLOUD_URL}/login")
+-        # Wait for navigation away from login page (user completes auth)
+-        await self.page.wait_for_url(f"{self.CLOUD_URL}/**", timeout=300_000)
++        await self.page.goto(f"{self.CLOUD_URL}/#/login")
++        # SPA hash routing: wait until hash no longer contains /login
++        await self.page.wait_for_function(
++            "() => !window.location.hash.includes('/login')",
++            timeout=300_000,
++        )
+ 
+-        # Persist the fresh session
+         if self.context:
+             self.SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+             await self.context.storage_state(path=str(self.SESSION_FILE))
+ 
+-    async def _initiate_upload(self, target_path: str, file_path: str) -> Dict[str, Any]:
+-        """POST upload/apply to get presigned S3 URL."""
+-        if not self.page:
+-            raise RuntimeError("Browser not started")
+-
+-        # Compute file metadata
+-        file_size = Path(file_path).stat().st_size
+-        file_md5 = self._compute_file_md5(file_path)
+-        file_name = Path(file_path).name
+-
+-        # Make POST request to upload/apply endpoint
+-        apply_data = {
+-            'directoryId': self._get_directory_id(target_path),
+-            'fileName': file_name,
+-            'md5': file_md5,
+-            'size': file_size
+-        }
+-
+-        # Use Playwright to make the API call with session cookies and XSRF token
++    async def _api_call(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
++        """Make an authenticated API call via the Playwright page context."""
+         result = await self.page.evaluate("""
+-            async (data) => {
+-                // Read XSRF token from cookie (Supernote sets XSRF-TOKEN cookie)
++            async ([endpoint, body]) => {
+                 const xsrfCookie = document.cookie.split(';')
+                     .map(c => c.trim())
+                     .find(c => c.startsWith('XSRF-TOKEN='));
+-                const xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=')[1]) : '';
++                const xsrfToken = xsrfCookie
++                    ? decodeURIComponent(xsrfCookie.split('=')[1])
++                    : '';
+ 
+-                const response = await fetch('/api/file/upload/apply', {
++                const resp = await fetch(endpoint, {
+                     method: 'POST',
+                     headers: {
+                         'Content-Type': 'application/json',
+-                        'X-XSRF-TOKEN': xsrfToken
++                        'X-XSRF-TOKEN': xsrfToken,
+                     },
+-                    body: JSON.stringify(data)
++                    body: JSON.stringify(body),
+                 });
+-                return { status: response.status, body: response.ok ? await response.json() : null };
++                return {
++                    status: resp.status,
++                    body: resp.ok ? await resp.json() : await resp.text(),
++                };
+             }
+-        """, apply_data)
++        """, [endpoint, body])
++        return result  # type: ignore[return-value]
+ 
+-        if result['status'] in (401, 403):
+-            raise UploadAuthError(f"Upload apply returned {result['status']}")
+-        if result['body'] is None:
+-            raise RuntimeError(f"Upload apply failed with status {result['status']}")
+-
+-        return result['body']
++    async def _initiate_upload(
++        self, file_path: str, target_name: str
++    ) -> Dict[str, Any]:
++        """POST /api/file/upload/apply — returns S3 presigned URL + auth headers."""
++        if not self.page:
++            raise RuntimeError("Browser not started")
+ 
+-    async def _upload_to_s3(self, file_path: str, upload_info: Dict[str, Any]) -> None:
+-        """PUT file to S3 using presigned URL (no auth header needed)."""
++        data = Path(file_path).read_bytes()
++        md5 = hashlib.md5(data).hexdigest()
++        size = len(data)
++
++        result = await self._api_call("/api/file/upload/apply", {
++            "directoryId": self.NOTE_FOLDER_ID,
++            "fileName": target_name,
++            "md5": md5,
++            "size": size,
++        })
++
++        if result["status"] in (401, 403):
++            raise UploadAuthError(f"upload/apply returned {result['status']}")
++        if result["status"] != 200 or not isinstance(result["body"], dict):
++            raise RuntimeError(f"upload/apply failed ({result['status']}): {result['body']}")
++        if not result["body"].get("success"):
++            raise RuntimeError(f"upload/apply error: {result['body']}")
++
++        return result["body"]
++
++    async def _upload_to_s3(
++        self, file_path: str, upload_info: Dict[str, Any]
++    ) -> None:
++        """PUT file bytes directly to S3 using the presigned URL."""
+         file_data = Path(file_path).read_bytes()
+-        upload_url = upload_info['uploadUrl']
++        s3_url = upload_info["url"]
+ 
+         headers = {
+-            'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
++            "Authorization": upload_info["s3Authorization"],
++            "x-amz-date": upload_info["xamzDate"],
++            "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+         }
+ 
+-        # Add any additional headers from upload_info
+-        if 'headers' in upload_info:
+-            headers.update(upload_info['headers'])
+-
+         async with httpx.AsyncClient() as client:
+             response = await client.put(
+-                upload_url,
++                s3_url,
+                 content=file_data,
+-                headers=headers
++                headers=headers,
++                timeout=120.0,
+             )
+             response.raise_for_status()
+ 
+-    async def _finish_upload(self, upload_info: Dict[str, Any]) -> None:
+-        """POST upload/finish to confirm the upload."""
++    @staticmethod
++    def _compute_file_md5(file_path: str) -> str:
++        """Return hex MD5 of file contents."""
++        return hashlib.md5(Path(file_path).read_bytes()).hexdigest()
++
++    async def _finish_upload(
++        self,
++        file_path: str,
++        target_name: str,
++        upload_info: Dict[str, Any],
++    ) -> None:
++        """POST /api/file/upload/finish — links S3 object to the user's cloud account."""
+         if not self.page:
+             raise RuntimeError("Browser not started")
+ 
+-        await self.page.evaluate("""
+-            async (data) => {
+-                const response = await fetch('/api/file/upload/finish', {
+-                    method: 'POST',
+-                    headers: {
+-                        'Content-Type': 'application/json',
+-                        'X-XSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
+-                    },
+-                    body: JSON.stringify(data)
+-                });
+-                if (!response.ok) {
+-                    throw new Error(`Upload finish failed: ${response.status}`);
+-                }
+-                return await response.json();
+-            }
+-        """, upload_info)
+-
+-    def _compute_file_md5(self, file_path: str) -> str:
+-        """Compute MD5 hash of file contents."""
+-        file_data = Path(file_path).read_bytes()
+-        return hashlib.md5(file_data).hexdigest()
+-
+-    def _get_directory_id(self, target_path: str) -> str:
+-        """Get directory ID for target notebook."""
+-        # TODO: Implement directory ID mapping
+-        # For now, return a placeholder
+-        directory_mapping = {
+-            "Quick.note": "quick_dir_id",
+-            "LFW.note": "lfw_dir_id",
+-            "Synth.note": "synth_dir_id"
+-        }
+-        return directory_mapping.get(target_path, "default_dir_id")
+\ No newline at end of file
++        data = Path(file_path).read_bytes()
++        md5 = hashlib.md5(data).hexdigest()
++        size = len(data)
++
++        # innerName is the S3 object key extracted from the presigned URL path
++        s3_key = urlparse(upload_info["url"]).path.lstrip("/")
++
++        result = await self._api_call("/api/file/upload/finish", {
++            "directoryId": self.NOTE_FOLDER_ID,
++            "fileName": target_name,
++            "md5": md5,
++            "size": size,
++            "fileSize": size,
++            "fileServer": upload_info.get("fileServer", "2"),
++            "innerName": s3_key,
++        })
++
++        if result["status"] != 200 or not isinstance(result["body"], dict):
++            raise RuntimeError(f"upload/finish failed ({result['status']}): {result['body']}")
++        if not result["body"].get("success"):
++            raise RuntimeError(f"upload/finish error: {result['body']}")
+diff --git a/src/paia_supernote/writer.py b/src/paia_supernote/writer.py
+index 6ff87e1..eaa406b 100644
+--- a/src/paia_supernote/writer.py
++++ b/src/paia_supernote/writer.py
+@@ -33,13 +33,13 @@ class SupernoteWriter:
+     DEVICE_HEIGHT = 1872
+     DEVICE_DPI = 226
+ 
+-    # Font size constants (configurable — requires device calibration)
+-    BODY_FONT_SIZE = 36
+-    DATE_FONT_SIZE = 28
+-    SIGNATURE_FONT_SIZE = 36
++    # Font size constants (calibrated from device feedback 2026-04-14: 36 was too small)
++    BODY_FONT_SIZE = 52
++    DATE_FONT_SIZE = 36
++    SIGNATURE_FONT_SIZE = 48
+ 
+     MARGIN = 80
+-    LINE_SPACING = 12
++    LINE_SPACING = 16
+ 
+     def render_page(self, agent: str, content: str, content_type: str = "text") -> bytes:
+         """
+diff --git a/tests/test_reader.py b/tests/test_reader.py
+index fa32cc4..4465a11 100644
+--- a/tests/test_reader.py
++++ b/tests/test_reader.py
+@@ -51,7 +51,7 @@ class TestSupernoteReader:
+         monkeypatch.setattr('paia_supernote.reader.SNAPSHOT_DIR', tmp_path / "snapshots")
+         reader = SupernoteReader()
+ 
+-        changes = reader.detect_checkbox_changes("test_file.note", 0, "□ Some task text")
++        changes = reader.detect_checkbox_changes("test_file", 0, "□ Some task text")
+ 
+         assert changes == []
+ 
+@@ -62,11 +62,11 @@ class TestSupernoteReader:
+         reader = SupernoteReader()
+ 
+         # First call with unchecked item
+-        changes1 = reader.detect_checkbox_changes("test_file.note", 0, "□ Some task text")
++        changes1 = reader.detect_checkbox_changes("test_file", 0, "□ Some task text")
+         assert changes1 == []
+ 
+         # Second call with checked item — should detect newly checked
+-        changes2 = reader.detect_checkbox_changes("test_file.note", 0, "☑ Some task text")
++        changes2 = reader.detect_checkbox_changes("test_file", 0, "☑ Some task text")
+         assert len(changes2) == 1
+         assert isinstance(changes2[0], CheckboxItem)
+         assert changes2[0].task_text == "Some task text"
+@@ -86,10 +86,10 @@ class TestSupernoteReader:
+         reader = SupernoteReader()
+ 
+         # First call — no prior state
+-        reader.detect_checkbox_changes("test_file.note", 0, "○ Orbit task")
++        reader.detect_checkbox_changes("test_file", 0, "○ Orbit task")
+ 
+         # Second call — circle checked
+-        changes = reader.detect_checkbox_changes("test_file.note", 0, "● Orbit task")
++        changes = reader.detect_checkbox_changes("test_file", 0, "● Orbit task")
+         assert len(changes) == 1
+         assert changes[0].tag == "orbit"
+         assert changes[0].task_text == "Orbit task"
+@@ -140,13 +140,13 @@ class TestSupernoteReader:
+         test_image = Image.open("tests/fixtures/test_page.png")
+ 
+         # First call: page is new
+-        assert reader.page_changed("test_file.note", 0, test_image) is True
++        assert reader.page_changed("test_file", 0, test_image) is True
+ 
+         # Second call: same image, should skip
+-        assert reader.page_changed("test_file.note", 0, test_image) is False
++        assert reader.page_changed("test_file", 0, test_image) is False
+ 
+         # Different page number: should process
+-        assert reader.page_changed("test_file.note", 1, test_image) is True
++        assert reader.page_changed("test_file", 1, test_image) is True
+ 
+     @pytest.mark.asyncio
+     @patch('paia_supernote.reader.supernotelib')
+diff --git a/tests/test_uploader.py b/tests/test_uploader.py
+index a20ad4e..7174d48 100644
+--- a/tests/test_uploader.py
++++ b/tests/test_uploader.py
+@@ -64,7 +64,7 @@ class TestSupernoteUploader:
+         """Test that _initiate_upload raises RuntimeError when browser not started."""
+         uploader.page = None
+         with pytest.raises(RuntimeError, match="Browser not started"):
+-            await uploader._initiate_upload("Quick.note", "/path/to/file.note")
++            await uploader._initiate_upload("/path/to/file.note", "Quick.note")
+ 
+     @pytest.mark.asyncio
+     async def test_upload_to_s3_raises_on_missing_file(self, uploader):
+@@ -76,9 +76,9 @@ class TestSupernoteUploader:
+     @pytest.mark.asyncio
+     async def test_finish_upload_requires_browser(self, uploader):
+         """Test that _finish_upload raises RuntimeError when browser not started."""
+-        upload_info = {'uploadId': '123'}
++        upload_info = {"url": "https://s3.example.com/key.note", "fileServer": "2"}
+         with pytest.raises(RuntimeError, match="Browser not started"):
+-            await uploader._finish_upload(upload_info)
++            await uploader._finish_upload("/tmp/fake.note", "fake.note", upload_info)
+ 
+     @pytest.mark.asyncio
+     async def test_upload_notebook_calls_three_step_flow(self, uploader):
+@@ -86,6 +86,7 @@ class TestSupernoteUploader:
+         uploader.page = Mock()
+ 
+         with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock) as mock_auth, \
++             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]) as mock_find, \
+              patch.object(uploader, '_initiate_upload', new_callable=AsyncMock) as mock_apply, \
+              patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock) as mock_s3, \
+              patch.object(uploader, '_finish_upload', new_callable=AsyncMock) as mock_finish:
+@@ -110,6 +111,7 @@ class TestSupernoteUploader:
+ 
+         mock_browser.new_context = AsyncMock(return_value=mock_context)
+         mock_context.new_page = AsyncMock(return_value=mock_page)
++        mock_page.goto = AsyncMock()
+ 
+         # Patch the session file path to use our mock
+         uploader.SESSION_FILE = mock_session_file
+@@ -136,6 +138,7 @@ class TestSupernoteUploader:
+ 
+         # Mock the network calls to return expected data
+         with patch.object(uploader, '_ensure_authenticated') as mock_auth, \
++             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]) as mock_find, \
+              patch.object(uploader, '_initiate_upload') as mock_apply, \
+              patch.object(uploader, '_upload_to_s3') as mock_s3, \
+              patch.object(uploader, '_finish_upload') as mock_finish:
+@@ -153,7 +156,7 @@ class TestSupernoteUploader:
+ 
+             assert result is True
+             mock_auth.assert_called_once()
+-            mock_apply.assert_called_once_with("Quick.note", mock_note_file)
++            mock_apply.assert_called_once_with(mock_note_file, "Quick.note")
+             mock_s3.assert_called_once()
+             mock_finish.assert_called_once()
+ 
+@@ -218,31 +221,34 @@ class TestSupernoteUploader:
+         """Test that _initiate_upload makes POST request to upload/apply endpoint."""
+         mock_page = Mock()
+ 
+-        # Mock the response from the apply endpoint (new {status, body} format)
++        # Real API returns: url, s3Authorization, xamzDate, fileServer
+         api_body = {
+-            'uploadUrl': 'https://s3.amazonaws.com/bucket/key?params',
+-            'uploadId': 'abc123',
+-            'headers': {'Authorization': 'AWS4-HMAC-SHA256 ...'}
++            'success': True,
++            'url': 'https://s3.amazonaws.com/bucket/key.note',
++            's3Authorization': 'AWS4-HMAC-SHA256 Credential=...',
++            'xamzDate': '20260414T200355Z',
++            'fileServer': '2',
++            'innerName': None,
+         }
+         mock_page.evaluate = AsyncMock(return_value={'status': 200, 'body': api_body})
+         uploader.page = mock_page
+ 
+-        result = await uploader._initiate_upload("Quick.note", mock_note_file)
++        result = await uploader._initiate_upload(mock_note_file, "Quick.note")
+ 
+-        assert result['uploadUrl'] == api_body['uploadUrl']
+-        assert result['uploadId'] == api_body['uploadId']
++        assert result['url'] == api_body['url']
++        assert result['s3Authorization'] == api_body['s3Authorization']
+         mock_page.evaluate.assert_called_once()
+ 
+     @pytest.mark.asyncio
+     async def test_upload_to_s3_puts_file_to_presigned_url(self, uploader, mock_note_file):
+         """Test that _upload_to_s3 uploads file to S3 presigned URL."""
+-        # This will fail because the method is not implemented
++        # Real API: url = presigned S3 URL, s3Authorization + xamzDate are headers
+         upload_info = {
+-            'uploadUrl': 'https://s3.amazonaws.com/bucket/key?params',
+-            'headers': {'Authorization': 'AWS4-HMAC-SHA256 ...'}
++            'url': 'https://s3.amazonaws.com/bucket/key.note',
++            's3Authorization': 'AWS4-HMAC-SHA256 Credential=...',
++            'xamzDate': '20260414T200355Z',
+         }
+ 
+-        # Should use httpx to PUT file to S3 (no session cookies needed)
+         with patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
+             mock_response = Mock()
+             mock_response.status_code = 200
+@@ -257,30 +263,36 @@ class TestSupernoteUploader:
+ 
+             await uploader._upload_to_s3(mock_note_file, upload_info)
+ 
+-            # Verify PUT request was made with correct parameters
+             mock_client.put.assert_called_once()
+             call_args = mock_client.put.call_args
+-            assert call_args[0][0] == upload_info['uploadUrl']  # URL
+-            assert 'content' in call_args[1]  # File content
++            assert call_args[0][0] == upload_info['url']
++            assert 'content' in call_args[1]
+             assert 'x-amz-content-sha256' in call_args[1]['headers']
++            assert call_args[1]['headers']['Authorization'] == upload_info['s3Authorization']
+ 
+     @pytest.mark.asyncio
+-    async def test_finish_upload_posts_to_finish_endpoint(self, uploader):
++    async def test_finish_upload_posts_to_finish_endpoint(self, uploader, mock_note_file):
+         """Test that _finish_upload makes POST request to upload/finish endpoint."""
+         mock_page = Mock()
+-        upload_info = {'uploadId': 'abc123'}
++        upload_info = {
++            'url': 'https://s3.amazonaws.com/key.note',
++            'fileServer': '2',
++            'innerName': None,
++        }
+ 
+-        mock_page.evaluate = AsyncMock(return_value={'status': 'success'})
++        # evaluate is called by _api_call inside _finish_upload
++        mock_page.evaluate = AsyncMock(
++            return_value={'status': 200, 'body': {'success': True}}
++        )
+         uploader.page = mock_page
+ 
+-        # Should make API call to finish the upload
+-        await uploader._finish_upload(upload_info)
++        await uploader._finish_upload(mock_note_file, "Quick.note", upload_info)
+ 
+-        # Verify the API call was made
+         mock_page.evaluate.assert_called_once()
++        # The JS string passed to evaluate should reference /api/file/upload/finish
+         call_args = mock_page.evaluate.call_args
+-        # The JavaScript should make a POST to /api/file/upload/finish
+-        assert '/api/file/upload/finish' in call_args[0][0]
++        js_or_args = str(call_args)
++        assert '/api/file/upload/finish' in js_or_args
+ 
+     @pytest.mark.asyncio
+     async def test_reauth_triggered_on_401_from_apply(self, uploader, mock_note_file):
+@@ -301,6 +313,7 @@ class TestSupernoteUploader:
+             return upload_info
+ 
+         with patch.object(uploader, '_ensure_authenticated', new_callable=AsyncMock), \
++             patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]) as mock_find, \
+              patch.object(uploader, '_initiate_upload', side_effect=mock_initiate) as mock_apply, \
+              patch.object(uploader, '_interactive_reauth', new_callable=AsyncMock) as mock_reauth, \
+              patch.object(uploader, '_upload_to_s3', new_callable=AsyncMock), \
+@@ -322,7 +335,7 @@ class TestSupernoteUploader:
+         uploader.page = mock_page
+ 
+         with pytest.raises(UploadAuthError, match="401"):
+-            await uploader._initiate_upload("Quick.note", mock_note_file)
++            await uploader._initiate_upload(mock_note_file, "Quick.note")
+ 
+     @pytest.mark.asyncio
+     async def test_initiate_upload_raises_upload_auth_error_on_403(self, uploader, mock_note_file):
+@@ -332,4 +345,65 @@ class TestSupernoteUploader:
+         uploader.page = mock_page
+ 
+         with pytest.raises(UploadAuthError, match="403"):
+-            await uploader._initiate_upload("Quick.note", mock_note_file)
+\ No newline at end of file
++            await uploader._initiate_upload(mock_note_file, "Quick.note")
++
++    @pytest.mark.asyncio
++    async def test_download_notebook_raises_without_browser(self, uploader):
++        """Test that download_notebook raises RuntimeError when browser not started."""
++        uploader.page = None
++        with pytest.raises(RuntimeError, match="Browser not started"):
++            await uploader.download_notebook("Quick.note")
++
++    @pytest.mark.asyncio
++    async def test_download_notebook_raises_if_file_not_found(self, uploader):
++        """Test that download_notebook raises RuntimeError when file is not in Note folder."""
++        uploader.page = Mock()
++        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock, return_value=[]):
++            with pytest.raises(RuntimeError, match="not found"):
++                await uploader.download_notebook("NoSuchFile.note")
++
++    @pytest.mark.asyncio
++    async def test_download_notebook_fetches_presigned_url_and_downloads(self, uploader):
++        """Test that download_notebook calls download/url API then GETs from S3."""
++        mock_page = Mock()
++        file_id = "123456789"
++        presigned_url = "https://s3.amazonaws.com/bucket/Quick.note?sig=abc"
++        expected_bytes = b"fake note content"
++
++        mock_page.evaluate = AsyncMock(
++            return_value={'status': 200, 'body': {'url': presigned_url}}
++        )
++        uploader.page = mock_page
++
++        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
++                          return_value=[file_id]), \
++             patch('paia_supernote.uploader.httpx.AsyncClient') as mock_client_class:
++
++            mock_response = Mock()
++            mock_response.content = expected_bytes
++            mock_response.raise_for_status = Mock()
++
++            mock_client = AsyncMock()
++            mock_client.get = AsyncMock(return_value=mock_response)
++            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
++            mock_client.__aexit__ = AsyncMock(return_value=None)
++            mock_client_class.return_value = mock_client
++
++            result = await uploader.download_notebook("Quick.note")
++
++            assert result == expected_bytes
++            mock_client.get.assert_called_once_with(presigned_url, timeout=120.0)
++
++    @pytest.mark.asyncio
++    async def test_download_notebook_raises_on_missing_url_in_response(self, uploader):
++        """Test that download_notebook raises RuntimeError when API returns no URL."""
++        mock_page = Mock()
++        mock_page.evaluate = AsyncMock(
++            return_value={'status': 200, 'body': {'success': True}}  # no 'url' key
++        )
++        uploader.page = mock_page
++
++        with patch.object(uploader, '_find_file_ids', new_callable=AsyncMock,
++                          return_value=["some-id"]):
++            with pytest.raises(RuntimeError, match="No URL"):
++                await uploader.download_notebook("Quick.note")
+\ No newline at end of file
+diff --git a/uv.lock b/uv.lock
+index 2e9f0e9..8b9673e 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -16,6 +16,26 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/78/b6/6307fbef88d9b5ee7421e68d78a9f162e0da4900bc5f5793f6d3d0e34fb8/annotated_types-0.7.0-py3-none-any.whl", hash = "sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53", size = 13643, upload-time = "2024-05-20T21:33:24.1Z" },
+ ]
+ 
++[[package]]
++name = "anthropic"
++version = "0.95.0"
++source = { registry = "https://pypi.org/simple" }
++dependencies = [
++    { name = "anyio", version = "4.12.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
++    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
++    { name = "distro" },
++    { name = "docstring-parser" },
++    { name = "httpx" },
++    { name = "jiter" },
++    { name = "pydantic" },
++    { name = "sniffio" },
++    { name = "typing-extensions" },
++]
++sdist = { url = "https://files.pythonhosted.org/packages/f0/cb/b1896da12f12680c39c90af1b9c9fdf75354899317e2a7900ab37fe3a640/anthropic-0.95.0.tar.gz", hash = "sha256:e4d815351489e5627f39806f12561c52b574e69be10d12fcab723264f955c11d", size = 654528, upload-time = "2026-04-14T19:04:34.114Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/64/29/a0285521eeaacf9ff5d0fad2d437389aefa0adf3db79b0e0bda49f809ce9/anthropic-0.95.0-py3-none-any.whl", hash = "sha256:9fd3503cb666446e28ab5a5d0ec7feda39968399e494bd2cca2f0b927f8aa7a6", size = 627749, upload-time = "2026-04-14T19:04:35.549Z" },
++]
++
+ [[package]]
+ name = "anyio"
+ version = "4.12.1"
+@@ -51,18 +71,6 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/da/42/e921fccf5015463e32a3cf6ee7f980a6ed0f395ceeaa45060b61d86486c2/anyio-4.13.0-py3-none-any.whl", hash = "sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708", size = 114353, upload-time = "2026-03-24T12:59:08.246Z" },
+ ]
+ 
+-[[package]]
+-name = "asyncio-mqtt"
+-version = "0.16.2"
+-source = { registry = "https://pypi.org/simple" }
+-dependencies = [
+-    { name = "paho-mqtt" },
+-    { name = "typing-extensions", marker = "python_full_version < '3.10'" },
+-]
+-wheels = [
+-    { url = "https://files.pythonhosted.org/packages/2a/64/c8a8c2ed51f3c1f4b8d2f244424d3bad3fbd4333eb01589c6b00a6dd2c04/asyncio_mqtt-0.16.2-py3-none-any.whl", hash = "sha256:fe70ea2c648b248779a7ff3d9218262cdd739083743dfaa7c0d52ba458a8ad71", size = 17380, upload-time = "2023-06-26T19:46:48.342Z" },
+-]
+-
+ [[package]]
+ name = "backports-asyncio-runner"
+ version = "1.2.0"
+@@ -619,12 +627,30 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/21/0e/8459ca4413e1a21a06c97d134bfaf18adfd27cea068813dc0faae06cbf00/cssselect2-0.9.0-py3-none-any.whl", hash = "sha256:6a99e5f91f9a016a304dd929b0966ca464bcfda15177b6fb4a118fc0fb5d9563", size = 15453, upload-time = "2026-02-12T17:16:38.317Z" },
+ ]
+ 
++[[package]]
++name = "distro"
++version = "1.9.0"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
++]
++
++[[package]]
++name = "docstring-parser"
++version = "0.18.0"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
++]
++
+ [[package]]
+ name = "exceptiongroup"
+ version = "1.3.1"
+ source = { registry = "https://pypi.org/simple" }
+ dependencies = [
+-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
++    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+ ]
+ sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
+ wheels = [
+@@ -890,6 +916,122 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/3e/95/c7c34aa53c16353c56d0b802fba48d5f5caa2cdee7958acbcb795c830416/isort-8.0.1-py3-none-any.whl", hash = "sha256:28b89bc70f751b559aeca209e6120393d43fbe2490de0559662be7a9787e3d75", size = 89733, upload-time = "2026-02-28T10:08:19.466Z" },
+ ]
+ 
++[[package]]
++name = "jiter"
++version = "0.14.0"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/6e/c1/0cddc6eb17d4c53a99840953f95dd3accdc5cfc7a337b0e9b26476276be9/jiter-0.14.0.tar.gz", hash = "sha256:e8a39e66dac7153cf3f964a12aad515afa8d74938ec5cc0018adcdae5367c79e", size = 165725, upload-time = "2026-04-10T14:28:42.01Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/64/2e/a9959997739c403378d0a4a3a1c4ed80b60aeace216c4d37b303a9fc60a4/jiter-0.14.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:02f36a5c700f105ac04a6556fe664a59037a2c200db3b7e88784fac2ddf02531", size = 316927, upload-time = "2026-04-10T14:25:40.753Z" },
++    { url = "https://files.pythonhosted.org/packages/27/72/b6de8a531e0adbadd839bec301165feb1fccf00e9ff55073ba2dd20f0043/jiter-0.14.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:41eab6c09ceffb6f0fe25e214b3068146edb1eda3649ca2aee2a061029c7ba2e", size = 321181, upload-time = "2026-04-10T14:25:42.621Z" },
++    { url = "https://files.pythonhosted.org/packages/db/d8/2040b9efa13c917f855c40890ae4119fe02c25b7c7677d5b4fa820a851fc/jiter-0.14.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5cf4d4c109641f9cfaf4a7b6aebd51654e405cd00fa9ebbf87163b8b97b325aa", size = 347387, upload-time = "2026-04-10T14:25:44.212Z" },
++    { url = "https://files.pythonhosted.org/packages/49/62/655c0ad5ce6a8e90f9068c175b8a236877d753e460762b3183c136db1c5b/jiter-0.14.0-cp310-cp310-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:b80c7b41a628e6be2213ad0ece763c5f88aa5ee003fa394d58acaaee1f4b8342", size = 373083, upload-time = "2026-04-10T14:25:45.55Z" },
++    { url = "https://files.pythonhosted.org/packages/f1/66/549c40fa068f08710b7570869c306a051eb67a29758bd64f4114f730554c/jiter-0.14.0-cp310-cp310-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:fb3dbf7cc0d4dbe73cce307ebe7eefa7f73a7d3d854dd119ea0c243f03e40927", size = 463639, upload-time = "2026-04-10T14:25:47.452Z" },
++    { url = "https://files.pythonhosted.org/packages/25/2f/97a32a05fed14ed58a18e181fdfb619e05163f3726b54ee6080ec0539c09/jiter-0.14.0-cp310-cp310-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:7054adcdeb06b46efd17b5734f75817a44a2d06d3748e36c3a023a1bb52af9ec", size = 380735, upload-time = "2026-04-10T14:25:49.305Z" },
++    { url = "https://files.pythonhosted.org/packages/2a/3b/4347e1d6c2a973d653bbb7a2d671a2d2426e54b52ba735b8ff0d0a29b75c/jiter-0.14.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d597cd1bf6790376f3fffc7c708766e57301d99a19314824ea0ccc9c3c70e1e2", size = 358632, upload-time = "2026-04-10T14:25:50.931Z" },
++    { url = "https://files.pythonhosted.org/packages/ef/24/ca452fbf2ea33548ed30ce68a39a50442d3f7c9bf0704a7af958a930c057/jiter-0.14.0-cp310-cp310-manylinux_2_31_riscv64.whl", hash = "sha256:df63a14878da754427926281626fd3ee249424a186e25a274e78176d42945264", size = 359969, upload-time = "2026-04-10T14:25:52.381Z" },
++    { url = "https://files.pythonhosted.org/packages/e3/a3/94470a0d199287caabeb4da2bb2ae5f6d17f3cf05dfc975d7cb064d58e0f/jiter-0.14.0-cp310-cp310-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:4ea73187627bcc5810e085df715e8a99da8bdfd96a7eb36b4b4df700ba6d4c9c", size = 397529, upload-time = "2026-04-10T14:25:53.801Z" },
++    { url = "https://files.pythonhosted.org/packages/cf/71/6768edc09d7c45c39f093feb3de105fa718a3e982b5208b8a2ed6382b44b/jiter-0.14.0-cp310-cp310-musllinux_1_1_aarch64.whl", hash = "sha256:9f541eaf7bb8382367a1a23d6fc3d6aad57f8dd8c18c3c17f838bee20f217220", size = 522342, upload-time = "2026-04-10T14:25:55.396Z" },
++    { url = "https://files.pythonhosted.org/packages/3d/6b/5c2e17559a0f4e96e934479f7137df46c939e983fa05244e674815befb73/jiter-0.14.0-cp310-cp310-musllinux_1_1_x86_64.whl", hash = "sha256:107465250de4fce00fdb47166bcd51df8e634e049541174fe3c71848e44f52ce", size = 556784, upload-time = "2026-04-10T14:25:56.927Z" },
++    { url = "https://files.pythonhosted.org/packages/b1/83/c25f3556a60fc74d11199100f1b6cc0c006b815c8494dea8ca16fe398732/jiter-0.14.0-cp310-cp310-win32.whl", hash = "sha256:ffb2a08a406465bb076b7cc1df41d833106d3cf7905076cc73f0cb90078c7d10", size = 208439, upload-time = "2026-04-10T14:25:58.796Z" },
++    { url = "https://files.pythonhosted.org/packages/2e/99/781a1b413f0989b7f2ea203b094b331685f1a35e52e0a45e5d000ecaab27/jiter-0.14.0-cp310-cp310-win_amd64.whl", hash = "sha256:cb8b682d10cb0cce7ff4c1af7244af7022c9b01ae16d46c357bdd0df13afb25d", size = 204558, upload-time = "2026-04-10T14:26:00.208Z" },
++    { url = "https://files.pythonhosted.org/packages/8a/1f/198ae537fccb7080a0ed655eb56abf64a92f79489dfbf79f40fa34225bcd/jiter-0.14.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:7e791e247b8044512e070bd1f3633dc08350d32776d2d6e7473309d0edf256a2", size = 316896, upload-time = "2026-04-10T14:26:01.986Z" },
++    { url = "https://files.pythonhosted.org/packages/cf/34/da67cff3fce964a36d03c3e365fb0f8726ade2a6cfd4d3c70107e216ead6/jiter-0.14.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:71527ce13fd5a0c4e40ad37331f8c547177dbb2dd0a93e5278b6a5eecf748804", size = 321085, upload-time = "2026-04-10T14:26:03.364Z" },
++    { url = "https://files.pythonhosted.org/packages/ed/36/4c72e67180d4e71a4f5dcf7886d0840e83c49ab11788172177a77570326e/jiter-0.14.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:02c4a7ab56f746014874f2c525584c0daca1dec37f66fd707ecef3b7e5c2228c", size = 347393, upload-time = "2026-04-10T14:26:05.314Z" },
++    { url = "https://files.pythonhosted.org/packages/bc/db/9b39e09ceafa9878235c0fc29e3e3f9b12a4c6a98ea3085b998cadf3accc/jiter-0.14.0-cp311-cp311-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:376e9dafff914253bb9d46cdc5f7965607fbe7feb0a491c34e35f92b2770702e", size = 372937, upload-time = "2026-04-10T14:26:06.884Z" },
++    { url = "https://files.pythonhosted.org/packages/b0/96/0dcba1d7a82c1b720774b48ef239376addbaf30df24c34742ac4a57b67b2/jiter-0.14.0-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:23ad2a7a9da1935575c820428dd8d2490ce4d23189691ce33da1fc0a58e14e1c", size = 463646, upload-time = "2026-04-10T14:26:08.345Z" },
++    { url = "https://files.pythonhosted.org/packages/f1/e3/f61b71543e746e6b8b805e7755814fc242715c16f1dba58e1cbccb8032c2/jiter-0.14.0-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:54b3ddf5786bc7732d293bba3411ac637ecfa200a39983166d1df86a59a43c9f", size = 380225, upload-time = "2026-04-10T14:26:10.161Z" },
++    { url = "https://files.pythonhosted.org/packages/ad/5e/0ddeb7096aca099114abe36c4921016e8d251e6f35f5890240b31f1f60ae/jiter-0.14.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5c001d5a646c2a50dc055dd526dad5d5245969e8234d2b1131d0451e81f3a373", size = 358682, upload-time = "2026-04-10T14:26:11.574Z" },
++    { url = "https://files.pythonhosted.org/packages/e9/d1/fe0c46cd7fda9cad8f1ff9ad217dc61f1e4280b21052ec6dfe88c1446ef2/jiter-0.14.0-cp311-cp311-manylinux_2_31_riscv64.whl", hash = "sha256:834bb5bdabca2e91592a03d373838a8d0a1b8bbde7077ae6913fd2fc51812d00", size = 359973, upload-time = "2026-04-10T14:26:13.316Z" },
++    { url = "https://files.pythonhosted.org/packages/ac/21/f5317f91729b501019184771c80d60abd89907009e7bfa6c7e348c5bdd44/jiter-0.14.0-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:4e9178be60e229b1b2b0710f61b9e24d1f4f8556985a83ff4c4f95920eea7314", size = 397568, upload-time = "2026-04-10T14:26:15.212Z" },
++    { url = "https://files.pythonhosted.org/packages/e9/05/79d8f33fb2bf168db0df5c9cd16fe440a8ada57e929d3677b22712c2568f/jiter-0.14.0-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:a7e4ccff04ec03614e62c613e976a3a5860dc9714ce8266f44328bdc8b1cab2c", size = 522535, upload-time = "2026-04-10T14:26:16.956Z" },
++    { url = "https://files.pythonhosted.org/packages/5c/00/d1e3ff3d2a465e67f08507d74bafb2dcd29eba91dc939820e39e8dea38b8/jiter-0.14.0-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:69539d936fb5d55caf6ecd33e2e884de083ff0ea28579780d56c4403094bb8d9", size = 556709, upload-time = "2026-04-10T14:26:18.5Z" },
++    { url = "https://files.pythonhosted.org/packages/60/5b/bbb2189f62ace8d95e869aa4c84c9946616f301e2d02895a6f20dcc3bba3/jiter-0.14.0-cp311-cp311-win32.whl", hash = "sha256:4927d09b3e572787cc5e0a5318601448e1ab9391bcef95677f5840c2d00eaa6d", size = 208660, upload-time = "2026-04-10T14:26:20.511Z" },
++    { url = "https://files.pythonhosted.org/packages/b8/86/c500b53dcbf08575f5963e536ebd757a1f7c568272ba5d180b212c9a87fb/jiter-0.14.0-cp311-cp311-win_amd64.whl", hash = "sha256:42d6ed359ac49eb922fdd565f209c57340aa06d589c84c8413e42a0f9ae1b842", size = 204659, upload-time = "2026-04-10T14:26:22.152Z" },
++    { url = "https://files.pythonhosted.org/packages/75/4a/a676249049d42cb29bef82233e4fe0524d414cbe3606c7a4b311193c2f77/jiter-0.14.0-cp311-cp311-win_arm64.whl", hash = "sha256:6dd689f5f4a5a33747b28686e051095beb214fe28cfda5e9fe58a295a788f593", size = 194772, upload-time = "2026-04-10T14:26:23.458Z" },
++    { url = "https://files.pythonhosted.org/packages/5a/68/7390a418f10897da93b158f2d5a8bd0bcd73a0f9ec3bb36917085bb759ef/jiter-0.14.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:2fb2ce3a7bc331256dfb14cefc34832366bb28a9aca81deaf43bbf2a5659e607", size = 316295, upload-time = "2026-04-10T14:26:24.887Z" },
++    { url = "https://files.pythonhosted.org/packages/60/a0/5854ac00ff63551c52c6c89534ec6aba4b93474e7924d64e860b1c94165b/jiter-0.14.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:5252a7ca23785cef5d02d4ece6077a1b556a410c591b379f82091c3001e14844", size = 315898, upload-time = "2026-04-10T14:26:26.601Z" },
++    { url = "https://files.pythonhosted.org/packages/41/a1/4f44832650a16b18e8391f1bf1d6ca4909bc738351826bcc198bba4357f4/jiter-0.14.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c409578cbd77c338975670ada777add4efd53379667edf0aceea730cabede6fb", size = 343730, upload-time = "2026-04-10T14:26:28.326Z" },
++    { url = "https://files.pythonhosted.org/packages/48/64/a329e9d469f86307203594b1707e11ae51c3348d03bfd514a5f997870012/jiter-0.14.0-cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:7ede4331a1899d604463369c730dbb961ffdc5312bc7f16c41c2896415b1304a", size = 370102, upload-time = "2026-04-10T14:26:30.089Z" },
++    { url = "https://files.pythonhosted.org/packages/94/c1/5e3dfc59635aa4d4c7bd20a820ac1d09b8ed851568356802cf1c08edb3cf/jiter-0.14.0-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:92cd8b6025981a041f5310430310b55b25ca593972c16407af8837d3d7d2ca01", size = 461335, upload-time = "2026-04-10T14:26:31.911Z" },
++    { url = "https://files.pythonhosted.org/packages/e3/1b/dd157009dbc058f7b00108f545ccb72a2d56461395c4fc7b9cfdccb00af4/jiter-0.14.0-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:351bf6eda4e3a7ceb876377840c702e9a3e4ecc4624dbfb2d6463c67ae52637d", size = 378536, upload-time = "2026-04-10T14:26:33.595Z" },
++    { url = "https://files.pythonhosted.org/packages/91/78/256013667b7c10b8834f8e6e54cd3e562d4c6e34227a1596addccc05e38c/jiter-0.14.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c1dcfbeb93d9ecd9ca128bbf8910120367777973fa193fb9a39c31237d8df165", size = 353859, upload-time = "2026-04-10T14:26:35.098Z" },
++    { url = "https://files.pythonhosted.org/packages/de/d9/137d65ade9093a409fe80955ce60b12bb753722c986467aeda47faf450ad/jiter-0.14.0-cp312-cp312-manylinux_2_31_riscv64.whl", hash = "sha256:ae039aaef8de3f8157ecc1fdd4d85043ac4f57538c245a0afaecb8321ec951c3", size = 357626, upload-time = "2026-04-10T14:26:36.685Z" },
++    { url = "https://files.pythonhosted.org/packages/2e/48/76750835b87029342727c1a268bea8878ab988caf81ee4e7b880900eeb5a/jiter-0.14.0-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:7d9d51eb96c82a9652933bd769fe6de66877d6eb2b2440e281f2938c51b5643e", size = 393172, upload-time = "2026-04-10T14:26:38.097Z" },
++    { url = "https://files.pythonhosted.org/packages/a6/60/456c4e81d5c8045279aefe60e9e483be08793828800a4e64add8fdde7f2a/jiter-0.14.0-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:d824ca4148b705970bf4e120924a212fdfca9859a73e42bd7889a63a4ea6bb98", size = 520300, upload-time = "2026-04-10T14:26:39.532Z" },
++    { url = "https://files.pythonhosted.org/packages/a8/9f/2020e0984c235f678dced38fe4eec3058cf528e6af36ebf969b410305941/jiter-0.14.0-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:ff3a6465b3a0f54b1a430f45c3c0ba7d61ceb45cbc3e33f9e1a7f638d690baf3", size = 553059, upload-time = "2026-04-10T14:26:40.991Z" },
++    { url = "https://files.pythonhosted.org/packages/ef/32/e2d298e1a22a4bbe6062136d1c7192db7dba003a6975e51d9a9eecabc4c2/jiter-0.14.0-cp312-cp312-win32.whl", hash = "sha256:5dec7c0a3e98d2a3f8a2e67382d0d7c3ac60c69103a4b271da889b4e8bb1e129", size = 206030, upload-time = "2026-04-10T14:26:42.517Z" },
++    { url = "https://files.pythonhosted.org/packages/36/ac/96369141b3d8a4a8e4590e983085efe1c436f35c0cda940dd76d942e3e40/jiter-0.14.0-cp312-cp312-win_amd64.whl", hash = "sha256:fc7e37b4b8bc7e80a63ad6cfa5fc11fab27dbfea4cc4ae644b1ab3f273dc348f", size = 201603, upload-time = "2026-04-10T14:26:44.328Z" },
++    { url = "https://files.pythonhosted.org/packages/01/c3/75d847f264647017d7e3052bbcc8b1e24b95fa139c320c5f5066fa7a0bdd/jiter-0.14.0-cp312-cp312-win_arm64.whl", hash = "sha256:ee4a72f12847ef29b072aee9ad5474041ab2924106bdca9fcf5d7d965853e057", size = 191525, upload-time = "2026-04-10T14:26:46Z" },
++    { url = "https://files.pythonhosted.org/packages/97/2a/09f70020898507a89279659a1afe3364d57fc1b2c89949081975d135f6f5/jiter-0.14.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:af72f204cf4d44258e5b4c1745130ac45ddab0e71a06333b01de660ab4187a94", size = 315502, upload-time = "2026-04-10T14:26:47.697Z" },
++    { url = "https://files.pythonhosted.org/packages/d6/be/080c96a45cd74f9fce5db4fd68510b88087fb37ffe2541ff73c12db92535/jiter-0.14.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4b77da71f6e819be5fbcec11a453fde5b1d0267ef6ed487e2a392fd8e14e4e3a", size = 314870, upload-time = "2026-04-10T14:26:49.149Z" },
++    { url = "https://files.pythonhosted.org/packages/7d/5e/2d0fee155826a968a832cc32438de5e2a193292c8721ca70d0b53e58245b/jiter-0.14.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:77f4ea612fe8b84b8b04e51d0e78029ecf3466348e25973f953de6e6a59aa4c1", size = 343406, upload-time = "2026-04-10T14:26:50.762Z" },
++    { url = "https://files.pythonhosted.org/packages/70/af/bf9ee0d3a4f8dc0d679fc1337f874fe60cdbf841ebbb304b374e1c9aaceb/jiter-0.14.0-cp313-cp313-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:62fe2451f8fcc0240261e6a4df18ecbcd58327857e61e625b2393ea3b468aac9", size = 369415, upload-time = "2026-04-10T14:26:52.188Z" },
++    { url = "https://files.pythonhosted.org/packages/0f/83/8e8561eadba31f4d3948a5b712fb0447ec71c3560b57a855449e7b8ddc98/jiter-0.14.0-cp313-cp313-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:6112f26f5afc75bcb475787d29da3aa92f9d09c7858f632f4be6ffe607be82e9", size = 461456, upload-time = "2026-04-10T14:26:53.611Z" },
++    { url = "https://files.pythonhosted.org/packages/f6/c9/c5299e826a5fe6108d172b344033f61c69b1bb979dd8d9ddd4278a160971/jiter-0.14.0-cp313-cp313-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:215a6cb8fb7dc702aa35d475cc00ddc7f970e5c0b1417fb4b4ac5d82fa2a29db", size = 378488, upload-time = "2026-04-10T14:26:55.211Z" },
++    { url = "https://files.pythonhosted.org/packages/5d/37/c16d9d15c0a471b8644b1abe3c82668092a707d9bedcf076f24ff2e380cd/jiter-0.14.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fc4ab96a30fb3cb2c7e0cd33f7616c8860da5f5674438988a54ac717caccdbaa", size = 353242, upload-time = "2026-04-10T14:26:56.705Z" },
++    { url = "https://files.pythonhosted.org/packages/58/ea/8050cb0dc654e728e1bfacbc0c640772f2181af5dedd13ae70145743a439/jiter-0.14.0-cp313-cp313-manylinux_2_31_riscv64.whl", hash = "sha256:3a99c1387b1f2928f799a9de899193484d66206a50e98233b6b088a7f0c1edb2", size = 356823, upload-time = "2026-04-10T14:26:58.281Z" },
++    { url = "https://files.pythonhosted.org/packages/b0/3b/cf71506d270e5f84d97326bf220e47aed9b95e9a4a060758fb07772170ab/jiter-0.14.0-cp313-cp313-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:ab18d11074485438695f8d34a1b6da61db9754248f96d51341956607a8f39985", size = 392564, upload-time = "2026-04-10T14:27:00.018Z" },
++    { url = "https://files.pythonhosted.org/packages/b0/cc/8c6c74a3efb5bd671bfd14f51e8a73375464ca914b1551bc3b40e26ac2c9/jiter-0.14.0-cp313-cp313-musllinux_1_1_aarch64.whl", hash = "sha256:801028dcfc26ac0895e4964cbc0fd62c73be9fd4a7d7b1aaf6e5790033a719b7", size = 520322, upload-time = "2026-04-10T14:27:01.664Z" },
++    { url = "https://files.pythonhosted.org/packages/41/24/68d7b883ec959884ddf00d019b2e0e82ba81b167e1253684fa90519ce33c/jiter-0.14.0-cp313-cp313-musllinux_1_1_x86_64.whl", hash = "sha256:ad425b087aafb4a1c7e1e98a279200743b9aaf30c3e0ba723aec93f061bd9bc8", size = 552619, upload-time = "2026-04-10T14:27:03.316Z" },
++    { url = "https://files.pythonhosted.org/packages/b6/89/b1a0985223bbf3150ff9e8f46f98fc9360c1de94f48abe271bbe1b465682/jiter-0.14.0-cp313-cp313-win32.whl", hash = "sha256:882bcb9b334318e233950b8be366fe5f92c86b66a7e449e76975dfd6d776a01f", size = 205699, upload-time = "2026-04-10T14:27:04.662Z" },
++    { url = "https://files.pythonhosted.org/packages/4c/19/3f339a5a7f14a11730e67f6be34f9d5105751d547b615ef593fa122a5ded/jiter-0.14.0-cp313-cp313-win_amd64.whl", hash = "sha256:9b8c571a5dba09b98bd3462b5a53f27209a5cbbe85670391692ede71974e979f", size = 201323, upload-time = "2026-04-10T14:27:06.139Z" },
++    { url = "https://files.pythonhosted.org/packages/50/56/752dd89c84be0e022a8ea3720bcfa0a8431db79a962578544812ce061739/jiter-0.14.0-cp313-cp313-win_arm64.whl", hash = "sha256:34f19dcc35cb1abe7c369b3756babf8c7f04595c0807a848df8f26ef8298ef92", size = 191099, upload-time = "2026-04-10T14:27:07.564Z" },
++    { url = "https://files.pythonhosted.org/packages/91/28/292916f354f25a1fe8cf2c918d1415c699a4a659ae00be0430e1c5d9ffea/jiter-0.14.0-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:e89bcd7d426a75bb4952c696b267075790d854a07aad4c9894551a82c5b574ab", size = 320880, upload-time = "2026-04-10T14:27:09.326Z" },
++    { url = "https://files.pythonhosted.org/packages/ad/c7/b002a7d8b8957ac3d469bd59c18ef4b1595a5216ae0de639a287b9816023/jiter-0.14.0-cp313-cp313t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7b25beaa0d4447ea8c7ae0c18c688905d34840d7d0b937f2f7bdd52162c98a40", size = 346563, upload-time = "2026-04-10T14:27:11.287Z" },
++    { url = "https://files.pythonhosted.org/packages/f9/3b/f8d07580d8706021d255a6356b8fab13ee4c869412995550ce6ed4ddf97d/jiter-0.14.0-cp313-cp313t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:651a8758dd413c51e3b7f6557cdc6921faf70b14106f45f969f091f5cda990ea", size = 357928, upload-time = "2026-04-10T14:27:12.729Z" },
++    { url = "https://files.pythonhosted.org/packages/47/5b/ac1a974da29e35507230383110ffec59998b290a8732585d04e19a9eb5ba/jiter-0.14.0-cp313-cp313t-win_amd64.whl", hash = "sha256:e1a7eead856a5038a8d291f1447176ab0b525c77a279a058121b5fccee257f6f", size = 203519, upload-time = "2026-04-10T14:27:14.125Z" },
++    { url = "https://files.pythonhosted.org/packages/96/6d/9fc8433d667d2454271378a79747d8c76c10b51b482b454e6190e511f244/jiter-0.14.0-cp313-cp313t-win_arm64.whl", hash = "sha256:2e692633a12cda97e352fdcd1c4acc971b1c28707e1e33aeef782b0cbf051975", size = 190113, upload-time = "2026-04-10T14:27:16.638Z" },
++    { url = "https://files.pythonhosted.org/packages/4f/1e/354ed92461b165bd581f9ef5150971a572c873ec3b68a916d5aa91da3cc2/jiter-0.14.0-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:6f396837fc7577871ca8c12edaf239ed9ccef3bbe39904ae9b8b63ce0a48b140", size = 315277, upload-time = "2026-04-10T14:27:18.109Z" },
++    { url = "https://files.pythonhosted.org/packages/a6/95/8c7c7028aa8636ac21b7a55faef3e34215e6ed0cbf5ae58258427f621aa3/jiter-0.14.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:a4d50ea3d8ba4176f79754333bd35f1bbcd28e91adc13eb9b7ca91bc52a6cef9", size = 315923, upload-time = "2026-04-10T14:27:19.603Z" },
++    { url = "https://files.pythonhosted.org/packages/47/40/e2a852a44c4a089f2681a16611b7ce113224a80fd8504c46d78491b47220/jiter-0.14.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ce17f8a050447d1b4153bda4fb7d26e6a9e74eb4f4a41913f30934c5075bf615", size = 344943, upload-time = "2026-04-10T14:27:21.262Z" },
++    { url = "https://files.pythonhosted.org/packages/fc/1f/670f92adee1e9895eac41e8a4d623b6da68c4d46249d8b556b60b63f949e/jiter-0.14.0-cp314-cp314-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:f4f1c4b125e1652aefbc2e2c1617b60a160ab789d180e3d423c41439e5f32850", size = 369725, upload-time = "2026-04-10T14:27:22.766Z" },
++    { url = "https://files.pythonhosted.org/packages/01/2f/541c9ba567d05de1c4874a0f8f8c5e3fd78e2b874266623da9a775cf46e0/jiter-0.14.0-cp314-cp314-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:be808176a6a3a14321d18c603f2d40741858a7c4fc982f83232842689fe86dd9", size = 461210, upload-time = "2026-04-10T14:27:24.315Z" },
++    { url = "https://files.pythonhosted.org/packages/ce/a9/c31cbec09627e0d5de7aeaec7690dba03e090caa808fefd8133137cf45bc/jiter-0.14.0-cp314-cp314-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:26679d58ba816f88c3849306dd58cb863a90a1cf352cdd4ef67e30ccf8a77994", size = 380002, upload-time = "2026-04-10T14:27:26.155Z" },
++    { url = "https://files.pythonhosted.org/packages/50/02/3c05c1666c41904a2f607475a73e7a4763d1cbde2d18229c4f85b22dc253/jiter-0.14.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:80381f5a19af8fa9aef743f080e34f6b25ebd89656475f8cf0470ec6157052aa", size = 354678, upload-time = "2026-04-10T14:27:27.701Z" },
++    { url = "https://files.pythonhosted.org/packages/7d/97/e15b33545c2b13518f560d695f974b9891b311641bdcf178d63177e8801e/jiter-0.14.0-cp314-cp314-manylinux_2_31_riscv64.whl", hash = "sha256:004df5fdb8ecbd6d99f3227df18ba1a259254c4359736a2e6f036c944e02d7c5", size = 358920, upload-time = "2026-04-10T14:27:29.256Z" },
++    { url = "https://files.pythonhosted.org/packages/ad/d2/8b1461def6b96ba44530df20d07ef7a1c7da22f3f9bf1727e2d611077bf1/jiter-0.14.0-cp314-cp314-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:cff5708f7ed0fa098f2b53446c6fa74c48469118e5cd7497b4f1cd569ab06928", size = 394512, upload-time = "2026-04-10T14:27:31.344Z" },
++    { url = "https://files.pythonhosted.org/packages/e3/88/837566dd6ed6e452e8d3205355afd484ce44b2533edfa4ed73a298ea893e/jiter-0.14.0-cp314-cp314-musllinux_1_1_aarch64.whl", hash = "sha256:2492e5f06c36a976d25c7cc347a60e26d5470178d44cde1b9b75e60b4e519f28", size = 521120, upload-time = "2026-04-10T14:27:33.299Z" },
++    { url = "https://files.pythonhosted.org/packages/89/6b/b00b45c4d1b4c031777fe161d620b755b5b02cdade1e316dcb46e4471d63/jiter-0.14.0-cp314-cp314-musllinux_1_1_x86_64.whl", hash = "sha256:7609cfbe3a03d37bfdbf5052012d5a879e72b83168a363deae7b3a26564d57de", size = 553668, upload-time = "2026-04-10T14:27:34.868Z" },
++    { url = "https://files.pythonhosted.org/packages/ad/d8/6fe5b42011d19397433d345716eac16728ac241862a2aac9c91923c7509a/jiter-0.14.0-cp314-cp314-win32.whl", hash = "sha256:7282342d32e357543565286b6450378c3cd402eea333fc1ebe146f1fabb306fc", size = 207001, upload-time = "2026-04-10T14:27:36.455Z" },
++    { url = "https://files.pythonhosted.org/packages/e5/43/5c2e08da1efad5e410f0eaaabeadd954812612c33fbbd8fd5328b489139d/jiter-0.14.0-cp314-cp314-win_amd64.whl", hash = "sha256:bd77945f38866a448e73b0b7637366afa814d4617790ecd88a18ca74377e6c02", size = 202187, upload-time = "2026-04-10T14:27:38Z" },
++    { url = "https://files.pythonhosted.org/packages/aa/1f/6e39ac0b4cdfa23e606af5b245df5f9adaa76f35e0c5096790da430ca506/jiter-0.14.0-cp314-cp314-win_arm64.whl", hash = "sha256:f2d4c61da0821ee42e0cdf5489da60a6d074306313a377c2b35af464955a3611", size = 192257, upload-time = "2026-04-10T14:27:39.504Z" },
++    { url = "https://files.pythonhosted.org/packages/05/57/7dbc0ffbbb5176a27e3518716608aa464aee2e2887dc938f0b900a120449/jiter-0.14.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:1bf7ff85517dd2f20a5750081d2b75083c1b269cf75afc7511bdf1f9548beb3b", size = 323441, upload-time = "2026-04-10T14:27:41.039Z" },
++    { url = "https://files.pythonhosted.org/packages/83/6e/7b3314398d8983f06b557aa21b670511ec72d3b79a68ee5e4d9bff972286/jiter-0.14.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c8ef8791c3e78d6c6b157c6d360fbb5c715bebb8113bc6a9303c5caff012754a", size = 348109, upload-time = "2026-04-10T14:27:42.552Z" },
++    { url = "https://files.pythonhosted.org/packages/ae/4f/8dc674bcd7db6dba566de73c08c763c337058baff1dbeb34567045b27cdc/jiter-0.14.0-cp314-cp314t-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:e74663b8b10da1fe0f4e4703fd7980d24ad17174b6bb35d8498d6e3ebce2ae6a", size = 368328, upload-time = "2026-04-10T14:27:44.574Z" },
++    { url = "https://files.pythonhosted.org/packages/3b/5f/188e09a1f20906f98bbdec44ed820e19f4e8eb8aff88b9d1a5a497587ff3/jiter-0.14.0-cp314-cp314t-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:1aca29ba52913f78362ec9c2da62f22cdc4c3083313403f90c15460979b84d9b", size = 463301, upload-time = "2026-04-10T14:27:46.717Z" },
++    { url = "https://files.pythonhosted.org/packages/ac/f0/19046ef965ed8f349e8554775bb12ff4352f443fbe12b95d31f575891256/jiter-0.14.0-cp314-cp314t-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:8b39b7d87a952b79949af5fef44d2544e58c21a28da7f1bae3ef166455c61746", size = 378891, upload-time = "2026-04-10T14:27:48.32Z" },
++    { url = "https://files.pythonhosted.org/packages/c4/c3/da43bd8431ee175695777ee78cf0e93eacbb47393ff493f18c45231b427d/jiter-0.14.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:78d918a68b26e9fab068c2b5453577ef04943ab2807b9a6275df2a812599a310", size = 360749, upload-time = "2026-04-10T14:27:49.88Z" },
++    { url = "https://files.pythonhosted.org/packages/72/26/e054771be889707c6161dbdec9c23d33a9ec70945395d70f07cfea1e9a6f/jiter-0.14.0-cp314-cp314t-manylinux_2_31_riscv64.whl", hash = "sha256:b08997c35aee1201c1a5361466a8fb9162d03ae7bf6568df70b6c859f1e654a4", size = 358526, upload-time = "2026-04-10T14:27:51.504Z" },
++    { url = "https://files.pythonhosted.org/packages/c3/0f/7bea65ea2a6d91f2bf989ff11a18136644392bf2b0497a1fa50934c30a9c/jiter-0.14.0-cp314-cp314t-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:260bf7ca20704d58d41f669e5e9fe7fe2fa72901a6b324e79056f5d52e9c9be2", size = 393926, upload-time = "2026-04-10T14:27:53.368Z" },
++    { url = "https://files.pythonhosted.org/packages/3c/a1/b1ff7d70deef61ac0b7c6c2f12d2ace950cdeecb4fdc94500a0926802857/jiter-0.14.0-cp314-cp314t-musllinux_1_1_aarch64.whl", hash = "sha256:37826e3df29e60f30a382f9294348d0238ef127f4b5d7f5f8da78b5b9e050560", size = 521052, upload-time = "2026-04-10T14:27:55.058Z" },
++    { url = "https://files.pythonhosted.org/packages/0b/7b/3b0649983cbaf15eda26a414b5b1982e910c67bd6f7b1b490f3cfc76896a/jiter-0.14.0-cp314-cp314t-musllinux_1_1_x86_64.whl", hash = "sha256:645be49c46f2900937ba0eaf871ad5183c96858c0af74b6becc7f4e367e36e06", size = 553716, upload-time = "2026-04-10T14:27:57.269Z" },
++    { url = "https://files.pythonhosted.org/packages/97/f8/33d78c83bd93ae0c0af05293a6660f88a1977caef39a6d72a84afab94ce0/jiter-0.14.0-cp314-cp314t-win32.whl", hash = "sha256:2f7877ed45118de283786178eceaf877110abacd04fde31efff3940ae9672674", size = 207957, upload-time = "2026-04-10T14:27:59.285Z" },
++    { url = "https://files.pythonhosted.org/packages/d6/ac/2b760516c03e2227826d1f7025d89bf6bf6357a28fe75c2a2800873c50bf/jiter-0.14.0-cp314-cp314t-win_amd64.whl", hash = "sha256:14c0cb10337c49f5eafe8e7364daca5e29a020ea03580b8f8e6c597fed4e1588", size = 204690, upload-time = "2026-04-10T14:28:00.962Z" },
++    { url = "https://files.pythonhosted.org/packages/dc/2e/a44c20c58aeed0355f2d326969a181696aeb551a25195f47563908a815be/jiter-0.14.0-cp314-cp314t-win_arm64.whl", hash = "sha256:5419d4aa2024961da9fe12a9cfe7484996735dca99e8e090b5c88595ef1951ff", size = 191338, upload-time = "2026-04-10T14:28:02.853Z" },
++    { url = "https://files.pythonhosted.org/packages/d0/a0/704f5027508138f22cda277779bc6b9cace77af1a87ef93c73daf61b5b12/jiter-0.14.0-cp39-cp39-macosx_10_12_x86_64.whl", hash = "sha256:85581c4c3e4060fe3424cdfd7f3aa610f2dc5e9dde8b6863358eb68560018472", size = 319926, upload-time = "2026-04-10T14:28:04.687Z" },
++    { url = "https://files.pythonhosted.org/packages/54/f6/ee3ddf36a0989959760417fbe662e4f7bc6451547a54262ef17c2882875d/jiter-0.14.0-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:c6279c63849444a4fe9b9abf82e5df0fc7d13dea07f53f084b362485bd1f2bbe", size = 315333, upload-time = "2026-04-10T14:28:06.248Z" },
++    { url = "https://files.pythonhosted.org/packages/63/c1/ba033578d36c99455f5fbd8bbce891c29e2348dfa25811875a636975d82f/jiter-0.14.0-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:59940ef6ac9f8b34c800838416f105f0503485fa8d71cae99f71d44a7285b01e", size = 349996, upload-time = "2026-04-10T14:28:07.807Z" },
++    { url = "https://files.pythonhosted.org/packages/4b/fd/b6c8b38d1c53bd115abdd3143038f6f29fa4eaad915205ca959e5a16cc08/jiter-0.14.0-cp39-cp39-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:55bee2b6a2657434984d9144c20cf27ba3b6acd495539539953e447778515efd", size = 373255, upload-time = "2026-04-10T14:28:09.597Z" },
++    { url = "https://files.pythonhosted.org/packages/e4/48/153044aee4ebc7e4c92be697dd96da8e8eb7f920e1e90e4dda0c5aa7e400/jiter-0.14.0-cp39-cp39-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:2d45fc7ea86a46bd9b5bceb9e8d43e5d10a392378713fb32cf1ce851b4b0d1f8", size = 466311, upload-time = "2026-04-10T14:28:11.563Z" },
++    { url = "https://files.pythonhosted.org/packages/c0/7d/2d7f2d29543f8d2960396cc44068228ef9badaac35998b255277b439d3b4/jiter-0.14.0-cp39-cp39-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:758d19dae7ea4c4da3cbc463dc323d1660e7353144ef17509ff43beab6da5a47", size = 382612, upload-time = "2026-04-10T14:28:13.155Z" },
++    { url = "https://files.pythonhosted.org/packages/fa/8c/0522d2dac614f141111d80fb9ca1363251dcef796b21523d4a9f78684f88/jiter-0.14.0-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:32959d7285d1d0deb5a8c913349e476ad9271b384f3e54cca1931c4075f54c6e", size = 361841, upload-time = "2026-04-10T14:28:14.736Z" },
++    { url = "https://files.pythonhosted.org/packages/e8/48/53b5627bf5027fd9d49a35c5921e3c220140b51ef68814bfc93750c562b1/jiter-0.14.0-cp39-cp39-manylinux_2_31_riscv64.whl", hash = "sha256:78a4c677fe5689e0e129b39f5affe9210a500b6620ebb0386ebccf5922bee9a6", size = 362913, upload-time = "2026-04-10T14:28:16.583Z" },
++    { url = "https://files.pythonhosted.org/packages/7e/b5/5dde259eec978b54be123128311ee0e9eb4cc095019d06ad45401913567f/jiter-0.14.0-cp39-cp39-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:6ae66782ecffb1a266e1a07f5abbfc3832afdd260fc9b478982c3f8e01eba5fa", size = 399862, upload-time = "2026-04-10T14:28:18.779Z" },
++    { url = "https://files.pythonhosted.org/packages/b6/0a/ef4bce553be8d9e2bbbdbdd3c0337c54773c8a9057c969242afa770d24d3/jiter-0.14.0-cp39-cp39-musllinux_1_1_aarch64.whl", hash = "sha256:155dab67beac8d66cec9479c93ee2cbe7bfbc67509e5c2860e02ec2d9b0ecca1", size = 524733, upload-time = "2026-04-10T14:28:20.851Z" },
++    { url = "https://files.pythonhosted.org/packages/4a/0b/e2416d657d1a9a2503f3edcb493cec5b770b8cb417ccab7ed013b56242c8/jiter-0.14.0-cp39-cp39-musllinux_1_1_x86_64.whl", hash = "sha256:f16b76d7d6aadbbaf7f79a76ff3a51dae14b7ebaaf9c1ba61607784ef51c537c", size = 558776, upload-time = "2026-04-10T14:28:22.85Z" },
++    { url = "https://files.pythonhosted.org/packages/b8/d0/aaed54dfa1c0375df395b2fc6cf7cfb86d480c1e38b821006207774c04de/jiter-0.14.0-cp39-cp39-win32.whl", hash = "sha256:0fbad7aa06f87e8215d660fc6f05a9b07b58751a29967bbd9c81ff22d21dbe8c", size = 211145, upload-time = "2026-04-10T14:28:24.654Z" },
++    { url = "https://files.pythonhosted.org/packages/0b/19/1a7be527189cdd61694cd98b83fd382e614e52053bc992728d1cda55022e/jiter-0.14.0-cp39-cp39-win_amd64.whl", hash = "sha256:e1765c3ef3ea31fe6e282376a16def1a96f5f11a0235055696c18d9d23ff30cb", size = 206779, upload-time = "2026-04-10T14:28:26.31Z" },
++    { url = "https://files.pythonhosted.org/packages/32/a1/ef34ca2cab2962598591636a1804b93645821201cc0095d4a93a9a329c9d/jiter-0.14.0-graalpy311-graalpy242_311_native-macosx_10_12_x86_64.whl", hash = "sha256:a25ffa2dbbdf8721855612f6dca15c108224b12d0c4024d0ac3d7902132b4211", size = 311366, upload-time = "2026-04-10T14:28:27.943Z" },
++    { url = "https://files.pythonhosted.org/packages/60/bb/520576a532a6b8a6f42747afed289c8448c879a34d7802fe2c832d4fd38f/jiter-0.14.0-graalpy311-graalpy242_311_native-macosx_11_0_arm64.whl", hash = "sha256:0ac9cbaa86c10996b92bd12c91659b60f939f8e28fcfa6bc11a0e90a774ce95b", size = 309873, upload-time = "2026-04-10T14:28:29.688Z" },
++    { url = "https://files.pythonhosted.org/packages/b2/7c/c16db114ea1f2f532f198aa8dc39585026af45af362c69a0492f31bc4821/jiter-0.14.0-graalpy311-graalpy242_311_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:844e73b6c56b505e9e169234ea3bdea2ea43f769f847f47ac559ba1d2361ebea", size = 344816, upload-time = "2026-04-10T14:28:31.348Z" },
++    { url = "https://files.pythonhosted.org/packages/99/8f/15e7741ff19e9bcd4d753f7ff22f988fd54592f134ca13701c13ea8c20e0/jiter-0.14.0-graalpy311-graalpy242_311_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e52c076f187405fc21523c746c04399c9af8ece566077ed147b2126f2bcba577", size = 351445, upload-time = "2026-04-10T14:28:33.093Z" },
++    { url = "https://files.pythonhosted.org/packages/21/42/9042c3f3019de4adcb8c16591c325ec7255beea9fcd33a42a43f3b0b1000/jiter-0.14.0-graalpy312-graalpy250_312_native-macosx_10_12_x86_64.whl", hash = "sha256:fbd9e482663ca9d005d051330e4d2d8150bb208a209409c10f7e7dfdf7c49da9", size = 308810, upload-time = "2026-04-10T14:28:34.673Z" },
++    { url = "https://files.pythonhosted.org/packages/60/cf/a7e19b308bd86bb04776803b1f01a5f9a287a4c55205f4708827ee487fbf/jiter-0.14.0-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:33a20d838b91ef376b3a56896d5b04e725c7df5bc4864cc6569cf046a8d73b6d", size = 308443, upload-time = "2026-04-10T14:28:36.658Z" },
++    { url = "https://files.pythonhosted.org/packages/ca/44/e26ede3f0caeff93f222559cb0cc4ca68579f07d009d7b6010c5b586f9b1/jiter-0.14.0-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:432c4db5255d86a259efde91e55cb4c8d18c0521d844c9e2e7efcce3899fb016", size = 343039, upload-time = "2026-04-10T14:28:38.356Z" },
++    { url = "https://files.pythonhosted.org/packages/da/e9/1f9ada30cef7b05e74bb06f52127e7a724976c225f46adb65c37b1dadfb6/jiter-0.14.0-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:67f00d94b281174144d6532a04b66a12cb866cbdc47c3af3bfe2973677f9861a", size = 349613, upload-time = "2026-04-10T14:28:40.066Z" },
++]
++
+ [[package]]
+ name = "librt"
+ version = "0.9.0"
+@@ -1458,26 +1600,18 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+ ]
+ 
+-[[package]]
+-name = "paho-mqtt"
+-version = "2.1.0"
+-source = { registry = "https://pypi.org/simple" }
+-sdist = { url = "https://files.pythonhosted.org/packages/39/15/0a6214e76d4d32e7f663b109cf71fb22561c2be0f701d67f93950cd40542/paho_mqtt-2.1.0.tar.gz", hash = "sha256:12d6e7511d4137555a3f6ea167ae846af2c7357b10bc6fa4f7c3968fc1723834", size = 148848, upload-time = "2024-04-29T19:52:55.591Z" }
+-wheels = [
+-    { url = "https://files.pythonhosted.org/packages/c4/cb/00451c3cf31790287768bb12c6bec834f5d292eaf3022afc88e14b8afc94/paho_mqtt-2.1.0-py3-none-any.whl", hash = "sha256:6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee", size = 67219, upload-time = "2024-04-29T19:52:48.345Z" },
+-]
+-
+ [[package]]
+ name = "paia-supernote"
+ version = "0.1.0"
+ source = { editable = "." }
+ dependencies = [
+-    { name = "asyncio-mqtt" },
++    { name = "anthropic" },
+     { name = "httpx" },
+     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+     { name = "pillow", version = "12.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+     { name = "playwright" },
+     { name = "pydantic" },
++    { name = "structlog" },
+     { name = "supernotelib" },
+     { name = "watchdog" },
+ ]
+@@ -1500,7 +1634,7 @@ dev = [
+ 
+ [package.metadata]
+ requires-dist = [
+-    { name = "asyncio-mqtt", specifier = ">=0.13.0" },
++    { name = "anthropic", specifier = ">=0.25.0" },
+     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+     { name = "httpx", specifier = ">=0.25.0" },
+     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
+@@ -1512,6 +1646,7 @@ requires-dist = [
+     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
++    { name = "structlog", specifier = ">=23.0.0" },
+     { name = "supernotelib", specifier = ">=0.3.0" },
+     { name = "watchdog", specifier = ">=3.0.0" },
+ ]
+@@ -2235,6 +2370,27 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/58/ed/dea90a65b7d9e69888890fb14c90d7f51bf0c1e82ad800aeb0160e4bacfd/ruff-0.15.10-py3-none-win_arm64.whl", hash = "sha256:601d1610a9e1f1c2165a4f561eeaa2e2ea1e97f3287c5aa258d3dab8b57c6188", size = 11035607, upload-time = "2026-04-09T14:05:47.593Z" },
+ ]
+ 
++[[package]]
++name = "sniffio"
++version = "1.3.1"
++source = { registry = "https://pypi.org/simple" }
++sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
++]
++
++[[package]]
++name = "structlog"
++version = "25.5.0"
++source = { registry = "https://pypi.org/simple" }
++dependencies = [
++    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
++]
++sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
++]
++
+ [[package]]
+ name = "supernotelib"
+ version = "0.7.0"

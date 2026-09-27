@@ -1,0 +1,48 @@
+id: 0ea310ef4a591fbaed0b64ca3c2bcb2fa396d643e69e22697aa6fed006e63ba3
+name: code-writing
+description: Writes production-quality code.
+category: translated
+content: !name code-writing
+performance:
+  task_count: 8
+  avg_score: 0.41000000000000003
+  evaluations:
+  - score: 0.12
+    task_id: planforge-root-paia
+    timestamp: 2026-04-14T19:05:20.399323+00:00
+    context_id: 52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925
+  - score: 0.12
+    task_id: planforge-root-paia
+    timestamp: 2026-04-14T19:05:20.452927+00:00
+    context_id: experiment:novel:f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.28
+    task_id: planforge-root-paia
+    timestamp: 2026-04-14T19:07:34.600514+00:00
+    context_id: 52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925
+  - score: 0.28
+    task_id: planforge-root-paia
+    timestamp: 2026-04-14T19:07:34.733344+00:00
+    context_id: experiment:novel:f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.5
+    task_id: repair-task-curator-pages-19-22
+    timestamp: 2026-04-15T21:20:15.468630+00:00
+    context_id: 52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925
+  - score: 0.5
+    task_id: repair-task-curator-pages-19-22
+    timestamp: 2026-04-15T21:20:15.591799+00:00
+    context_id: experiment:novel:f51439356729d112a6c404803d88015d5b44832c6c584c62b96732b63c2b0c7e
+  - score: 0.7
+    task_id: folder-support-resolve
+    timestamp: 2026-07-21T23:20:10.738995+00:00
+    context_id: 52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925
+  - score: 0.78
+    task_id: folder-support-resolve
+    timestamp: 2026-07-24T20:59:51.191093+00:00
+    context_id: 52335de1552416c62475caf94552e3090340c762afb21ae82894c67ff6cd1925
+lineage:
+  generation: 0
+  created_by: human
+  created_at: 2026-04-14T18:52:50.213131Z
+access_control:
+  owner: local
+  policy: open

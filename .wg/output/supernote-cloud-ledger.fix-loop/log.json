@@ -1,0 +1,106 @@
+[
+  {
+    "timestamp": "2026-07-19T17:29:08.592593+00:00",
+    "user": "braydon",
+    "message": "Task paused"
+  },
+  {
+    "timestamp": "2026-07-19T17:30:04.254935+00:00",
+    "user": "braydon",
+    "message": "Task published"
+  },
+  {
+    "timestamp": "2026-07-19T19:17:34.123835+00:00",
+    "actor": "agent-1313",
+    "user": "braydon",
+    "message": "Spawned by coordinator --executor native --model zai/glm-5.2"
+  },
+  {
+    "timestamp": "2026-07-19T19:17:34.123838+00:00",
+    "actor": "spawn",
+    "message": "Pre-flight model validation: Model 'zai/glm-5.2' not found in OpenRouter model list.\n  Did you mean one of:\n    - z-ai/glm-5.1\n    - z-ai/glm-5\n    - z-ai/glm-4.7\n  Hint: run `wg models search glm-5.2` to find valid alternatives, or `wg models list` to see the local registry."
+  },
+  {
+    "timestamp": "2026-07-19T19:17:34.284958+00:00",
+    "actor": "agent-1313",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-07-19T19:17:47.407272+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry from failed (attempt #2) — reason: Dispatcher preflight rejected unavailable OpenRouter ZAI model; manual Pi fallback"
+  },
+  {
+    "timestamp": "2026-07-19T19:17:47.498552+00:00",
+    "actor": "avery",
+    "user": "braydon",
+    "message": "Task claimed by @avery"
+  },
+  {
+    "timestamp": "2026-07-19T19:17:47.966067+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T19:17:48.173314+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T19:23:50.463985+00:00",
+    "actor": "reconcile",
+    "user": "braydon",
+    "message": "Reconciliation: task recovered from orphaned state (was InProgress, agent: avery)"
+  },
+  {
+    "timestamp": "2026-07-19T19:23:50.616107+00:00",
+    "actor": "spawn",
+    "message": "Spawn failed (attempt 1/5): Executor 'pi' command '.workgraph/executors/pi-run.sh' is not an executable file at '.workgraph/executors/pi-run.sh'. Check .wg/executors/pi.toml, install the binary, or set an absolute command path.. exec_mode=default, executor=pi"
+  },
+  {
+    "timestamp": "2026-07-19T19:24:50.810332+00:00",
+    "actor": "spawn",
+    "message": "Spawn failed (attempt 2/5): Executor 'pi' command '.workgraph/executors/pi-run.sh' is not an executable file at '.workgraph/executors/pi-run.sh'. Check .wg/executors/pi.toml, install the binary, or set an absolute command path.. exec_mode=default, executor=pi"
+  },
+  {
+    "timestamp": "2026-07-19T19:25:50.582518+00:00",
+    "actor": "spawn",
+    "message": "Spawn failed (attempt 3/5): Executor 'pi' command '.workgraph/executors/pi-run.sh' is not an executable file at '.workgraph/executors/pi-run.sh'. Check .wg/executors/pi.toml, install the binary, or set an absolute command path.. exec_mode=default, executor=pi"
+  },
+  {
+    "timestamp": "2026-07-19T19:26:50.800683+00:00",
+    "actor": "spawn",
+    "message": "Spawn failed (attempt 4/5): Executor 'pi' command '.workgraph/executors/pi-run.sh' is not an executable file at '.workgraph/executors/pi-run.sh'. Check .wg/executors/pi.toml, install the binary, or set an absolute command path.. exec_mode=default, executor=pi"
+  },
+  {
+    "timestamp": "2026-07-19T19:27:50.611885+00:00",
+    "actor": "spawn",
+    "message": "Spawn failed (attempt 5/5): Executor 'pi' command '.workgraph/executors/pi-run.sh' is not an executable file at '.workgraph/executors/pi-run.sh'. Check .wg/executors/pi.toml, install the binary, or set an absolute command path.. exec_mode=default, executor=pi"
+  },
+  {
+    "timestamp": "2026-07-19T19:27:50.611885+00:00",
+    "actor": "spawn-circuit-breaker",
+    "message": "Circuit breaker tripped: spawn failed 5 times. Last error: Executor 'pi' command '.workgraph/executors/pi-run.sh' is not an executable file at '.workgraph/executors/pi-run.sh'. Check .wg/executors/pi.toml, install the binary, or set an absolute command path.. exec_mode=default, executor=pi. Task marked incomplete for evaluator review."
+  },
+  {
+    "timestamp": "2026-07-19T19:28:07.437363+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (hardening_in_core, scope_drift) | next: Revert out-of-scope file changes or expand touch globs"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:07.654995+00:00",
+    "user": "braydon",
+    "message": "Specdrift: yellow (spec_not_updated) | next: Update spec/docs for this task (or adjust specdrift spec globs)"
+  },
+  {
+    "timestamp": "2026-07-19T19:28:07.750192+00:00",
+    "user": "braydon",
+    "message": "Repaired adversarial N1 by normalizing .note suffixes in allowlist resolution and the public membership helper. Independently verified 47 focused tests and 11 integrations pass; scoped ruff passes. Fix-loop artifact records the repair and accepted TOCTOU residual. Post-task drift exit=3."
+  },
+  {
+    "timestamp": "2026-07-19T19:28:07.822843+00:00",
+    "user": "braydon",
+    "message": "Task pending eval (agent reported done; awaiting `.evaluate-*` to score)"
+  }
+]

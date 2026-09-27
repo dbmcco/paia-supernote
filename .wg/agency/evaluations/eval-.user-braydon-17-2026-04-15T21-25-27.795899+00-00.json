@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-17-2026-04-15T21-25-27.795899+00-00",
+  "task_id": ".user-braydon-17",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.25,
+  "dimensions": {
+    "efficiency": 0.3,
+    "coordination_overhead": 0.2,
+    "style_adherence": 0.4,
+    "intent_fidelity": 0.35,
+    "completeness": 0.2,
+    "correctness": 0.3,
+    "blocking_impact": 0.3,
+    "downstream_usability": 0.1
+  },
+  "notes": "Critical failures across verification and deliverables. FLIP score of 0.35 (below 0.70 threshold) is a strong signal of incomplete/incorrect work. No artifacts were recorded despite task completion claim. Agent reports starting the user board service and connecting to paia-events, but no tangible deliverable exists. Coredrift warning ('hardening_in_core') indicates guardrails were cut without justification. Task had no acceptance criteria specified, but agent did not flag this underspecification or request clarification. The work is unverifiable—claimed success cannot be validated. Fast execution (1.5 min) is immaterial when no output exists. For a task objective of creating a 'persistent conversation surface,' the absence of artifacts and verification failure represents fundamental non-completion. Agent left task in ambiguous state: marked done but with no clear deliverable or path to use. Immediate improvement needed: clarify acceptance criteria, verify work before marking done, and preserve artifacts for consumption.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T21:25:27.795899+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-208-2026-04-16T11-18-58.537015+00-00",
+  "task_id": ".user-braydon-208",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.41,
+  "dimensions": {
+    "semantic_match": 0.6,
+    "requirement_coverage": 0.25,
+    "specificity_match": 0.4,
+    "hallucination_rate": 0.85
+  },
+  "notes": "The actual task is a lean objective: 'User board for braydon — persistent conversation surface' with specific constraints (max_files=25, max_loc=800, pit_stop_after=3, auto_followups=true). The inferred reconstruction significantly overextends scope, adding verification, testing, CLI validation, and gap identification that were not in the original. The inferred version treats this as a review/validation task rather than a creation/maintenance task. Only the core requirement ('user board for braydon') aligns; nearly all additional detail about testing, verification, and improvement appears fabricated rather than implied by the actual task description.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Review and verify the user board implementation in the paia-supernote project to ensure it is complete and functional. Check that all tests are passing, CLI entry point is properly configured, and interactive/non-interactive environments are handled gracefully. Identify any gaps or improvements needed and address them if necessary.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T11:18:58.537015+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

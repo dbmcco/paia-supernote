@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-160-2026-04-16T08-16-25.703280+00-00",
+  "task_id": ".user-braydon-160",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.075,
+  "dimensions": {
+    "hallucination_rate": 0.95,
+    "semantic_match": 0.05,
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.25
+  },
+  "notes": "The actual task is to create/maintain a user board (a persistent conversation surface for braydon), as evidenced by the minimal workgraph contract. The inferred task is a comprehensive code quality and technical debt review focused on task synchronization and agent write protocols. These are fundamentally different objectives. The inferred task contains almost no elements from the actual task description—it hallucinates detailed review scope, technical concerns about hardening, and scope-splitting recommendations that don't appear in the original. The only surface-level connection is both reference paia-supernote, but the domains and goals are entirely distinct.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Review the current paia-supernote codebase for technical debt and code quality issues, particularly focusing on core functionality stability. Assess whether the recent changes to task synchronization and agent write protocols have introduced any hardening concerns that need to be addressed. If the scope is too large, recommend how to split this into smaller, more manageable tasks with appropriate file and line-of-code budgets.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:16:25.703280+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

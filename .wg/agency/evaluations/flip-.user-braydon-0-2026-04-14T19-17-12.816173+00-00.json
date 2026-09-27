@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-0-2026-04-14T19-17-12.816173+00-00",
+  "task_id": ".user-braydon-0",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.025,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.1,
+    "hallucination_rate": 0.95,
+    "semantic_match": 0.0
+  },
+  "notes": "The actual task is to set up a persistent user conversation board for braydon (a meta-task about communication infrastructure). The inferred task is about running coredrift code analysis for quality checks—a completely different domain. The inference appears to have hallucinated details about drift analysis, code quality, and architectural patterns that do not appear in the actual task description. While driftdriver is mentioned in the project context, this task is not about running it. The only minor credit is that the inferred version is at least specific about *something*, even though it's the wrong something.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Run coredrift analysis to check for code quality issues, drift violations, or architectural inconsistencies in the current codebase. Ensure all code standards and patterns are being followed according to the project's drift detection rules. Report any findings or confirm the codebase is clean.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-14T19:17:12.816173+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

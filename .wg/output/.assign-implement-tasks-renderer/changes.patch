@@ -1,0 +1,265 @@
+diff --git a/src/paia_supernote/cloud_poller.py b/src/paia_supernote/cloud_poller.py
+index 9d4c221..8c6a677 100644
+--- a/src/paia_supernote/cloud_poller.py
++++ b/src/paia_supernote/cloud_poller.py
+@@ -27,7 +27,7 @@ class CloudPoller:
+     DEFAULT_POLL_INTERVAL = 60  # seconds
+ 
+     # Only watch these notebooks (stem name without .note)
+-    WATCHED_NOTEBOOKS = {"Quick", "LFW", "Synth", "test"}
++    WATCHED_NOTEBOOKS = {"Quick", "LFW", "Synth", "test", "tasks"}
+ 
+     def __init__(
+         self,
+diff --git a/src/paia_supernote/main.py b/src/paia_supernote/main.py
+index 4ba6bf5..e57cae1 100644
+--- a/src/paia_supernote/main.py
++++ b/src/paia_supernote/main.py
+@@ -23,6 +23,7 @@ from .reader import SupernoteReader
+ from .writer import SupernoteWriter
+ from .uploader import SupernoteUploader
+ from .notebook_writer import append_page_to_notebook
++from .tasks_sync import TasksSync
+ 
+ log = structlog.get_logger(__name__)
+ 
+@@ -102,6 +103,12 @@ class SupernoteService:
+             on_note_changed=self._on_note_changed,
+             poll_interval=self.config["poll_interval"],
+         )
++        self.tasks_sync = TasksSync(
++            uploader=self.uploader,
++            writer=self.writer,
++            work_url=self.config["work_url"],
++            poll_interval=self.config["poll_interval"],
++        )
+         self._shutdown_event = asyncio.Event()
+ 
+     async def start(self) -> None:
+@@ -118,6 +125,9 @@ class SupernoteService:
+         # Start cloud poller (no Partner app needed)
+         self.cloud_poller.start()
+ 
++        # Start tasks sync (paia-work → tasks.note)
++        self.tasks_sync.start()
++
+         log.info("service_started")
+ 
+         # Wait for shutdown signal
+@@ -127,6 +137,7 @@ class SupernoteService:
+         """Stop the Supernote service, flushing pending ops."""
+         log.info("service_stopping")
+ 
++        await self.tasks_sync.stop()
+         await self.cloud_poller.stop()
+         await self.uploader.stop()
+         await self.events.stop()
+@@ -163,6 +174,11 @@ class SupernoteService:
+                         task_text=checkbox.task_text,
+                         tag=checkbox.tag,
+                     )
++                    # tasks.note checkboxes → mark done in paia-work
++                    await self._handle_task_checkbox(
++                        result.notebook, result.page_num,
++                        checkbox.task_text, checkbox.tag,
++                    )
+ 
+         except Exception as exc:
+             log.error("file_processing_error", notebook=notebook_name, error=str(exc))
+@@ -182,6 +198,35 @@ class SupernoteService:
+             agent=agent,
+         )
+ 
++    async def _handle_task_checkbox(self, notebook: str, page: int, task_text: str, tag: str) -> None:
++        """Mark a task done in paia-work when checked off on tasks.note.
++
++        Parses the task ID from text like '☑ Task title  [abc123]'.
++        """
++        import re
++        import httpx
++
++        if notebook != "tasks":
++            return
++
++        match = re.search(r'\[([^\]]+)\]', task_text)
++        if not match:
++            log.warning("tasks_checkbox_no_id", text=task_text[:80])
++            return
++
++        task_id = match.group(1)
++        try:
++            async with httpx.AsyncClient() as client:
++                resp = await client.patch(
++                    f"{self.config['work_url']}/v1/tasks/{task_id}",
++                    json={"status": "done"},
++                    timeout=5.0,
++                )
++                resp.raise_for_status()
++            log.info("task_marked_done", task_id=task_id)
++        except httpx.HTTPError as exc:
++            log.warning("task_mark_done_failed", task_id=task_id, error=str(exc))
++
+     async def _handle_write_request(self, event_data: Dict[str, Any]) -> None:
+         """Handle write request events from agents.
+ 
+@@ -193,8 +238,19 @@ class SupernoteService:
+ 
+         try:
+             agent = event_data["agent"]
+-            notebook = event_data["notebook"]
++            notebook = event_data.get("notebook") or self.config["agent_mappings"].get(agent, {}).get("notebook", "")
+             content = event_data.get("content", "")
++
++            # Validate agent is known
++            if agent not in self.config["agent_mappings"]:
++                log.warning("write_request_unknown_agent", agent=agent)
++                return
++
++            # tasks.note is owned by TasksSync — agents cannot write to it
++            if notebook == "tasks":
++                log.warning("write_request_rejected_tasks_notebook", agent=agent)
++                return
++
+             target_name = f"{notebook}.note"
+ 
+             log.info("write_request_received", agent=agent, notebook=notebook)
+diff --git a/src/paia_supernote/writer.py b/src/paia_supernote/writer.py
+index eaa406b..0f18404 100644
+--- a/src/paia_supernote/writer.py
++++ b/src/paia_supernote/writer.py
+@@ -198,6 +198,98 @@ class SupernoteWriter:
+ 
+         return supernotelib.reconstruct(notebook)
+ 
++    # Tasks page layout constants
++    TASKS_HEADER_SIZE = 64
++    TASKS_BODY_SIZE = 40
++    TASKS_ID_SIZE = 26
++    TASKS_LINE_SPACING = 14
++
++    LANE_LABELS = {
++        "focus": "FOCUS",
++        "inbox": "INBOX",
++        "orbit": "ORBIT",
++        "parking": "PARKING",
++    }
++
++    def render_tasks_page(self, lane: str, tasks: list) -> bytes:
++        """Render a task lane page to RATTA_RLE bytes.
++
++        Layout:
++        - Lane name as bold header at top
++        - Tasks as checkbox list: □ Title  [id]  or  ☑ Title  [id]
++        - Overflow indicated by "+ N more tasks" at bottom
++        """
++        img = Image.new("L", (self.DEVICE_WIDTH, self.DEVICE_HEIGHT), color=255)
++        draw = ImageDraw.Draw(img)
++
++        header_font = self._load_font(None, size=self.TASKS_HEADER_SIZE)
++        body_font = self._load_font(None, size=self.TASKS_BODY_SIZE)
++        id_font = self._load_font(None, size=self.TASKS_ID_SIZE)
++
++        # Lane header
++        label = self.LANE_LABELS.get(lane, lane.upper())
++        draw.text((self.MARGIN, self.MARGIN), label, fill=0, font=header_font)
++
++        # Divider line below header
++        header_bbox = draw.textbbox((0, 0), label, font=header_font)
++        header_h = header_bbox[3] - header_bbox[1]
++        line_y = self.MARGIN + header_h + 16
++        draw.line(
++            [(self.MARGIN, line_y), (self.DEVICE_WIDTH - self.MARGIN, line_y)],
++            fill=0,
++            width=2,
++        )
++
++        y = line_y + 24
++        max_text_width = self.DEVICE_WIDTH - 2 * self.MARGIN - 160
++        bottom_limit = self.DEVICE_HEIGHT - self.MARGIN - 60
++        rendered = 0
++
++        for task in tasks:
++            if y >= bottom_limit:
++                remaining = len(tasks) - rendered
++                draw.text(
++                    (self.MARGIN, y),
++                    f"+ {remaining} more task{'s' if remaining != 1 else ''}",
++                    fill=80,
++                    font=id_font,
++                )
++                break
++
++            done = task.get("status") in ("done", "completed", "closed")
++            checkbox = "\u2611" if done else "\u25a1"  # ☑ or □
++            title = task.get("title", task.get("name", "Untitled"))
++            task_id = str(task.get("id", ""))
++
++            # Truncate title if it's very long
++            line = f"{checkbox} {title}"
++            wrapped = self._wrap_text(draw, line, body_font, max_text_width)
++            first_line = wrapped[0] if wrapped else line
++
++            draw.text((self.MARGIN, y), first_line, fill=0, font=body_font)
++
++            # Task ID in small grey text to the right
++            if task_id:
++                id_text = f"[{task_id[:12]}]"
++                id_bbox = draw.textbbox((0, 0), id_text, font=id_font)
++                id_x = self.DEVICE_WIDTH - self.MARGIN - (id_bbox[2] - id_bbox[0])
++                id_y = y + (self.TASKS_BODY_SIZE - self.TASKS_ID_SIZE) // 2
++                draw.text((id_x, id_y), id_text, fill=120, font=id_font)
++
++            body_bbox = draw.textbbox((0, 0), first_line or "A", font=body_font)
++            y += (body_bbox[3] - body_bbox[1]) + self.TASKS_LINE_SPACING
++            rendered += 1
++
++        if not tasks:
++            draw.text(
++                (self.MARGIN, y),
++                "— empty —",
++                fill=160,
++                font=body_font,
++            )
++
++        return ratta_rle.encode(img)
++
+     @staticmethod
+     def _generate_page_id() -> str:
+         """Generate a unique page ID in the Supernote format: P<timestamp><random>."""
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 5775a5b..61c7ec4 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -121,6 +121,9 @@ class TestServiceStart:
+         service.cloud_poller = MagicMock()
+         service.cloud_poller.start = MagicMock()
+         service.cloud_poller.stop = AsyncMock()
++        service.tasks_sync = MagicMock()
++        service.tasks_sync.start = MagicMock()
++        service.tasks_sync.stop = AsyncMock()
+ 
+         # Schedule stop after start runs
+         async def stop_after_start() -> None:
+@@ -143,9 +146,12 @@ class TestServiceStart:
+         service.uploader.stop = AsyncMock()
+         service.cloud_poller = MagicMock()
+         service.cloud_poller.stop = AsyncMock()
++        service.tasks_sync = MagicMock()
++        service.tasks_sync.stop = AsyncMock()
+ 
+         await service.stop()
+ 
++        service.tasks_sync.stop.assert_awaited_once()
+         service.cloud_poller.stop.assert_awaited_once()
+         service.uploader.stop.assert_awaited_once()
+         service.events.stop.assert_awaited_once()
+@@ -170,6 +176,9 @@ class TestSignalHandling:
+         service.cloud_poller = MagicMock()
+         service.cloud_poller.start = MagicMock()
+         service.cloud_poller.stop = AsyncMock()
++        service.tasks_sync = MagicMock()
++        service.tasks_sync.start = MagicMock()
++        service.tasks_sync.stop = AsyncMock()
+ 
+         async def send_sigterm() -> None:
+             await asyncio.sleep(0.05)

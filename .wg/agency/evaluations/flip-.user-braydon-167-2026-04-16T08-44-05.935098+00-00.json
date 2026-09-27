@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-167-2026-04-16T08-44-05.935098+00-00",
+  "task_id": ".user-braydon-167",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.365,
+  "dimensions": {
+    "requirement_coverage": 0.35,
+    "specificity_match": 0.2,
+    "semantic_match": 0.45,
+    "hallucination_rate": 0.6
+  },
+  "notes": "The actual task is minimally specified: 'User board for braydon — persistent conversation surface' with no explicit acceptance criteria or requirements. The inferred task reconstructs a validation/testing workflow with specific features (terminal UI, events integration, paia-events, write capabilities, tests). While both address 'user board for braydon', the actual task doesn't specify the activity type (implementation vs. validation) or technical details. The inferred version invents ~60% of its requirements (validation focus, specific features, test assertions) not present in the sparse actual task. The overlap exists only on the core concept and the broad 'persistent' characteristic.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Validate that the user board implementation works correctly for user braydon. Verify all key features are functional including: terminal UI, session persistence, events integration with paia-events service, write capabilities, and conversation history. Ensure tests are passing and the implementation is fully operational.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:44:05.935098+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

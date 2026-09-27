@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-129-2026-04-16T06-20-52.846296+00-00",
+  "task_id": ".user-braydon-129",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.5,
+  "dimensions": {
+    "semantic_match": 0.85,
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.3,
+    "hallucination_rate": 0.75
+  },
+  "notes": "The tasks align on core domain (creating a user board for paia-supernote) but diverge sharply on detail. The actual task is intentionally minimal—just 'User board: braydon — persistent conversation surface' with no explicit requirements, acceptance criteria, or touch files. The inferred version reconstructs a full feature implementation (launcher script, events integration, comprehensive tests, main app updates) from examining the work artifacts. These inferred details are reasonable interpretations of what 'implementing a user board' entails, but they are not explicitly stated in the original task description. The hallucination rate is high because nearly all specific implementation details (tests, launcher, integration points) are inferred rather than specified.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board component for the paia-supernote system that provides a functional interface for managing Supernote tasks and notes. The implementation should include: 1) A complete user board module with proper functionality, 2) A launcher script (run_user_board.py) that can start the user board, 3) Integration with the events service for real-time updates, 4) Comprehensive tests that validate all functionality, 5) Updates to the main application and related modules as needed. Ensure the user board connects properly to the events service and all tests pass upon completion.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T06:20:52.846296+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

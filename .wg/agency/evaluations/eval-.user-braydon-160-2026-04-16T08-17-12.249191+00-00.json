@@ -1,0 +1,22 @@
+{
+  "id": "eval-.user-braydon-160-2026-04-16T08-17-12.249191+00-00",
+  "task_id": ".user-braydon-160",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.12,
+  "dimensions": {
+    "completeness": 0.05,
+    "style_adherence": 0.5,
+    "efficiency": 0.35,
+    "intent_fidelity": 0.075,
+    "correctness": 0.05,
+    "blocking_impact": 0.1,
+    "downstream_usability": 0.0,
+    "coordination_overhead": 0.15
+  },
+  "notes": "Task failed fundamentally. No artifacts were recorded despite the objective being to create a persistent conversation surface (user board). FLIP verification score of 0.07 (vs. 0.70 threshold) is a critical failure signal. Task log shows coredrift yellow status (churn_loc, hardening_in_core) and rapid completion (1.5 min) without delivery, suggesting the work either hit budget constraints and was abandoned, or was misunderstood. The task was marked done but nothing was handed off, creating downstream blocking and wasted coordination effort. Task appears to require immediate re-execution with clearer specifications or adjusted budget parameters.",
+  "evaluator": "claude:claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:17:12.249191+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "llm"
+}

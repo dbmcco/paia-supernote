@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-34-2026-04-15T23-05-04.694495+00-00",
+  "task_id": ".user-braydon-34",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.15,
+  "dimensions": {
+    "requirement_coverage": 0.15,
+    "specificity_match": 0.2,
+    "semantic_match": 0.15,
+    "hallucination_rate": 0.95
+  },
+  "notes": "The actual task is a minimal, vague specification for a 'user board' (persistent conversation surface) with almost no specific requirements beyond budget constraints (max_files=25, max_loc=800). The inferred task completely hallucinated a detailed implementation plan about 'core system improvements, hardening, refactoring modules' that appears nowhere in the actual task description. The evaluator invented 95% of the inferred content. The only minor overlap is the existence of budget constraints, but the inferred version misses entirely the actual objective: creating/maintaining a user board interface.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement core system improvements and hardening for the paia-supernote project. Focus on refactoring or enhancing the main core modules to improve robustness and reliability. The task should involve significant code changes across multiple core files. If the implementation would cause excessive code churn or exceed file/line-of-code budgets, assess the scope and recommend splitting the work into smaller, more manageable tasks rather than proceeding with a large monolithic implementation.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T23:05:04.694495+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-69-2026-04-16T02-22-26.458262+00-00",
+  "task_id": ".user-braydon-69",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.05,
+  "dimensions": {
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.15,
+    "semantic_match": 0.0,
+    "hallucination_rate": 0.95
+  },
+  "notes": "The inferred task fundamentally misunderstands the actual objective. The actual task is about creating/maintaining a 'user board' — a persistent conversation surface for the user braydon. The inferred reconstruction invents an entirely different task: code quality analysis, technical debt review, and refactoring recommendations. These share no semantic relationship. The inferred version contains nearly no actual requirements from the original contract (only vague connection through the word 'core') and fabricates ~95% of its content (code churn analysis, module hardening, complexity reduction, drift patterns, etc.). The actual task is minimal and UI/UX-focused; the inferred is analytical and code-focused.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Analyze the current codebase for code quality issues, technical debt, and drift patterns. Review the core modules for hardening opportunities and identify areas where code churn is impacting maintainability. Provide recommendations for improving code organization and reducing complexity, focusing on the core functionality that may need refactoring or splitting into smaller, more manageable components.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T02:22:26.458262+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

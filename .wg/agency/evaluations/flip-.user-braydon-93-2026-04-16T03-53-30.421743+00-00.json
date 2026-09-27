@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-93-2026-04-16T03-53-30.421743+00-00",
+  "task_id": ".user-braydon-93",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.47,
+  "dimensions": {
+    "semantic_match": 0.8,
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.25,
+    "hallucination_rate": 0.65
+  },
+  "notes": "The actual task is intentionally minimal—just 'User board: braydon — persistent conversation surface' with no explicit requirements listed. The inferred version extrapolates this into 5 concrete requirements (terminal UI, event monitoring, write functionality, session persistence, integration). These are reasonable interpretations of what a 'user board' implies, but they're not explicitly stated in the actual task. The inferred version significantly over-specifies a vague objective, adding implementation details that aren't required by the ground truth. This is a case where the evaluator had to infer requirements from an abstract goal rather than having concrete specifications to reconstruct.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board for the paia-supernote system that provides a comprehensive persistent conversation interface. Requirements: 1) Terminal-style UI for user interactions 2) Event monitoring capabilities to track system activity 3) Write functionality for users to create/modify content 4) Session persistence to maintain conversation state across sessions 5) Integration with the existing paia-supernote architecture. Acceptance criteria: Verify the implementation provides all specified features and maintains session continuity.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:53:30.421743+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-216-2026-04-16T11-53-19.757555+00-00",
+  "task_id": ".user-braydon-216",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.89,
+  "dimensions": {
+    "semantic_match": 0.95,
+    "requirement_coverage": 0.95,
+    "hallucination_rate": 0.08,
+    "specificity_match": 0.65
+  },
+  "notes": "The inferred task accurately captures the core objective (user board for paia-supernote) and all three acceptance criteria: interactive operation, terminal interface with status/events/commands, and write functionality. The semantic domains match perfectly. Coverage is nearly complete—all major requirements are present, with minor elaborations on what they entail. Specificity drops notably: the inferred version lacks concrete file paths (user_board.py, run_user_board.py, etc.), LOC limits (800), file count limits (25), and pit-stop timing. Language becomes more generic ('comprehensive status monitoring' vs. measurable constraints). Minor hallucinations: 'address contract violations' and 'stay within project scope' are meta-considerations not explicitly stated in the original task contract, though they're reasonable inferences about task discipline.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Implement a user board component for the paia-supernote service - an interactive terminal interface that provides a persistent conversation surface for users to interact with Supernote integration. Requirements: 1) Interactive terminal interface with CLI entry point, 2) Persistent conversation surface that maintains session state, 3) Event integration to handle Supernote-related events, 4) Write functionality to allow users to send content back to Supernote, 5) Comprehensive status monitoring and reporting, 6) Complete command system for user interactions. Ensure all imports work correctly and the CLI entry point is functional. Address any contract violations and stay within project scope.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T11:53:19.757555+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

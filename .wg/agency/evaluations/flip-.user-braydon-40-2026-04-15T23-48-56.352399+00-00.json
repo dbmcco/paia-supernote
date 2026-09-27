@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-40-2026-04-15T23-48-56.352399+00-00",
+  "task_id": ".user-braydon-40",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.02,
+  "dimensions": {
+    "semantic_match": 0.0,
+    "hallucination_rate": 1.0,
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.1
+  },
+  "notes": "Complete mismatch. The actual task is to create/maintain a 'user board for braydon as a persistent conversation surface' — a core interaction/UI feature. The inferred task is entirely fabricated code quality analysis (drift status, coredrift analysis, code churn assessment) which appears nowhere in the actual description. No requirements from the actual task are captured; all inferred requirements are hallucinated. The inference seems to have confused the task context (paia-supernote repo mentioned in system context) with the actual task objective.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Check the current drift status of the paia-supernote repository and assess code quality metrics. Perform a coredrift analysis to identify any issues with code churn or hardening in core components. Report on the overall health of the codebase and recommend any necessary actions to address drift warnings.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-15T23:48:56.352399+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

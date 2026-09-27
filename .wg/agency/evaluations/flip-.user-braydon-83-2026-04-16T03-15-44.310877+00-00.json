@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-83-2026-04-16T03-15-44.310877+00-00",
+  "task_id": ".user-braydon-83",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.1,
+  "dimensions": {
+    "semantic_match": 0.15,
+    "requirement_coverage": 0.0,
+    "specificity_match": 0.2,
+    "hallucination_rate": 1.0
+  },
+  "notes": "The actual task is a simple, high-level requirement to create/maintain a user board for persistent conversation. The inferred task describes detailed Supernote file sync monitoring operations—entirely different domain and purpose. Zero overlap in requirements. All inferred details (sync folder monitoring, .note files, file watching service, sync status checking) are hallucinated; none appear in the original task description. The actual task is generic while the inferred is overly specific to Supernote infrastructure.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Monitor the Supernote Partner app sync folder for any new .note files and verify that the file watching service is running properly. Check the status of the sync process and report if there are any issues with the connection between the Supernote device and the local sync directory. This is a monitoring task that should verify the health of the file sync pipeline.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T03:15:44.310877+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

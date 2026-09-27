@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-201-2026-04-16T10-52-41.493965+00-00",
+  "task_id": ".user-braydon-201",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.41,
+  "dimensions": {
+    "hallucination_rate": 0.8,
+    "requirement_coverage": 0.3,
+    "specificity_match": 0.3,
+    "semantic_match": 0.6
+  },
+  "notes": "The actual task is intentionally minimal ('user board for braydon — persistent conversation surface') with no specific acceptance criteria or requirements listed. The inferred task reconstructs a verification/testing workflow with specific implementation details (UserBoard class, run_user_board.py, paia-events connection, branded interface, test suite). While these are reasonable inferences from the repo's file structure and git status, they are not stated in the original task contract. The inferred version is substantially more specific but introduces requirements not present in the actual description, resulting in high hallucination despite capturing the general domain correctly.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Verify that the existing UserBoard implementation is working correctly. Check that the UserBoard class with terminal interface is functional, ensure the run_user_board.py launcher works properly, confirm it connects to paia-events successfully, verify the branded interface displays correctly, and run all tests to ensure they pass. Report on the overall status and functionality of the user board system.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T10:52:41.493965+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}

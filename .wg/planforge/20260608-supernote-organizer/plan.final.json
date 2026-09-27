@@ -1,0 +1,446 @@
+{
+  "assumptions": [
+    {
+      "confidence": "high",
+      "statement": "V1 uses Supernote Cloud download/upload only and does not write through the local Partner App sync folder.",
+      "validation": "Confirmed in approved design spec and user discussion."
+    },
+    {
+      "confidence": "high",
+      "statement": "The first safe implementation slice is a read-only snapshot browser foundation before write-capable reorder.",
+      "validation": "Matches the approved staged design and reduces device-corruption risk."
+    },
+    {
+      "confidence": "medium",
+      "statement": "Page IDs are stable enough to serve as canonical identity during same-notebook reorder.",
+      "validation": "Validate with unit tests and fixture/manual device tests before enabling write operations broadly."
+    }
+  ],
+  "blocking_questions": [],
+  "decision_log": [
+    {
+      "decision": "Use Speedrift with PlanForge-seeded Workgraph and TDD loops.",
+      "evidence": [
+        "User asked to build with Speedrift and testing loops."
+      ],
+      "owner": "user",
+      "reason": "The user explicitly requested Speedrift and testing loops."
+    },
+    {
+      "decision": "Defer custom shape/sticker markers.",
+      "evidence": [
+        "User said to hold custom shape/sticker marker idea until later."
+      ],
+      "owner": "user",
+      "reason": "User asked to hold that idea until later; V1 uses native metadata only."
+    },
+    {
+      "decision": "Start with read model and APIs before write-capable reorder.",
+      "evidence": [
+        "Approved design spec stages read-only browser before metadata-aware reorder and cross-note move."
+      ],
+      "owner": "model",
+      "reason": "Metadata preservation and validation are the main risk; read-only snapshot code enables fixtures and UI without upload risk."
+    }
+  ],
+  "drift_gates": [
+    {
+      "modules": [
+        "coredrift",
+        "specdrift",
+        "datadrift",
+        "uxdrift",
+        "yagnidrift",
+        "fixdrift"
+      ],
+      "name": "pre-task drift checks",
+      "response_policy": "create_followup",
+      "when": "pre_task"
+    },
+    {
+      "modules": [
+        "coredrift",
+        "fixdrift"
+      ],
+      "name": "post-task drift checks",
+      "response_policy": "create_followup",
+      "when": "post_task"
+    }
+  ],
+  "end_state": {
+    "acceptance_criteria": [
+      "Backend can build a NotebookSnapshot from .note bytes keyed by page_id.",
+      "Snapshot exposes page order, page records, stars, headings/titles, keywords, links, and image dimensions without mutating notebooks.",
+      "Backend has tested image rendering/cache primitives suitable for a page grid.",
+      "A minimal local web UI can display a notebook page grid with zoom and metadata filters.",
+      "Same-notebook reorder engine exists behind tests but blocks unsafe metadata rather than risking lossy writes.",
+      "All implementation tasks run Speedrift drift checks and focused pytest/UX checks."
+    ],
+    "contract": "Implement the first Speedrift execution slice of the Supernote Cloud Page Organizer: read-only snapshot/browser foundation plus tested metadata-aware reorder groundwork, preserving the approved cloud-side design constraints.",
+    "out_of_scope": [
+      "Cross-notebook move execution.",
+      "Device plugin implementation.",
+      "Partner App local sync writes.",
+      "Custom shape or sticker marker detection.",
+      "Automatic merge of stale cloud snapshots."
+    ]
+  },
+  "fix_loops": [
+    {
+      "action": "Use TDD red-green-refactor for the focused failing behavior, then re-run the task verify command.",
+      "escalation": "If the same test class fails after three attempts, stop and create a replanning/fix task.",
+      "max_attempts": 3,
+      "trigger": "Focused test failure inside a Workgraph task."
+    },
+    {
+      "action": "Capture advisory drift findings as follow-up tasks unless they directly invalidate the current task contract.",
+      "escalation": "If drift indicates scope expansion beyond the touch set, update the graph rather than silently editing extra files.",
+      "max_attempts": 2,
+      "trigger": "Pre-task or post-task drift findings."
+    }
+  ],
+  "goal": "Build the Supernote Cloud Page Organizer with Speedrift and testing loops, after updating Speedrift tooling.",
+  "handoff": {
+    "artifacts": [
+      "docs/superpowers/specs/2026-06-08-supernote-page-organizer-design.md",
+      ".workgraph/planforge/20260608-supernote-organizer/plan.final.json",
+      "new organizer backend/UI modules and focused tests"
+    ],
+    "commit_policy": "commit_after_verification",
+    "completion_policy": "Complete only after Workgraph tasks for the selected slice pass focused tests, drift checks have run, and remaining risks are recorded as follow-up tasks.",
+    "push_policy": "do_not_push"
+  },
+  "model_assignments": [
+    {
+      "fallback_policy": "ask_human",
+      "reason": "Default Speedrift execution route for coding and test loops.",
+      "role": "implementation",
+      "route": "codex-default"
+    },
+    {
+      "fallback_policy": "ask_human",
+      "reason": "Browser/product UX checks require the standard Codex route with local browser tooling when needed.",
+      "role": "ux-evaluation",
+      "route": "codex-default"
+    },
+    {
+      "fallback_policy": "ask_human",
+      "reason": "Review and drift interpretation should use the same registry-backed execution surface unless policy says otherwise.",
+      "role": "review",
+      "route": "codex-default"
+    }
+  ],
+  "risks": [
+    {
+      "impact": "high",
+      "mitigation": "Block write-capable reorder for unsupported link metadata until fixture and device validation prove safe remapping.",
+      "owner": "implementation",
+      "risk": "Supernote link metadata may need more than page-number remapping."
+    },
+    {
+      "impact": "medium",
+      "mitigation": "Keep Phase 1 read-only and add golden fixtures before writes.",
+      "owner": "implementation",
+      "risk": "supernotelib reconstruction may omit or normalize metadata in ways that only appear on device."
+    },
+    {
+      "impact": "medium",
+      "mitigation": "Scope commits carefully and avoid touching unrelated dirty files unless required.",
+      "owner": "implementation",
+      "risk": "The repository currently has unrelated uncommitted changes."
+    }
+  ],
+  "schema_version": "planforge.v2",
+  "speedrift_modules": [
+    {
+      "mode": "required",
+      "name": "coredrift",
+      "reason": "Baseline task contract and drift-control lane for every task.",
+      "required_by": [
+        "all tasks"
+      ]
+    },
+    {
+      "mode": "required",
+      "name": "specdrift",
+      "reason": "The implementation is anchored to the approved design spec.",
+      "required_by": [
+        "snapshot model",
+        "reorder engine",
+        "final verification"
+      ]
+    },
+    {
+      "mode": "required",
+      "name": "datadrift",
+      "reason": "Snapshot, metadata index, operation, and API contracts are structured data surfaces.",
+      "required_by": [
+        "snapshot model",
+        "backend API",
+        "reorder engine"
+      ]
+    },
+    {
+      "mode": "recommended",
+      "name": "uxdrift",
+      "reason": "The project includes a web UI for grid, zoom, filters, drag states, and apply flow.",
+      "required_by": [
+        "web UI",
+        "UX evaluation"
+      ]
+    },
+    {
+      "mode": "recommended",
+      "name": "yagnidrift",
+      "reason": "The design deliberately defers cross-note moves and custom markers; guard against overbuilding.",
+      "required_by": [
+        "all implementation tasks"
+      ]
+    },
+    {
+      "mode": "recommended",
+      "name": "fixdrift",
+      "reason": "Testing loops should create explicit repair tasks when failures exceed the current task scope.",
+      "required_by": [
+        "test and verification tasks"
+      ]
+    }
+  ],
+  "testing": {
+    "commands": [
+      {
+        "command": "uv run pytest tests/test_note_snapshot.py -q",
+        "expected_signal": "Snapshot/read-model behavior passes.",
+        "name": "snapshot tests",
+        "when": "per_task"
+      },
+      {
+        "command": "uv run pytest tests/test_note_page_ops.py tests/test_note_snapshot.py -q",
+        "expected_signal": "Existing page ops still pass with snapshot additions.",
+        "name": "page ops regression",
+        "when": "per_task"
+      },
+      {
+        "command": "uv run pytest tests/test_organizer_api.py -q",
+        "expected_signal": "Organizer API contracts pass.",
+        "name": "organizer API tests",
+        "when": "per_task"
+      },
+      {
+        "command": "uv run pytest tests/test_note_reorder.py -q",
+        "expected_signal": "Reorder engine behavior passes.",
+        "name": "reorder tests",
+        "when": "per_task"
+      }
+    ],
+    "coverage_notes": [
+      "Use TDD for each behavior: write failing tests, verify red, implement minimal code, verify green.",
+      "Use fake notebooks for early unit tests and add real .note fixtures before write-capable upload behavior.",
+      "Keep cloud upload integration disabled until same-notebook rewrite validation is proven locally."
+    ],
+    "evals": [
+      {
+        "artifact": "Manual or browser screenshot once UI exists.",
+        "lane": "ux",
+        "name": "page grid UX smoke",
+        "reason": "Grid, zoom, metadata badges, and filters are user-facing."
+      },
+      {
+        "artifact": "Post-task drift logs under .workgraph/output or finding ledger.",
+        "lane": "drift",
+        "name": "speedrift drift checks",
+        "reason": "User requested Speedrift and testing loops along the way."
+      }
+    ],
+    "posture": "focused"
+  },
+  "workgraph": {
+    "nodes": [
+      {
+        "acceptance": [
+          "Tests fail first for missing snapshot model.",
+          "NotebookSnapshot can be built from fake notebook objects and/or .note bytes.",
+          "Page records are keyed by page_id and include page index, page metadata, star state, headings, keywords, links, content hash, and image dimensions where available.",
+          "No notebook bytes are mutated."
+        ],
+        "depends_on": [],
+        "description": "Create the read-only snapshot model and metadata extractor for Supernote notebooks. Start with tests that express the page_id-based contract, then implement the minimal production code.",
+        "id": "supernote-organizer:snapshot-model",
+        "kind": "implementation",
+        "model_role": "implementation",
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "yagnidrift",
+          "fixdrift"
+        ],
+        "title": "Build page-id snapshot model",
+        "touch_set": [
+          "src/paia_supernote/note_snapshot.py",
+          "tests/test_note_snapshot.py"
+        ],
+        "verify": [
+          "uv run pytest tests/test_note_snapshot.py -q"
+        ]
+      },
+      {
+        "acceptance": [
+          "Image cache tests fail first for missing cache behavior.",
+          "Rendered page images are cached by notebook revision, page_id, and scale.",
+          "Existing SupernoteReader rendering code is reused where practical.",
+          "Focused tests pass without cloud access."
+        ],
+        "depends_on": [
+          "supernote-organizer:snapshot-model"
+        ],
+        "description": "Add page image rendering/cache primitives for the organizer grid without introducing cloud dependencies into unit tests.",
+        "id": "supernote-organizer:image-cache",
+        "kind": "implementation",
+        "model_role": "implementation",
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "yagnidrift",
+          "fixdrift"
+        ],
+        "title": "Add organizer image cache",
+        "touch_set": [
+          "src/paia_supernote/organizer_images.py",
+          "tests/test_organizer_images.py"
+        ],
+        "verify": [
+          "uv run pytest tests/test_organizer_images.py -q"
+        ]
+      },
+      {
+        "acceptance": [
+          "API contract tests fail first.",
+          "Backend exposes notebook list, snapshot metadata, and image endpoints through a lightweight local app surface.",
+          "Endpoints are injectable/testable with fake uploader and fake snapshot builder.",
+          "No live Supernote Cloud calls occur in unit tests."
+        ],
+        "depends_on": [
+          "supernote-organizer:snapshot-model",
+          "supernote-organizer:image-cache"
+        ],
+        "description": "Create the organizer backend API with dependency injection around uploader, snapshot builder, and image cache.",
+        "id": "supernote-organizer:backend-api",
+        "kind": "implementation",
+        "model_role": "implementation",
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "yagnidrift",
+          "fixdrift"
+        ],
+        "title": "Create organizer backend API",
+        "touch_set": [
+          "src/paia_supernote/organizer_api.py",
+          "src/paia_supernote/main.py",
+          "pyproject.toml",
+          "tests/test_organizer_api.py"
+        ],
+        "verify": [
+          "uv run pytest tests/test_organizer_api.py -q"
+        ]
+      },
+      {
+        "acceptance": [
+          "UI is available as a local web surface launched from the backend or CLI.",
+          "Grid, zoom, metadata badges, and filters are present.",
+          "No in-app explanatory marketing copy is used.",
+          "Basic UX smoke verification is captured."
+        ],
+        "depends_on": [
+          "supernote-organizer:backend-api"
+        ],
+        "description": "Build the first read-only web UI for the organizer grid using the backend API. Keep styling compact and utility-focused.",
+        "id": "supernote-organizer:web-ui",
+        "kind": "implementation",
+        "model_role": "implementation",
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "uxdrift",
+          "yagnidrift",
+          "fixdrift"
+        ],
+        "title": "Build read-only organizer UI",
+        "touch_set": [
+          "src/paia_supernote/organizer_ui.py",
+          "src/paia_supernote/static/",
+          "tests/test_organizer_ui.py"
+        ],
+        "verify": [
+          "uv run pytest tests/test_organizer_ui.py -q"
+        ]
+      },
+      {
+        "acceptance": [
+          "Reorder tests fail first.",
+          "Reorder accepts full ordered page_id list and rejects missing, duplicate, or unknown page IDs.",
+          "Page order and metadata.page order are synchronized.",
+          "Unsupported link metadata blocks write behavior rather than dropping data.",
+          "No upload is performed by this task."
+        ],
+        "depends_on": [
+          "supernote-organizer:snapshot-model"
+        ],
+        "description": "Implement the local reorder engine groundwork behind tests. Keep upload/apply wiring out of this task.",
+        "id": "supernote-organizer:reorder-engine",
+        "kind": "implementation",
+        "model_role": "implementation",
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "datadrift",
+          "yagnidrift",
+          "fixdrift"
+        ],
+        "title": "Implement metadata-aware reorder groundwork",
+        "touch_set": [
+          "src/paia_supernote/note_reorder.py",
+          "tests/test_note_reorder.py"
+        ],
+        "verify": [
+          "uv run pytest tests/test_note_reorder.py -q"
+        ]
+      },
+      {
+        "acceptance": [
+          "Focused organizer tests pass.",
+          "Relevant existing regression tests pass.",
+          "Post-task drift checks have run and advisory findings are tracked.",
+          "Unrelated pre-existing dirty files are not reverted or silently included."
+        ],
+        "depends_on": [
+          "supernote-organizer:backend-api",
+          "supernote-organizer:web-ui",
+          "supernote-organizer:reorder-engine"
+        ],
+        "description": "Run final verification for the selected organizer slice and prepare the handoff.",
+        "id": "supernote-organizer:final-verification",
+        "kind": "handoff",
+        "model_role": "review",
+        "modules": [
+          "coredrift",
+          "specdrift",
+          "uxdrift",
+          "fixdrift"
+        ],
+        "title": "Verify organizer slice",
+        "touch_set": [
+          "src/paia_supernote/",
+          "tests/"
+        ],
+        "verify": [
+          "uv run pytest tests/test_note_snapshot.py tests/test_organizer_images.py tests/test_organizer_api.py tests/test_organizer_ui.py tests/test_note_reorder.py tests/test_note_page_ops.py -q"
+        ]
+      }
+    ],
+    "root": "supernote-organizer:snapshot-model"
+  }
+}

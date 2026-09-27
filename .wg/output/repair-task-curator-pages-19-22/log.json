@@ -1,0 +1,206 @@
+[
+  {
+    "timestamp": "2026-04-15T18:55:48.597730+00:00",
+    "actor": "agent-189",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor claude --model claude-sonnet-4-20250514"
+  },
+  {
+    "timestamp": "2026-04-15T18:55:59.865528+00:00",
+    "actor": "agent-189",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T18:57:02.929108+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #2)"
+  },
+  {
+    "timestamp": "2026-04-15T18:57:06.007979+00:00",
+    "actor": "agent-191",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model claude-sonnet-4-20250514"
+  },
+  {
+    "timestamp": "2026-04-15T18:57:06.610885+00:00",
+    "actor": "agent-191",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T18:58:00.595594+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #3)"
+  },
+  {
+    "timestamp": "2026-04-15T18:58:03.783503+00:00",
+    "actor": "agent-192",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model gemini:gemini-2.5-flash"
+  },
+  {
+    "timestamp": "2026-04-15T18:58:29.693660+00:00",
+    "user": "braydon",
+    "message": "Starting Phase 1: Writing failing tests."
+  },
+  {
+    "timestamp": "2026-04-15T18:59:58.505949+00:00",
+    "actor": "agent-192",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T19:00:59.117271+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #4)"
+  },
+  {
+    "timestamp": "2026-04-15T19:01:02.039668+00:00",
+    "actor": "agent-194",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model openai:gpt-5.1"
+  },
+  {
+    "timestamp": "2026-04-15T19:01:40.506192+00:00",
+    "actor": "agent-194",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T19:02:22.913399+00:00",
+    "user": "braydon",
+    "message": "Blocked on executor environment after partial edits. claude executor: not logged in (/login). amplifier+gemini: malformed function call / no content. amplifier+openai: insufficient_quota 429. Partial changes currently in src/paia_supernote/main.py, src/paia_supernote/reader.py, src/paia_supernote/task_curator.py, tests/test_main.py. No passing verification yet."
+  },
+  {
+    "timestamp": "2026-04-15T20:20:55.578886+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #5)"
+  },
+  {
+    "timestamp": "2026-04-15T20:20:58.014322+00:00",
+    "actor": "agent-195",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model openrouter/auto"
+  },
+  {
+    "timestamp": "2026-04-15T20:20:58.014325+00:00",
+    "actor": "spawn",
+    "message": "Pre-flight model validation: Model 'openai:arcee-ai/trinity-large-preview:free' not found in OpenRouter model list.\n  Did you mean one of:\n    - arcee-ai/trinity-large-preview:free\n    - arcee-ai/trinity-large-thinking\n    - openai/gpt-4o-mini-search-preview\n  Falling back to 'openrouter/auto'.\n  Hint: run `wg models search trinity-large-preview:free` to find valid alternatives, or `wg models list` to see the local registry."
+  },
+  {
+    "timestamp": "2026-04-15T20:20:58.540237+00:00",
+    "actor": "agent-195",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T20:21:42.559752+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #6)"
+  },
+  {
+    "timestamp": "2026-04-15T20:21:58.584890+00:00",
+    "actor": "agent-196",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model openai:trinity-free"
+  },
+  {
+    "timestamp": "2026-04-15T20:22:01.093029+00:00",
+    "actor": "agent-196",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T20:22:29.315797+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #7)"
+  },
+  {
+    "timestamp": "2026-04-15T20:22:41.232267+00:00",
+    "actor": "agent-197",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model openai:trinity-free"
+  },
+  {
+    "timestamp": "2026-04-15T20:22:43.638837+00:00",
+    "actor": "agent-197",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 1"
+  },
+  {
+    "timestamp": "2026-04-15T20:24:04.406744+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #8)"
+  },
+  {
+    "timestamp": "2026-04-15T20:24:04.456320+00:00",
+    "actor": "agent-198",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model openai:trinity-free"
+  },
+  {
+    "timestamp": "2026-04-15T20:24:05.327713+00:00",
+    "actor": "agent-198",
+    "user": "braydon",
+    "message": "Task marked as failed: Agent exited with code 2"
+  },
+  {
+    "timestamp": "2026-04-15T20:25:26.741928+00:00",
+    "user": "braydon",
+    "message": "Task reset for retry (attempt #9)"
+  },
+  {
+    "timestamp": "2026-04-15T20:25:26.787568+00:00",
+    "actor": "agent-199",
+    "user": "braydon",
+    "message": "Spawned by wg spawn --executor amplifier --model openai:trinity-free"
+  },
+  {
+    "timestamp": "2026-04-15T20:25:29.140197+00:00",
+    "user": "braydon",
+    "message": "Task unclaimed: agent 'agent-195' (PID 93076) process exited"
+  },
+  {
+    "timestamp": "2026-04-15T21:09:30.506084+00:00",
+    "user": "braydon",
+    "message": "Claude CLI auth restored; resetting task model from openai:trinity-free back to claude:sonnet and resuming normal wg dispatch."
+  },
+  {
+    "timestamp": "2026-04-15T21:12:40.684218+00:00",
+    "actor": "agent-218",
+    "user": "braydon",
+    "message": "Spawned by coordinator --executor claude --model sonnet"
+  },
+  {
+    "timestamp": "2026-04-15T21:13:12.912894+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (invalid_contract) | next: Fix the wg-contract block TOML so it parses"
+  },
+  {
+    "timestamp": "2026-04-15T21:13:17.963981+00:00",
+    "user": "braydon",
+    "message": "Starting repair: reading source files to understand broken paths"
+  },
+  {
+    "timestamp": "2026-04-15T21:17:55.630330+00:00",
+    "user": "braydon",
+    "message": "Coredrift: yellow (invalid_contract) | next: Fix the wg-contract block TOML so it parses"
+  },
+  {
+    "timestamp": "2026-04-15T21:18:00.133285+00:00",
+    "user": "braydon",
+    "message": "All 26 tests pass. Fixed: (1) test_task_curator now uses read_all_pages(bytes, name, page_range=(18,21)) not process_file(placeholder_path); (2) test_main routing test removed broken @patch on instance attrs; (3) added regression tests for page-range read and multi-page aggregation."
+  },
+  {
+    "timestamp": "2026-04-15T21:18:01.237867+00:00",
+    "actor": "verify",
+    "message": "Verify passed. stdout: ============================= test session starts ==============================\nplatform darwin -- Python 3.14.4, pytest-9.0.2, pluggy-1.6.0 -- /opt/homebrew/opt/python@3.14/bin/python3.14\ncachedir: "
+  },
+  {
+    "timestamp": "2026-04-15T21:18:01.244994+00:00",
+    "actor": "agent-218",
+    "user": "braydon",
+    "message": "Task marked as done"
+  }
+]

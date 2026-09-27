@@ -1,0 +1,18 @@
+{
+  "id": "flip-.user-braydon-166-2026-04-16T08-40-58.755621+00-00",
+  "task_id": ".user-braydon-166",
+  "role_id": "unknown",
+  "tradeoff_id": "unknown",
+  "score": 0.27,
+  "dimensions": {
+    "semantic_match": 0.35,
+    "specificity_match": 0.2,
+    "requirement_coverage": 0.25,
+    "hallucination_rate": 0.85
+  },
+  "notes": "The actual task is extremely minimal: 'User board for braydon — persistent conversation surface.' The inferred reconstruction adds substantial requirements (enhance functionality, agent interaction support, Supernote integration, terminal UI, status monitoring, event handling, write capabilities, conversation history) that do not appear in the actual description. The actual task has no acceptance criteria, touch list, or specific feature requirements. The inferred version appears to conflate the user board task with either (a) an interpretation of what a user board *should* contain based on examining the codebase, or (b) broader context from earlier sessions. While both discuss a user board, the actual task is deliberately simple and open-ended, whereas the inferred version assumes specific enhancements and features that aren't mandated.\n\nFLIP metadata: {\"comparison_model\":\"claude-haiku-4-5-20251001\",\"inference_model\":\"claude-sonnet-4-20250514\",\"inferred_prompt\":\"Enhance the UserBoard functionality in the paia-supernote project to better support agent interaction and Supernote integration. The current implementation has a terminal-based conversational interface, status monitoring, event handling, write capabilities, and conversation history. Improve or expand these capabilities as needed for better integration with the broader paia-supernote ecosystem.\"}",
+  "evaluator": "flip:claude-sonnet-4-20250514+claude-haiku-4-5-20251001",
+  "timestamp": "2026-04-16T08:40:58.755621+00:00",
+  "model": "claude-sonnet-4-20250514",
+  "source": "flip"
+}
