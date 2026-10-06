@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""OCR gate eval: local qwen3-vl:8b vs hosted gpt-5.6-luna on real Supernote pages.
+"""OCR gate eval: local qwen3-vl:8b vs hosted gpt-5.6-luna (AtlasCloud
+transport) on real Supernote pages.
 
 Spec §4.4.2 gate (local becomes primary only if ALL hold):
   1. local mean WER <= 10%
@@ -45,8 +46,13 @@ from paia_supernote.ocr_contract import TRANSCRIPTION_PROMPT
 
 LOCAL_BASE_URL_DEFAULT = "http://127.0.0.1:11434/v1"
 LOCAL_MODEL = "qwen3-vl:8b"
-LUNA_BASE_URL_DEFAULT = "https://api.openai.com/v1"
-LUNA_MODEL = "gpt-5.6-luna"
+# Owner ruling 2026-10-06: the OpenAI API workspace has no credits and pi
+# auth covers pi-side use only - the hosted comparator rides AtlasCloud's
+# OpenAI-compatible endpoint instead (same gpt-5.6-luna model, AtlasCloud
+# slug openai/gpt-5.6-luna; verified live 2026-10-06, ~$0.004/page).
+LUNA_BASE_URL_DEFAULT = os.environ.get(
+    "LUNA_BASE_URL", "https://api.atlascloud.ai/v1")
+LUNA_MODEL = "openai/gpt-5.6-luna"
 
 RETRIES = 2  # retries per engine per page (3 attempts total)
 RETRY_BACKOFF_S = (2.0, 8.0)
@@ -252,11 +258,15 @@ def _endpoint(engine: str) -> tuple[str, dict, dict[str, str]]:
     """Returns (url, request_body_builder, headers) for the engine."""
     if engine == "local":
         return "http://127.0.0.1:11434/api/chat", _local_body, {}
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+    api_key = (os.environ.get("ATLASCLOUD_API_KEY")
+               or os.environ.get("GROK_AURORA_ATLASCLOUD_API_KEY", ""))
     if not api_key:
-        raise SystemExit("luna engine requires OPENAI_API_KEY")
+        raise SystemExit("luna engine requires ATLASCLOUD_API_KEY")
     return (LUNA_BASE_URL_DEFAULT + "/chat/completions", _luna_body,
-            {"Authorization": f"Bearer {api_key}"})
+            {"Authorization": f"Bearer {api_key}",
+             # AtlasCloud fronts with Cloudflare; the default python UA is
+             # bot-blocked (CF 1010). SDK-style UA verified OK 2026-10-06.
+             "User-Agent": "OpenAI/Python 1.54.4"})
 
 
 def transcribe(engine: str, page: Page, pages_dir: Path) -> tuple[str, float, str]:
