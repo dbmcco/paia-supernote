@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -30,8 +31,29 @@ from .model_config import (
     resolve_supernote_zai_api_key,
 )
 from .note_snapshot import NotebookSnapshot, build_snapshot_from_notebook
+from .ocr_contract import (
+    TRANSCRIPTION_PROMPT,
+    escalate_if_needed,
+    needs_escalation,
+)
 
 SNAPSHOT_DIR = Path.home() / ".paia" / "supernote" / "snapshots"
+
+logger = logging.getLogger(__name__)
+
+# ollama 0.35.x ignores think:false / /no_think / chat_template_kwargs for
+# qwen3-vl; the only verified way to keep the model out of its degenerate
+# thinking loop (~377s/page, empty output) is an assistant prefill closing
+# the think block (~8-23s/page, verified on all 24 eval-corpus pages
+# 2026-10-06). Same pattern as scripts/ocr_eval.py and grok-aurora-cli.
+OLLAMA_THINK_PREFILL = "<think>\n\n</think>\n\n"
+
+# Hosted OCR escalation rides AtlasCloud (owner addendum 2026-10-06): the
+# OpenAI API workspace has no credits and pi auth covers pi-side use only.
+# Same gpt-5.6-luna model the routing split named; ~$0.004/page (verified
+# live 2026-10-06).
+DEFAULT_OCR_ESCALATION_BASE_URL = "https://api.atlascloud.ai/v1"
+DEFAULT_OCR_ESCALATION_MODEL = "openai/gpt-5.6-luna"
 
 
 @dataclass
@@ -88,6 +110,8 @@ class SupernoteReader:
         zai_text_model: str | None = None,
         zai_retry_attempts: int = 4,
         zai_retry_base_delay: float = 60.0,
+        ocr_escalation_base_url: str | None = None,
+        ocr_escalation_model: str | None = None,
     ):
         """Initialize the reader.
 
@@ -108,6 +132,16 @@ class SupernoteReader:
         self.zai_text_model = zai_text_model or default_zai_text_model()
         self.zai_retry_attempts = max(1, zai_retry_attempts)
         self.zai_retry_base_delay = max(0.0, zai_retry_base_delay)
+        self.ocr_escalation_base_url = (
+            ocr_escalation_base_url
+            or os.environ.get("SUPERNOTE_OCR_ESCALATION_BASE_URL")
+            or DEFAULT_OCR_ESCALATION_BASE_URL
+        ).rstrip("/")
+        self.ocr_escalation_model = (
+            ocr_escalation_model
+            or os.environ.get("SUPERNOTE_OCR_ESCALATION_MODEL")
+            or DEFAULT_OCR_ESCALATION_MODEL
+        )
         self.anthropic_model = default_anthropic_model()
 
     @property
@@ -229,20 +263,13 @@ class SupernoteReader:
         if self.vision_backend == "zai":
             return await self._transcribe_page_zai(img_b64)
         if self.vision_backend == "ollama":
-            return await self._transcribe_page_ollama(img_b64)
+            return await self._transcribe_page_ollama_with_escalation(img_b64)
         return await self._transcribe_page_anthropic(img_b64)
 
     def _page_image_to_b64(self, page_image) -> str:
         img_buffer = BytesIO()
         page_image.save(img_buffer, format="PNG")
         return base64.b64encode(img_buffer.getvalue()).decode()
-
-    _TRANSCRIBE_PROMPT = (
-        "Transcribe this handwritten note page exactly. "
-        "Preserve checkbox markers (□ for unchecked, ☑ for checked) "
-        "and circle markers (○ for unchecked, ● for checked). "
-        "Return only the transcribed text, no commentary."
-    )
 
     async def _transcribe_page_anthropic(self, img_b64: str) -> Optional[str]:
         """Transcribe via Anthropic Claude vision API."""
@@ -261,7 +288,7 @@ class SupernoteReader:
                                 "data": img_b64,
                             },
                         },
-                        {"type": "text", "text": self._TRANSCRIBE_PROMPT},
+                        {"type": "text", "text": TRANSCRIPTION_PROMPT},
                     ],
                 }
             ],
@@ -275,9 +302,11 @@ class SupernoteReader:
             "messages": [
                 {
                     "role": "user",
-                    "content": self._TRANSCRIBE_PROMPT,
+                    "content": TRANSCRIPTION_PROMPT,
                     "images": [img_b64],
-                }
+                },
+                # Think-block prefill - see OLLAMA_THINK_PREFILL above.
+                {"role": "assistant", "content": OLLAMA_THINK_PREFILL},
             ],
             "stream": False,
         }
@@ -290,6 +319,90 @@ class SupernoteReader:
             response.raise_for_status()
             data = response.json()
             return data["message"]["content"]
+
+    async def _transcribe_page_ollama_with_escalation(
+        self, img_b64: str
+    ) -> Optional[str]:
+        """Local-first transcription with exactly-once hosted escalation.
+
+        A weak local result (>= ILLEGIBLE_ESCALATION_THRESHOLD markers, empty
+        output, or a local HTTP failure) escalates once to the hosted engine
+        through the ocr_contract policy; the better result wins. Runs the
+        sync hosted call via asyncio.to_thread so a ~35s hosted page never
+        blocks the organizer's event loop.
+        """
+        try:
+            local = await self._transcribe_page_ollama(img_b64) or ""
+        except Exception:
+            logger.warning(
+                "local ollama OCR failed; escalating to hosted", exc_info=True
+            )
+            local = ""
+        if not self._ocr_escalation_api_key():
+            if needs_escalation(local):
+                logger.warning(
+                    "weak local OCR result but hosted escalation is "
+                    "unconfigured (set ATLASCLOUD_API_KEY)"
+                )
+            return local or None
+        result = await asyncio.to_thread(
+            escalate_if_needed,
+            local,
+            lambda _local_text: self._transcribe_page_hosted_guarded(img_b64),
+        )
+        return result or None
+
+    @staticmethod
+    def _ocr_escalation_api_key() -> Optional[str]:
+        return os.environ.get("ATLASCLOUD_API_KEY") or os.environ.get(
+            "GROK_AURORA_ATLASCLOUD_API_KEY"
+        )
+
+    def _transcribe_page_hosted_guarded(self, img_b64: str) -> str:
+        try:
+            return self._transcribe_page_hosted(img_b64)
+        except Exception:
+            logger.warning(
+                "hosted OCR escalation failed; keeping local result",
+                exc_info=True,
+            )
+            return ""
+
+    def _transcribe_page_hosted(self, img_b64: str) -> str:
+        """One page through the hosted AtlasCloud vision model (sync)."""
+        api_key = self._ocr_escalation_api_key()
+        if not api_key:
+            raise RuntimeError(
+                "OCR escalation requires ATLASCLOUD_API_KEY (or "
+                "GROK_AURORA_ATLASCLOUD_API_KEY)"
+            )
+        payload = {
+            "model": self.ocr_escalation_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": TRANSCRIPTION_PROMPT},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                ],
+            }],
+            "temperature": 0,
+            "max_tokens": 4096,
+        }
+        # Cloudflare fronts AtlasCloud and 1010-blocks default python UAs
+        # on POST; the SDK-style UA is the verified shape (2026-10-06).
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "OpenAI/Python 1.54.4",
+        }
+        with httpx.Client(timeout=300.0) as client:
+            response = client.post(
+                f"{self.ocr_escalation_base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"] or ""
 
     async def _zai_chat_completion(
         self, model: str, messages: List[Dict[str, Any]], max_tokens: int
@@ -352,7 +465,7 @@ class SupernoteReader:
                             "type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{img_b64}"},
                         },
-                        {"type": "text", "text": self._TRANSCRIBE_PROMPT},
+                        {"type": "text", "text": TRANSCRIPTION_PROMPT},
                     ],
                 }
             ],
