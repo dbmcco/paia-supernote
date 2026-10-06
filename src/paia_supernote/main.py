@@ -60,9 +60,9 @@ DEFAULT_CONFIG_PATH = Path("~/.paia/supernote/config.toml").expanduser()
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "poll_interval": 60,
-    "vision_backend": "zai",
+    "vision_backend": "ollama",
     "rewrite_backend": "zai",
-    "ollama_model": "qwen2.5vl:7b",
+    "ollama_model": "qwen3-vl:8b",
     "ollama_url": "http://localhost:11434",
     "zai_api_key": None,
     "zai_base_url": default_zai_base_url(),
@@ -172,6 +172,8 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         config["vision_backend"] = env_vision_backend
     if env_rewrite_backend := os.environ.get("SUPERNOTE_REWRITE_BACKEND"):
         config["rewrite_backend"] = env_rewrite_backend
+    if env_ollama_model := os.environ.get("SUPERNOTE_OLLAMA_MODEL"):
+        config["ollama_model"] = env_ollama_model
     if env_zai_api_key := resolve_supernote_zai_api_key():
         config["zai_api_key"] = env_zai_api_key
     if env_state_db_path := os.environ.get("SUPERNOTE_STATE_DB_PATH"):

@@ -102,7 +102,7 @@ class SupernoteReader:
         self,
         anthropic_client: Optional[anthropic.AsyncAnthropic] = None,
         vision_backend: str = "anthropic",
-        ollama_model: str = "qwen2.5vl:7b",
+        ollama_model: str = "qwen3-vl:8b",
         ollama_url: str = "http://localhost:11434",
         zai_api_key: Optional[str] = None,
         zai_base_url: str | None = None,
