@@ -78,8 +78,8 @@ class TestLoadConfig:
         assert config["vision_backend"] == "zai"
         assert config["rewrite_backend"] == "zai"
         assert config["zai_api_key"] is None
-        assert config["zai_vision_model"] == "glm-4.5v"
-        assert config["zai_text_model"] == "glm-5.1"
+        assert config["zai_vision_model"] == "qwen3-vl:8b"
+        assert config["zai_text_model"] == "glm-5.3"
         assert "agent_mappings" in config
 
     def test_loads_toml_file(self, tmp_path: Path) -> None:

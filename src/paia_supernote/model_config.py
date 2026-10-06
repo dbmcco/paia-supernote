@@ -12,7 +12,7 @@ from paia_agent_runtime import (
 )
 
 LEGACY_ZAI_API_KEY_ENV = "ZAI_API_KEY"
-SUPPORTED_SUPERNOTE_PROVIDERS = frozenset({"zai", "openrouter"})
+SUPPORTED_SUPERNOTE_PROVIDERS = frozenset({"zai", "openrouter", "ollama"})
 
 
 def _supernote_route(profile: ExecutionProfile) -> ResolvedCognitionRoute:
@@ -79,12 +79,17 @@ def default_zai_text_model() -> str:
     return supernote_text_route().model
 
 
-def default_anthropic_model() -> str:
+def default_anthropic_model() -> str | None:
+    """Model for the legacy Anthropic vision backend.
+
+    Returns None when the registry no longer routes anthropic for the
+    supernote SUPERNOTE_ANTHROPIC profile (post-2026-10 routing split); the
+    legacy ``SUPERNOTE_VISION_BACKEND=anthropic`` path is then unavailable
+    and callers should use the registry vision route instead.
+    """
     route = get_cognition_registry().route_for(
         ExecutionProfile.SUPERNOTE_ANTHROPIC, service_id="supernote"
     )
     if route.provider != "anthropic":
-        raise RuntimeError(
-            f"Supernote Anthropic backend is configured with route {route.surface!r}"
-        )
+        return None
     return route.model

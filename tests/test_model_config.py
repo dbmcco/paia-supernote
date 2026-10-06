@@ -22,7 +22,7 @@ def test_supernote_text_route_resolves_to_zai_glm_baseline() -> None:
     route = supernote_text_route()
 
     assert route.provider == "zai"
-    assert route.model == "glm-5.1"
+    assert route.model == "glm-5.3"
     assert route.base_url == "https://api.z.ai/api/coding/paas/v4"
 
 
@@ -30,7 +30,7 @@ def test_default_config_uses_supernote_zai_baseline(tmp_path) -> None:
     config = load_config(config_path=tmp_path / "missing.toml")
 
     assert config["zai_base_url"] == "https://api.z.ai/api/coding/paas/v4"
-    assert config["zai_text_model"] == "glm-5.1"
+    assert config["zai_text_model"] == "glm-5.3"
 
 
 def test_resolve_supernote_zai_api_key_uses_registry_credential_env_var() -> None:
