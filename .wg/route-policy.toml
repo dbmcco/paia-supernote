@@ -1,5 +1,0 @@
-mode = "enforce"
-prohibited_prefixes = []
-conditional_providers = ["lunaroute"]
-premium_prefixes = ["kimi-coding:k3", "openai-codex"]
-require_escalation_reason = true
