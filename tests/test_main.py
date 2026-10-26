@@ -254,10 +254,10 @@ class TestLoadConfig:
         monkeypatch.delenv(supernote_zai_credential_env_var())
         monkeypatch.setenv("ZAI_API_KEY", "legacy-env-token")
         config = load_config(config_path=cfg_file)
-        # The active route is z.ai, so the legacy ZAI_API_KEY is a valid
-        # same-provider env source and, under env > file precedence, overrides
-        # the TOML value.
-        assert config["zai_api_key"] == "legacy-env-token"
+        # The active route is the lunaroute gateway (2026-10-25 cutover, 27bf26e),
+        # so the legacy ZAI_API_KEY is a cross-provider source and does NOT
+        # apply: the TOML value stands.
+        assert config["zai_api_key"] == "file-token"
 
     def test_default_config_includes_state_db_path(self, tmp_path: Path) -> None:
         config = load_config(config_path=tmp_path / "missing.toml")
