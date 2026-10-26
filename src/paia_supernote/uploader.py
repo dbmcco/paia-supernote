@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -69,6 +70,22 @@ class SupernoteUploader:
         "Application Support/com.ratta.supernote/908410628964298752/Supernote/Note"
     ).expanduser()
 
+    # --- Wedge bounds (2026-10-26 incident) ---------------------------------
+    # A stalled cloud.supernote.com response used to hang the browser-side
+    # fetch inside page.evaluate forever, holding the cross-process cloud-api
+    # lock and leaking one organizer request thread per poll until the
+    # process hit its thread ceiling (49,885 "can't start new thread").
+    # Every wait below is now bounded so a wedge fails fast and drains.
+
+    #: Browser-side fetch abort deadline in _api_call (milliseconds).
+    API_CALL_FETCH_TIMEOUT_MS = 60_000
+    #: Max seconds to wait for the cross-process cloud-api lock.
+    CLOUD_API_LOCK_TIMEOUT = 180.0
+    #: Max seconds per close/stop await when tearing down a session.
+    STOP_TIMEOUT = 15.0
+    #: Max seconds per launch/restore await when starting a session.
+    START_TIMEOUT = 30.0
+
     def __init__(self, headless: bool = True) -> None:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -78,42 +95,70 @@ class SupernoteUploader:
         self._headless = headless
 
     async def start(self) -> None:
-        """Launch browser and restore session if available."""
-        self._playwright = await async_playwright().start()
-        self.browser = await self._playwright.chromium.launch(headless=self._headless)
+        """Launch browser and restore session if available.
+
+        Each launch/restore await is bounded by START_TIMEOUT so a hung
+        Playwright transport inside a restart path cannot wedge the process
+        (and, via the recovery lock, the whole service).
+        """
+        self._playwright = await asyncio.wait_for(
+            async_playwright().start(), timeout=self.START_TIMEOUT
+        )
+        self.browser = await asyncio.wait_for(
+            self._playwright.chromium.launch(headless=self._headless),
+            timeout=self.START_TIMEOUT,
+        )
 
         if self.SESSION_FILE.exists():
-            self.context = await self.browser.new_context(
-                storage_state=str(self.SESSION_FILE)
+            self.context = await asyncio.wait_for(
+                self.browser.new_context(storage_state=str(self.SESSION_FILE)),
+                timeout=self.START_TIMEOUT,
             )
         else:
-            self.context = await self.browser.new_context()
+            self.context = await asyncio.wait_for(
+                self.browser.new_context(), timeout=self.START_TIMEOUT
+            )
 
-        self.page = await self.context.new_page()
+        self.page = await asyncio.wait_for(
+            self.context.new_page(), timeout=self.START_TIMEOUT
+        )
         await self._refresh_csrf_token()
 
     async def stop(self) -> None:
-        """Persist session and close browser. Safe to call more than once."""
+        """Persist session and close browser. Safe to call more than once.
+
+        Every teardown await is bounded by STOP_TIMEOUT: a wedged transport
+        must not make stop() (and the restart path that calls it) hang forever.
+        """
         if self.context:
             try:
                 self.SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-                await self.context.storage_state(path=str(self.SESSION_FILE))
+                await asyncio.wait_for(
+                    self.context.storage_state(path=str(self.SESSION_FILE)),
+                    timeout=self.STOP_TIMEOUT,
+                )
             except Exception:
                 pass  # context already closed (double-stop or forced shutdown)
             try:
-                await self.context.close()
+                await asyncio.wait_for(
+                    self.context.close(), timeout=self.STOP_TIMEOUT
+                )
             except Exception:
                 pass
             self.context = None
         if self.browser:
             try:
-                await self.browser.close()
+                await asyncio.wait_for(
+                    self.browser.close(), timeout=self.STOP_TIMEOUT
+                )
             except Exception:
                 pass
             self.browser = None
         if self._playwright:
             try:
-                await self._playwright.stop()
+                await asyncio.wait_for(
+                    self._playwright.stop(), timeout=self.STOP_TIMEOUT
+                )
             except Exception:
                 pass
             self._playwright = None
@@ -499,13 +544,18 @@ class SupernoteUploader:
                             'X-XSRF-TOKEN': xsrfToken,
                         },
                         body: JSON.stringify(body),
+                        // Abort on a deadline: a stalled cloud response must
+                        // never hang this evaluate (and the cloud-api lock)
+                        // forever (2026-10-26 wedge).
+                        signal: AbortSignal.timeout(%(fetch_timeout_ms)d),
                     });
                     return {
                         status: resp.status,
                         body: resp.ok ? await resp.json() : await resp.text(),
                     };
                 }
-            """,
+            """
+                % {"fetch_timeout_ms": self.API_CALL_FETCH_TIMEOUT_MS},
                 [endpoint, body],
             )
             return result  # type: ignore[return-value]
@@ -519,14 +569,35 @@ class SupernoteUploader:
 
     @asynccontextmanager
     async def _cloud_api_lock(self):
-        """Serialize Supernote Cloud API calls across service processes."""
+        """Serialize Supernote Cloud API calls across service processes.
+
+        Bounded acquisition (2026-10-26 wedge): when another process holds the
+        lock — e.g. it is wedged on a stalled cloud call — waiters used to
+        block forever. Now we retry non-blocking flock until
+        CLOUD_API_LOCK_TIMEOUT and then fail fast; the caller surfaces an
+        error instead of queueing a request thread that never drains.
+        """
         self.CLOUD_API_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
         lock_file = self.CLOUD_API_LOCK_FILE.open("a+")
+        acquired = False
         try:
-            await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_EX)
+            deadline = time.monotonic() + self.CLOUD_API_LOCK_TIMEOUT
+            while True:
+                acquired = await asyncio.to_thread(_try_flock_exclusive, lock_file.fileno())
+                if acquired:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "cloud-api lock not acquired within "
+                        f"{self.CLOUD_API_LOCK_TIMEOUT}s (another paia-supernote "
+                        f"process is likely wedged on the lock: "
+                        f"{self.CLOUD_API_LOCK_FILE})"
+                    )
+                await asyncio.sleep(0.25)
             yield
         finally:
-            await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_UN)
+            if acquired:
+                await asyncio.to_thread(_funlock, lock_file.fileno())
             lock_file.close()
 
     async def _retry_on_closed_target(self, operation):
@@ -711,6 +782,20 @@ class SupernoteUploader:
             )
         if not result["body"].get("success"):
             raise RuntimeError(f"upload/finish error: {result['body']}")
+
+
+def _try_flock_exclusive(fd: int) -> bool:
+    """Try to take an exclusive flock without blocking; False if held."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _funlock(fd: int) -> None:
+    """Release a flock taken by _try_flock_exclusive."""
+    fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def _upload_lock(target_name: str) -> asyncio.Lock:

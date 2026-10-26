@@ -1105,20 +1105,59 @@ async def _run_login() -> None:
         await uploader.stop()
 
 
+# Deadline for one organizer request riding the launcher loop. Without a
+# bound, ThreadingHTTPServer leaked one stuck thread per poll whenever the
+# launcher-loop coroutine hung, until the process hit its thread ceiling
+# (2026-10-26 incident: 49,885 "can't start new thread" errors).
+ORGANIZER_REQUEST_DEADLINE_S = 360.0
+
+
+def make_launcher_loop_runner(
+    loop: asyncio.AbstractEventLoop,
+    *,
+    timeout: float = ORGANIZER_REQUEST_DEADLINE_S,
+) -> Callable[[Any], Any]:
+    """Run launcher-loop coroutines from HTTP handler threads with a deadline."""
+
+    def run_on_launcher_loop(awaitable: Any) -> Any:
+        future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            future.cancel()  # best-effort: stop the wedged coroutine too
+            raise
+
+    return run_on_launcher_loop
+
+
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that does not traceback on client disconnects.
+
+    Pollers (loomd) that close early mid-response produced a BrokenPipeError
+    traceback per request in the organizer's stderr log (3,109 lines). Client
+    disconnects are routine, not errors; everything else still tracebacks.
+    """
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 async def _run_organizer(
     *,
     host: str,
     port: int,
     cache_dir: Path | None,
     uploader_factory: Callable[[], Any] = SupernoteUploader,
-    server_factory: Callable[..., Any] = ThreadingHTTPServer,
+    server_factory: Callable[..., Any] = QuietThreadingHTTPServer,
 ) -> None:
     uploader = uploader_factory()
     await uploader.start()
     loop = asyncio.get_running_loop()
 
-    def run_on_launcher_loop(awaitable: Any) -> Any:
-        return asyncio.run_coroutine_threadsafe(awaitable, loop).result()
+    run_on_launcher_loop = make_launcher_loop_runner(loop)
 
     server = None
     try:
