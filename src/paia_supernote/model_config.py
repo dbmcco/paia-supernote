@@ -12,7 +12,12 @@ from paia_agent_runtime import (
 )
 
 LEGACY_ZAI_API_KEY_ENV = "ZAI_API_KEY"
-SUPPORTED_SUPERNOTE_PROVIDERS = frozenset({"zai", "openrouter", "ollama"})
+# "lunaroute" added 2026-10-25 (owner "make it work" via Mgmt): the glm53_gateway
+# preset routes supernote_text through the local paia model gateway on the
+# lunaroute surface (OpenAI-compatible /chat/completions, same client shape as
+# zai). Kept alongside zai/openrouter/ollama so failback after 2026-10-29 needs
+# no code change.
+SUPPORTED_SUPERNOTE_PROVIDERS = frozenset({"zai", "openrouter", "ollama", "lunaroute"})
 
 
 def _supernote_route(profile: ExecutionProfile) -> ResolvedCognitionRoute:
