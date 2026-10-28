@@ -44,7 +44,11 @@ from .organizer_runtime import create_organizer_api
 from .organizer_server import make_organizer_handler
 from .quick_filing import notebook_name_to_tag
 from .quick_filing_service import QuickFilingService
-from .reader import build_reader
+from .reader import (
+    DEFAULT_LUNAROUTE_VISION_BASE_URL,
+    DEFAULT_LUNAROUTE_VISION_MODEL,
+    build_reader,
+)
 from .task_curator import TaskCurator
 from .tasks_sync import TasksSync
 from .uploader import (
@@ -60,10 +64,16 @@ DEFAULT_CONFIG_PATH = Path("~/.paia/supernote/config.toml").expanduser()
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "poll_interval": 60,
-    "vision_backend": "ollama",
+    # Default since 2026-10-28 (owner ruling: no more local Ollama models):
+    # OCR rides the local model-gateway's lunaroute surface (glm-5.3-vision).
+    # Rollback: SUPERNOTE_VISION_BACKEND=ollama (or vision_backend="ollama"
+    # in config.toml) restores the qwen3-vl path unchanged.
+    "vision_backend": "lunaroute",
     "rewrite_backend": "zai",
     "ollama_model": "qwen3-vl:8b",
     "ollama_url": "http://localhost:11434",
+    "lunaroute_url": DEFAULT_LUNAROUTE_VISION_BASE_URL,
+    "lunaroute_vision_model": DEFAULT_LUNAROUTE_VISION_MODEL,
     "zai_api_key": None,
     "zai_base_url": default_zai_base_url(),
     "zai_vision_model": default_zai_vision_model(),
@@ -126,6 +136,8 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
                 "rewrite_backend",
                 "ollama_model",
                 "ollama_url",
+                "lunaroute_url",
+                "lunaroute_vision_model",
                 "zai_api_key",
                 "zai_base_url",
                 "zai_vision_model",
@@ -170,6 +182,10 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         config["poll_interval"] = int(env_poll)
     if env_vision_backend := os.environ.get("SUPERNOTE_VISION_BACKEND"):
         config["vision_backend"] = env_vision_backend
+    if env_lunaroute_url := os.environ.get("SUPERNOTE_LUNAROUTE_URL"):
+        config["lunaroute_url"] = env_lunaroute_url
+    if env_lunaroute_model := os.environ.get("SUPERNOTE_LUNAROUTE_VISION_MODEL"):
+        config["lunaroute_vision_model"] = env_lunaroute_model
     if env_rewrite_backend := os.environ.get("SUPERNOTE_REWRITE_BACKEND"):
         config["rewrite_backend"] = env_rewrite_backend
     if env_ollama_model := os.environ.get("SUPERNOTE_OLLAMA_MODEL"):

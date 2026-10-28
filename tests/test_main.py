@@ -75,8 +75,9 @@ class TestLoadConfig:
         assert config["folio_url"] == "http://localhost:3512"
         assert config["work_url"] == "http://localhost:3560"
         assert config["state_db_path"].endswith("supernote-state.db")
-        assert config["vision_backend"] == "ollama"
-        assert config["ollama_model"] == "qwen3-vl:8b"
+        assert config["vision_backend"] == "lunaroute"  # gateway default since 2026-10-28
+        assert config["ollama_model"] == "qwen3-vl:8b"  # rollback backend intact
+        assert config["lunaroute_vision_model"] == "glm-5.3-vision"
         assert config["rewrite_backend"] == "zai"
         assert config["zai_api_key"] is None
         assert config["zai_vision_model"] == "qwen3-vl:8b"

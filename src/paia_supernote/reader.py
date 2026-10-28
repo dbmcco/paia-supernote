@@ -55,6 +55,36 @@ OLLAMA_THINK_PREFILL = "<think>\n\n</think>\n\n"
 DEFAULT_OCR_ESCALATION_BASE_URL = "https://api.atlascloud.ai/v1"
 DEFAULT_OCR_ESCALATION_MODEL = "openai/gpt-5.6-luna"
 
+# Lunaroute vision backend (owner ruling 2026-10-28: "we're not using local
+# ollama models anymore"). The local paia model-gateway fronts the lunaroute
+# surface (OpenAI-compatible /chat/completions). Phase-1 measurement
+# (managers/apps/briefs/2026-10-28-vision-off-ollama-result.md): glm-5.3-vision
+# OCR'd 3/3 eval-corpus pages clean, 0 [illegible] markers, 11-17.5s/page.
+# The gateway token's documented home for agent processes is
+# ~/.paia/model-gateway.env (values are never logged).
+DEFAULT_LUNAROUTE_VISION_BASE_URL = "http://127.0.0.1:8792/p/lunaroute/v1"
+DEFAULT_LUNAROUTE_VISION_MODEL = "glm-5.3-vision"
+
+
+def _lunaroute_gateway_key() -> Optional[str]:
+    """Gateway token: LUNAROUTE_API_KEY env first, then the model-gateway
+    env file (~/.paia/model-gateway.env). Values are never logged."""
+    if key := os.environ.get("LUNAROUTE_API_KEY"):
+        return key
+    try:
+        env_path = Path.home() / ".paia" / "model-gateway.env"
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            cleaned = value.strip().strip('"').strip("'")
+            if name.strip() == "LUNAROUTE_API_KEY" and cleaned:
+                return cleaned
+    except OSError:
+        return None
+    return None
+
 
 @dataclass
 class CheckboxItem:
@@ -92,6 +122,8 @@ def build_reader(config: dict) -> "SupernoteReader":
         zai_base_url=config["zai_base_url"],
         zai_vision_model=config["zai_vision_model"],
         zai_text_model=config["zai_text_model"],
+        lunaroute_url=config.get("lunaroute_url"),
+        lunaroute_vision_model=config.get("lunaroute_vision_model"),
     )
 
 
@@ -110,6 +142,8 @@ class SupernoteReader:
         zai_text_model: str | None = None,
         zai_retry_attempts: int = 4,
         zai_retry_base_delay: float = 60.0,
+        lunaroute_url: str | None = None,
+        lunaroute_vision_model: str | None = None,
         ocr_escalation_base_url: str | None = None,
         ocr_escalation_model: str | None = None,
     ):
@@ -117,15 +151,28 @@ class SupernoteReader:
 
         Args:
             anthropic_client: Optional pre-built Anthropic client (for testing).
-            vision_backend: "anthropic", "ollama", or "zai".
+            vision_backend: "anthropic", "ollama", "zai", or "lunaroute".
             ollama_model: Model name to use when vision_backend="ollama".
             ollama_url: Base URL for the Ollama API.
+            lunaroute_url: Base URL for the model-gateway lunaroute surface
+                (vision_backend="lunaroute", the default since 2026-10-28).
+            lunaroute_vision_model: Vision model name on the gateway surface.
         """
         self.page_checksums: Dict[str, str] = {}
         self._client = anthropic_client
         self.vision_backend = vision_backend
         self.ollama_model = ollama_model
         self.ollama_url = ollama_url.rstrip("/")
+        self.lunaroute_url = (
+            lunaroute_url
+            or os.environ.get("SUPERNOTE_LUNAROUTE_URL")
+            or DEFAULT_LUNAROUTE_VISION_BASE_URL
+        ).rstrip("/")
+        self.lunaroute_vision_model = (
+            lunaroute_vision_model
+            or os.environ.get("SUPERNOTE_LUNAROUTE_VISION_MODEL")
+            or DEFAULT_LUNAROUTE_VISION_MODEL
+        )
         self.zai_api_key = zai_api_key or resolve_supernote_zai_api_key()
         self.zai_base_url = (zai_base_url or default_zai_base_url()).rstrip("/")
         self.zai_vision_model = zai_vision_model or default_zai_vision_model()
@@ -262,6 +309,8 @@ class SupernoteReader:
 
         if self.vision_backend == "zai":
             return await self._transcribe_page_zai(img_b64)
+        if self.vision_backend == "lunaroute":
+            return await self._transcribe_page_lunaroute(img_b64)
         if self.vision_backend == "ollama":
             return await self._transcribe_page_ollama_with_escalation(img_b64)
         return await self._transcribe_page_anthropic(img_b64)
@@ -471,6 +520,51 @@ class SupernoteReader:
             ],
             max_tokens=2048,
         )
+
+    async def _transcribe_page_lunaroute(self, img_b64: str) -> Optional[str]:
+        """Transcribe via the local model-gateway vision model (lunaroute
+        surface, OpenAI-compatible).
+
+        The default OCR backend since 2026-10-28 (owner ruling: no more local
+        Ollama models). Same exact-transcription contract prompt as every
+        other backend; token resolves from LUNAROUTE_API_KEY or
+        ~/.paia/model-gateway.env and is never logged. No hosted escalation:
+        the gateway IS the hosted engine (the AtlasCloud escalation stays
+        wired to the ollama backend's weak-result policy)."""
+        api_key = _lunaroute_gateway_key()
+        if not api_key:
+            raise RuntimeError(
+                "lunaroute OCR requires LUNAROUTE_API_KEY (env or "
+                "~/.paia/model-gateway.env)"
+            )
+        payload = {
+            "model": self.lunaroute_vision_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                        },
+                        {"type": "text", "text": TRANSCRIPTION_PROMPT},
+                    ],
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 2048,
+            "stream": False,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.lunaroute_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+                timeout=300.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"] or None
 
     async def resolve_filing_destination(
         self,
