@@ -86,6 +86,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "linear_team_id": None,
     "state_db_path": str(Path("~/.paia/supernote/supernote-state.db").expanduser()),
     "folio_sync_notebooks": [],
+    "folio_tenant_id": "default",
     "filing_enabled": False,
     "filing_dry_run": True,
     "filing_ledger_db_path": str(
@@ -144,6 +145,7 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
                 "zai_text_model",
                 "state_db_path",
                 "folio_sync_notebooks",
+                "folio_tenant_id",
                 "cloud_change_ledger_notebooks",
                 "service_cloud_poller_enabled",
                 "service_uploader_start_mode",
@@ -198,6 +200,8 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         config["events_url"] = env_events
     if env_folio := os.environ.get("PAIA_FOLIO_URL"):
         config["folio_url"] = env_folio
+    if env_folio_tenant := os.environ.get("SUPERNOTE_FOLIO_TENANT_ID"):
+        config["folio_tenant_id"] = env_folio_tenant
     if env_work := os.environ.get("PAIA_WORK_URL"):
         config["work_url"] = env_work
     if env_linear_key := os.environ.get("LINEAR_API_KEY"):

@@ -187,3 +187,143 @@ def test_status_surfaces_backoff_capped_enrich_pages(tmp_path: Path) -> None:
 
     rendered = render_status(tmp_path / "state.db")
     assert "enrich_backoff_capped=1" in rendered
+
+
+# -- Folio upsert failure policy -------------------------------------------------
+#
+# The 2026-10-15 → 2026-10-29 incident: the Folio upsert sat outside the enrich
+# try-block, so upsert failures (typed 400 tenant_id_required, 19,531 of them)
+# surfaced as anonymous enrich_error lines — no stage, no retry_count, no
+# backoff, no cap — retrying every ~13 s forever. These tests pin the contract:
+# upsert failures get a stage-marked category (folio_upsert_<status>), the same
+# exponential backoff as enrich failures, and the same once-per-day cap.
+
+
+def _upsert_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://localhost:3520/api/folio/objects")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(
+        f"Client error '{status_code}'", request=request, response=response
+    )
+
+
+def _make_upsert_service(
+    tmp_path: Path, *, upserter, prior_failures: int = 0
+) -> tuple[EnrichService, PageStateStore]:
+    config = dict(DEFAULT_CONFIG)
+    config["state_db_path"] = str(tmp_path / "state.db")
+    store = PageStateStore(Path(config["state_db_path"]))
+    store.init_schema()
+    store.upsert_ocr_page("Quick", 13, "rev-1", "raw", "qwen3-vl:8b")
+    for _ in range(prior_failures):
+        store.mark_failed(
+            "Quick", 13, "folio_upsert_400", "x", retry_delay_seconds=0
+        )
+    mock_enricher = AsyncMock()
+    mock_enricher.enrich_page.return_value = SimpleNamespace(
+        markdown="# ok",
+        diagram={
+            "kind": "scene",
+            "scene": {"nodes": [], "edges": []},
+            "render_version": "1",
+        },
+        summary=None,
+        confidence=None,
+    )
+    service = EnrichService(
+        config=config,
+        page_state=store,
+        enricher=mock_enricher,
+        folio_upserter=upserter,
+    )
+    return service, store
+
+
+@pytest.mark.asyncio
+async def test_upsert_400_marks_folio_upsert_stage_and_backs_off(tmp_path: Path) -> None:
+    """An upsert 400 is stage-marked folio_upsert_400 and backed off 60s."""
+    failing = AsyncMock()
+    failing.side_effect = _upsert_status_error(400)
+    service, store = _make_upsert_service(tmp_path, upserter=failing)
+
+    wrote = await service.run_once()
+
+    row = store.get_page("Quick", 13)
+    assert wrote is False
+    assert row.retry_count == 1
+    assert row.last_error_stage == "folio_upsert_400"
+    assert row.last_error == "HTTPStatusError:http_error"  # typed, never free text
+    from datetime import datetime, timezone
+
+    assert row.next_retry_at is not None
+    retry_at = datetime.fromisoformat(row.next_retry_at)
+    delta = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    assert 50 < delta <= 60  # first failure: same 60s base delay as enrich
+
+
+@pytest.mark.asyncio
+async def test_upsert_network_error_marks_network_stage(tmp_path: Path) -> None:
+    """Non-HTTP upsert failures get a category stage, not a bare exception."""
+    failing = AsyncMock()
+    failing.side_effect = httpx.ConnectError("All connection attempts failed")
+    service, store = _make_upsert_service(tmp_path, upserter=failing)
+
+    wrote = await service.run_once()
+
+    row = store.get_page("Quick", 13)
+    assert wrote is False
+    assert row.retry_count == 1
+    assert row.last_error_stage == "folio_upsert_network"
+    assert row.last_error == "ConnectError:network"
+
+
+@pytest.mark.asyncio
+async def test_upsert_failure_backoff_escalates_and_caps_at_daily(
+    tmp_path: Path,
+) -> None:
+    """Repeated upsert failures ride the same exponential curve to the daily cap."""
+    failing = AsyncMock()
+    failing.side_effect = _upsert_status_error(400)
+    # retry_count == 4 before this failure → delay 60*2^5 = 960s
+    service, store = _make_upsert_service(tmp_path, upserter=failing, prior_failures=4)
+    await service.run_once()
+
+    from datetime import datetime, timezone
+
+    row = store.get_page("Quick", 13)
+    assert row.retry_count == 5
+    retry_at = datetime.fromisoformat(row.next_retry_at)
+    delta = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    assert 900 < delta <= 960
+
+    # Deep into failure: once per day, never more often (same cap as enrich).
+    service, store = _make_upsert_service(tmp_path, upserter=failing, prior_failures=30)
+    await service.run_once()
+    row = store.get_page("Quick", 13)
+    assert row.retry_count == 31
+    retry_at = datetime.fromisoformat(row.next_retry_at)
+    delta = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    assert 86000 < delta <= 86400
+
+
+@pytest.mark.asyncio
+async def test_upsert_failure_does_not_re_run_enrichment_in_same_attempt(
+    tmp_path: Path,
+) -> None:
+    """Enrichment succeeded; only the upsert failed — the page is marked, not lost.
+
+    The enricher must have run exactly once for this attempt and the page must
+    stay dirty (dirty_for_enrichment still true via next_retry_at scheduling).
+    """
+    failing = AsyncMock()
+    failing.side_effect = _upsert_status_error(400)
+    service, store = _make_upsert_service(tmp_path, upserter=failing)
+
+    wrote = await service.run_once()
+
+    assert wrote is False
+    service.enricher.enrich_page.assert_awaited_once()
+    row = store.get_page("Quick", 13)
+    assert row.dirty_for_enrichment is True  # not marked enriched
+    assert row.last_folio_object_id is None
+    assert row.last_enriched_revision is None

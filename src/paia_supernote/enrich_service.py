@@ -61,6 +61,20 @@ def enrich_backoff_cap_retry_count() -> int:
     return count
 
 
+def folio_upsert_error_stage(exc: BaseException) -> str:
+    """Stage-marked category for Folio upsert failures: ``folio_upsert_<status>``.
+
+    HTTP status failures carry the status (e.g. ``folio_upsert_400`` for the
+    covenant's typed tenant_id_required); anything else carries the same
+    fixed category vocabulary as the enrich path (network, timeout, ...).
+    Never free text — the stage is queryable state, and the 2026-10-15 →
+    2026-10-29 incident (19,531 anonymous 400s) is what happens without it.
+    """
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return f"folio_upsert_{exc.response.status_code}"
+    return f"folio_upsert_{categorize_enrich_exception(exc)}"
+
+
 class EnrichService:
     def __init__(
         self,
@@ -137,15 +151,40 @@ class EnrichService:
                 page=row.page,
             )
             return False
-        result = await self.folio_client(
-            notebook=row.notebook,
-            page=row.page,
-            source_revision=row.source_revision,
-            raw_text=row.raw_text,
-            markdown=enriched.markdown,
-            diagram=enriched.diagram,
-            folio_url=self.config["folio_url"],
-        )
+        try:
+            result = await self.folio_client(
+                notebook=row.notebook,
+                page=row.page,
+                source_revision=row.source_revision,
+                raw_text=row.raw_text,
+                markdown=enriched.markdown,
+                diagram=enriched.diagram,
+                tenant_id=self.config["folio_tenant_id"],
+                folio_url=self.config["folio_url"],
+            )
+        except Exception as exc:
+            # Upsert failures get the same treatment as enrich failures:
+            # stage-marked category, exponential backoff, once-per-day cap —
+            # never an anonymous exception looping every ~13 s forever
+            # (the 2026-10-15 → 2026-10-29 400-tenant_id_required incident).
+            stage = folio_upsert_error_stage(exc)
+            retry_delay = enrich_retry_delay_seconds(current.retry_count)
+            self.page_state.mark_failed(
+                notebook=row.notebook,
+                page=row.page,
+                stage=stage,
+                error=format_enrich_error(exc),
+                retry_delay_seconds=retry_delay,
+            )
+            log.error(
+                "folio_upsert_failed",
+                notebook=row.notebook,
+                page=row.page,
+                stage=stage,
+                error=format_enrich_error(exc),
+                retry_delay_seconds=retry_delay,
+            )
+            return False
         self.page_state.mark_enriched(
             notebook=row.notebook,
             page=row.page,

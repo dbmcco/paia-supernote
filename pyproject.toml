@@ -53,10 +53,11 @@ python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "-m", "not integration",
+    "-m", "not integration and not live",
 ]
 markers = [
     "integration: marks tests as integration tests (can be slow, require external dependencies)",
+    "live: marks tests that hit a LIVE service (run explicitly with -m live; skipped by default)",
 ]
 
 [tool.uv.sources]

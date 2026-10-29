@@ -138,6 +138,37 @@ class TestLoadConfig:
         config = load_config(config_path=cfg_file)
         assert config["events_url"] == "http://env-events:2222"
 
+    def test_folio_tenant_id_defaults_to_default_tenant(self, tmp_path: Path) -> None:
+        """folio_tenant_id must exist and default to 'default'.
+
+        That is the tenant the existing supernote-page corpus actually lives
+        in (verified live 2026-10-29: all 38 supernote/ objects are tenant
+        'default', the pre-covenant silent default) — any other value would
+        fork the corpus into a second tenant instead of patching by path.
+        """
+        with patch(
+            "paia_supernote.main.resolve_supernote_zai_api_key", return_value=None
+        ):
+            config = load_config(config_path=tmp_path / "nonexistent.toml")
+        assert config["folio_tenant_id"] == "default"
+
+    def test_folio_tenant_id_from_toml_and_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg_file = tmp_path / "config.toml"
+        cfg_file.write_text(
+            textwrap.dedent("""\
+            [supernote]
+            folio_tenant_id = "personal"
+            """)
+        )
+        config = load_config(config_path=cfg_file)
+        assert config["folio_tenant_id"] == "personal"
+
+        monkeypatch.setenv("SUPERNOTE_FOLIO_TENANT_ID", "braydon")
+        config = load_config(config_path=cfg_file)
+        assert config["folio_tenant_id"] == "braydon"
+
     def test_env_var_poll_interval(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

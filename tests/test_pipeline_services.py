@@ -108,6 +108,48 @@ async def test_enrich_service_discards_stale_revision_before_folio_write(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_enrich_service_passes_configured_folio_tenant_on_success(
+    tmp_path: Path,
+) -> None:
+    """Success path: upsert is called with the configured tenant_id and the
+    page is marked enriched with the returned Folio object id."""
+    config = dict(DEFAULT_CONFIG)
+    config["state_db_path"] = str(tmp_path / "state.db")
+    config["folio_tenant_id"] = "default"
+    store = PageStateStore(Path(config["state_db_path"]))
+    store.init_schema()
+    store.upsert_ocr_page("Quick", 13, "rev-1", "raw v1", "glm-4.5v")
+
+    mock_enricher = AsyncMock()
+    mock_enricher.enrich_page.return_value = SimpleNamespace(
+        markdown="# ok",
+        diagram={
+            "kind": "scene",
+            "scene": {"nodes": [], "edges": []},
+            "render_version": "1",
+        },
+        summary=None,
+        confidence=None,
+    )
+    mock_folio = AsyncMock(return_value={"id": "obj-42", "tenant_id": "default"})
+
+    service = EnrichService(
+        config=config,
+        page_state=store,
+        enricher=mock_enricher,
+        folio_upserter=mock_folio,
+    )
+    wrote = await service.run_once()
+
+    assert wrote is True
+    assert mock_folio.await_args.kwargs["tenant_id"] == "default"
+    row = store.get_page("Quick", 13)
+    assert row.dirty_for_enrichment is False
+    assert row.last_folio_object_id == "obj-42"
+    assert row.last_error_stage is None
+
+
+@pytest.mark.asyncio
 async def test_enrich_service_marks_retry_state_on_failure(tmp_path: Path) -> None:
     config = dict(DEFAULT_CONFIG)
     config["state_db_path"] = str(tmp_path / "state.db")

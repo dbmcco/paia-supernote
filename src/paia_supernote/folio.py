@@ -89,17 +89,22 @@ async def upsert_supernote_page(
     raw_text: str,
     markdown: str,
     diagram: dict[str, Any],
+    tenant_id: str,
     folio_url: str = _DEFAULT_FOLIO_URL,
 ) -> dict[str, Any]:
     """Upsert a Supernote page object in Folio by stable path.
 
     Creates the object if it does not exist; patches it in place if it does.
+    ``tenant_id`` is required per Folio's agent-tenant covenant
+    (docs/AGENT-TENANT-COVENANT.md): writes never silently default — a
+    tenant-less payload gets a typed 400 ``tenant_id_required``.
     """
     payload = {
         "title": f"{notebook} \u2014 page {page}",
         "path": f"supernote/{notebook}/page-{page}",
         "content": markdown,
         "object_type": "supernote-page",
+        "tenant_id": tenant_id,
         "properties": {
             "raw_text": raw_text,
             "diagram": diagram,

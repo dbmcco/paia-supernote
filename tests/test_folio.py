@@ -162,8 +162,13 @@ class TestUpsertSupernotePage:
                 source_revision="rev-2",
                 raw_text="raw",
                 markdown="# Plan",
-                diagram={"kind": "scene", "scene": {"nodes": [], "edges": []}, "render_version": "1"},
+                diagram={
+                    "kind": "scene",
+                    "scene": {"nodes": [], "edges": []},
+                    "render_version": "1",
+                },
                 folio_url="http://localhost:8000",
+                tenant_id="default",
             )
 
             body = mock_http.post.call_args.kwargs["json"]
@@ -173,4 +178,42 @@ class TestUpsertSupernotePage:
             assert body["properties"]["raw_text"] == "raw"
             assert body["properties"]["diagram"]["kind"] == "scene"
             assert body["properties"]["source"]["source_revision"] == "rev-2"
+
+    @pytest.mark.asyncio
+    async def test_upsert_supernote_page_posts_tenant_id(self) -> None:
+        """The upsert carries an explicit tenant_id per Folio's agent-tenant covenant.
+
+        Folio commit d5963e8 (2026-09-27) made POST /api/folio/objects a
+        gated write: tenant-less payloads get a typed 400 tenant_id_required.
+        This test pins the contract on Supernote's side so a payload-shape
+        drift fails loudly here instead of as silent 400s in production
+        (the 2026-10-15 → 2026-10-29 incident: 19,531 unnoticed 400s).
+        """
+        with patch("paia_supernote.folio.httpx.AsyncClient") as mock_cls:
+            mock_http = AsyncMock()
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"id": "obj-1"}
+            mock_http.post.return_value = mock_resp
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await upsert_supernote_page(
+                notebook="Quick",
+                page=19,
+                source_revision="rev-2",
+                raw_text="raw",
+                markdown="# Plan",
+                diagram={
+                    "kind": "scene",
+                    "scene": {"nodes": [], "edges": []},
+                    "render_version": "1",
+                },
+                folio_url="http://localhost:8000",
+                tenant_id="default",
+            )
+
+            body = mock_http.post.call_args.kwargs["json"]
+            assert body["tenant_id"] == "default"
+            assert result == {"id": "obj-1"}
             assert result["id"] == "obj-1"
