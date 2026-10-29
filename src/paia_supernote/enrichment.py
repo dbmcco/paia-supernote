@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 
@@ -12,6 +13,24 @@ from .model_config import (
     default_zai_text_model,
     resolve_supernote_zai_api_key,
 )
+
+# The OCR reader path already allows 600s for the same gateway model family;
+# enrichment used to hard-fail at 60s, which is shorter than glm-5.3 reasoning
+# latency on real page content — the root cause of the 2026-08-10 empty-error
+# storm (httpx.ReadTimeout('') stringifies to '').
+ENRICH_TIMEOUT_SECONDS = 300.0
+# A 429 means retry: bounded in-call retries honoring Retry-After, then raise.
+MAX_429_RETRIES = 2
+DEFAULT_RETRY_AFTER_SECONDS = 2.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """Honor the Retry-After header when present; otherwise a small default."""
+    value = response.headers.get("Retry-After")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RETRY_AFTER_SECONDS
 
 
 @dataclass(slots=True)
@@ -48,22 +67,39 @@ class SupernoteEnricher:
             "or {\"kind\":\"none\",\"render_version\":\"1\",\"summary\":null,\"confidence\":null}."
         )
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self.zai_base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.zai_api_key}"},
-                json={
-                    "model": self.zai_text_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": f"{prompt}\n\nNotebook: {notebook}\nPage: {page}\n\n{raw_text}",
-                        }
-                    ],
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=60.0,
-            )
-            resp.raise_for_status()
+            resp = None
+            for attempt in range(MAX_429_RETRIES + 1):
+                resp = await client.post(
+                    f"{self.zai_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.zai_api_key}"},
+                    json={
+                        "model": self.zai_text_model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": f"{prompt}\n\nNotebook: {notebook}\nPage: {page}\n\n{raw_text}",
+                            }
+                        ],
+                        "response_format": {"type": "json_object"},
+                        # Mirror the reader's contract: non-openrouter chat
+                        # surfaces get thinking disabled so reasoning latency
+                        # stays bounded.
+                        "thinking": {"type": "disabled"},
+                    },
+                    timeout=ENRICH_TIMEOUT_SECONDS,
+                )
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    is_rate_limited = (
+                        exc.response is not None and exc.response.status_code == 429
+                    )
+                    if is_rate_limited and attempt < MAX_429_RETRIES:
+                        await asyncio.sleep(_retry_after_seconds(resp))
+                        continue
+                    raise
+                break
+            assert resp is not None
             payload = json.loads(resp.json()["choices"][0]["message"]["content"])
         raw_diagram = payload.get("diagram")
         if isinstance(raw_diagram, dict):

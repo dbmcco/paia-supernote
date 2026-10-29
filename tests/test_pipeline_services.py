@@ -130,7 +130,7 @@ async def test_enrich_service_marks_retry_state_on_failure(tmp_path: Path) -> No
     assert wrote is False
     assert row.retry_count == 1
     assert row.last_error_stage == "enrich"
-    assert row.last_error == "boom"
+    assert row.last_error == "RuntimeError:unknown"  # typed category, never free text
 
 
 @pytest.mark.asyncio

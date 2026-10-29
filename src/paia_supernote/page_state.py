@@ -342,6 +342,25 @@ class PageStateStore:
             ).fetchone()
         return row[0] if row else 0
 
+    def backoff_capped_count(self, stage: str, *, min_retry_count: int) -> int:
+        """Pages in ``stage`` whose retry_count has reached the backoff cap.
+
+        The health surface (``render_status``) uses this to make pages that
+        are now retried at most once a day visible instead of hidden in a
+        per-minute failure loop.
+        """
+        with connect(self._db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM page_state
+                WHERE last_error IS NOT NULL
+                  AND last_error_stage = ?
+                  AND retry_count >= ?
+                """,
+                (stage, min_retry_count),
+            ).fetchone()
+        return row[0] if row else 0
+
     def error_count(self, stage: str | None = None) -> int:
         with connect(self._db_path) as conn:
             if stage:

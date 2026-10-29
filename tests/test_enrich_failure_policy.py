@@ -122,7 +122,10 @@ async def test_run_once_backs_off_exponentially_with_retry_count(tmp_path: Path)
     store.init_schema()
     store.upsert_ocr_page("Quick", 12, "rev-1", "raw", "qwen3-vl:8b")
     for _ in range(4):  # retry_count == 4 before this failure
-        store.mark_failed("Quick", 12, "enrich", "x", retry_delay_seconds=60)
+        # delay=0 keeps the page *due* — next_dirty_page's next_retry_at gate
+        # is the backoff mechanism under test indirectly; a future-dated setup
+        # row would (correctly) never be selected by run_once.
+        store.mark_failed("Quick", 12, "enrich", "x", retry_delay_seconds=0)
     before = store.get_page("Quick", 12)
     assert before.retry_count == 4
 
@@ -152,7 +155,8 @@ async def test_run_once_caps_backoff_at_once_per_day(tmp_path: Path) -> None:
     store.init_schema()
     store.upsert_ocr_page("Quick", 12, "rev-1", "raw", "qwen3-vl:8b")
     for _ in range(30):
-        store.mark_failed("Quick", 12, "enrich", "x", retry_delay_seconds=60)
+        # delay=0: prior failures are aged/due (see exponential-backoff test).
+        store.mark_failed("Quick", 12, "enrich", "x", retry_delay_seconds=0)
 
     mock_enricher = AsyncMock()
     mock_enricher.enrich_page.side_effect = httpx.ReadTimeout("")

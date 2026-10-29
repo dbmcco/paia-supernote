@@ -1034,8 +1034,14 @@ def render_status(db_path: Path) -> str:
     dirty = store.dirty_count()
     ocr_errors = store.error_count("ocr")
     enrich_errors = store.error_count("enrich")
+    from .enrich_service import enrich_backoff_cap_retry_count
+
+    enrich_backoff_capped = store.backoff_capped_count(
+        "enrich", min_retry_count=enrich_backoff_cap_retry_count()
+    )
     return (
         f"dirty_pages={dirty}  ocr_errors={ocr_errors}  enrich_errors={enrich_errors}"
+        f"  enrich_backoff_capped={enrich_backoff_capped}"
     )
 
 
