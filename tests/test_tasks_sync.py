@@ -106,3 +106,145 @@ async def test_poll_once_skips_on_linear_error() -> None:
     with patch.object(sync._linear, "execute", new_callable=AsyncMock) as mock_execute:
         mock_execute.return_value = {"status": "error", "error": "API key invalid"}
         await sync._poll_once()
+
+
+def _not_authorized_result() -> dict:
+    """Shape returned by LinearTool.execute when the API key is missing."""
+    return {
+        "status": "error",
+        "success": False,
+        "tool": "linear",
+        "error_code": "NOT_AUTHORIZED",
+        "message": "LINEAR_API_KEY not configured.",
+        "retryable": False,
+        "next_step": "stop",
+        "action": "list_issues",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_failure_logs_real_cause_and_code() -> None:
+    """A failed fetch must log the repair message/error_code, never a null error."""
+    import structlog
+
+    sync = TasksSync(
+        uploader=MagicMock(),
+        writer=MagicMock(),
+        linear_api_key=None,
+        linear_team_key="LFW",
+    )
+    with patch.object(
+        sync._linear, "execute", new_callable=AsyncMock
+    ) as mock_execute:
+        mock_execute.return_value = _not_authorized_result()
+        with structlog.testing.capture_logs() as logs:
+            await sync._poll_once()
+
+    failed = [e for e in logs if e["event"] == "tasks_fetch_failed"]
+    assert len(failed) == 1
+    assert failed[0]["error"] == "LINEAR_API_KEY not configured."
+    assert failed[0]["error_code"] == "NOT_AUTHORIZED"
+    assert failed[0]["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_failure_backs_off_and_caps() -> None:
+    """Non-retryable failures double the poll interval up to MAX_POLL_INTERVAL."""
+    sync = TasksSync(
+        uploader=MagicMock(),
+        writer=MagicMock(),
+        linear_api_key=None,
+        linear_team_key="LFW",
+        poll_interval=60,
+    )
+    assert sync._effective_interval == 60
+    with patch.object(
+        sync._linear, "execute", new_callable=AsyncMock
+    ) as mock_execute:
+        mock_execute.return_value = _not_authorized_result()
+        await sync._poll_once()
+        assert sync._effective_interval == 120
+        await sync._poll_once()
+        assert sync._effective_interval == 240
+        for _ in range(20):
+            await sync._poll_once()
+        assert sync._effective_interval == sync.MAX_POLL_INTERVAL
+
+
+@pytest.mark.asyncio
+async def test_retryable_failure_keeps_base_interval() -> None:
+    """Transient (retryable) errors keep the configured cadence."""
+    sync = TasksSync(
+        uploader=MagicMock(),
+        writer=MagicMock(),
+        linear_api_key="k",
+        linear_team_key="LFW",
+        poll_interval=60,
+    )
+    transient = {
+        "status": "error",
+        "error_code": "TRANSPORT_ERROR",
+        "message": "connect timeout",
+        "retryable": True,
+    }
+    with patch.object(
+        sync._linear, "execute", new_callable=AsyncMock
+    ) as mock_execute:
+        mock_execute.return_value = transient
+        await sync._poll_once()
+        await sync._poll_once()
+    assert sync._effective_interval == 60
+
+
+@pytest.mark.asyncio
+async def test_repeated_failures_log_at_most_once_per_hour() -> None:
+    """125k identical failures must not produce 125k log lines."""
+    import structlog
+
+    sync = TasksSync(
+        uploader=MagicMock(),
+        writer=MagicMock(),
+        linear_api_key=None,
+        linear_team_key="LFW",
+    )
+    with patch.object(
+        sync._linear, "execute", new_callable=AsyncMock
+    ) as mock_execute:
+        mock_execute.return_value = _not_authorized_result()
+        with structlog.testing.capture_logs() as logs:
+            for _ in range(100):
+                await sync._poll_once()
+
+    failed = [e for e in logs if e["event"] == "tasks_fetch_failed"]
+    assert len(failed) == 1, f"expected 1 log line, got {len(failed)}"
+
+
+@pytest.mark.asyncio
+async def test_recovery_logs_once_and_resets_interval() -> None:
+    import structlog
+
+    sync = TasksSync(
+        uploader=MagicMock(),
+        writer=MagicMock(),
+        linear_api_key=None,
+        linear_team_key="LFW",
+        poll_interval=60,
+    )
+    with patch.object(
+        sync._linear, "execute", new_callable=AsyncMock
+    ) as mock_execute:
+        mock_execute.return_value = _not_authorized_result()
+        with structlog.testing.capture_logs() as logs:
+            await sync._poll_once()
+        assert sync._effective_interval > 60
+
+        mock_execute.return_value = {"status": "ok", "issues": []}
+        with patch.object(sync, "_rebuild_tasks_note", new_callable=AsyncMock):
+            with structlog.testing.capture_logs() as logs:
+                await sync._poll_once()
+
+    recovered = [e for e in logs if e["event"] == "tasks_fetch_recovered"]
+    assert len(recovered) == 1
+    assert recovered[0]["suppressed_failures"] == 1
+    assert sync._effective_interval == 60
+    assert sync._consecutive_failures == 0

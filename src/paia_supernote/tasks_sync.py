@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -29,6 +30,11 @@ class TasksSync:
     """
 
     DEFAULT_POLL_INTERVAL = 60
+    # Non-retryable failures (e.g. missing credential) back off exponentially,
+    # capped at one poll attempt per hour instead of retrying forever.
+    MAX_POLL_INTERVAL = 3600
+    # A repeated identical failure logs at most once per hour, not once per poll.
+    FAILURE_LOG_INTERVAL = 3600.0
 
     def __init__(
         self,
@@ -44,6 +50,9 @@ class TasksSync:
         self._linear = LinearTool(api_key=linear_api_key, team_id=linear_team_id)
         self._linear_team_key = linear_team_key
         self._poll_interval = poll_interval
+        self._effective_interval = poll_interval
+        self._consecutive_failures = 0
+        self._last_failure_log_ts: Optional[float] = None
         self._issue_hash: str = ""
         self._task: Optional[asyncio.Task] = None
         self._running = False
@@ -70,7 +79,7 @@ class TasksSync:
                 await self._poll_once()
             except Exception as exc:
                 log.error("tasks_sync_error", error=str(exc))
-            await asyncio.sleep(self._poll_interval)
+            await asyncio.sleep(self._effective_interval)
 
     async def _poll_once(self) -> None:
         result = await self._linear.execute(
@@ -80,8 +89,10 @@ class TasksSync:
         )
 
         if result.get("status") != "ok":
-            log.warning("tasks_fetch_failed", error=result.get("error"))
+            self._register_fetch_failure(result)
             return
+
+        self._register_fetch_success()
 
         issues: List[Dict[str, Any]] = result.get("issues", [])
 
@@ -92,6 +103,47 @@ class TasksSync:
 
         log.info("tasks_changed", count=len(issues))
         await self._rebuild_tasks_note(issues)
+
+    def _register_fetch_failure(self, result: Dict[str, Any]) -> None:
+        """Record a failed fetch: back off if hopeless, throttle the logging."""
+        self._consecutive_failures += 1
+        retryable = bool(result.get("retryable", True))
+        if retryable:
+            # Transient error: keep the configured cadence.
+            self._effective_interval = self._poll_interval
+        else:
+            # Hopeless error (bad/missing credential, schema drift): stop
+            # hammering Linear and the log every poll cycle.
+            self._effective_interval = min(
+                self._effective_interval * 2, self.MAX_POLL_INTERVAL
+            )
+
+        now = time.monotonic()
+        first = self._consecutive_failures == 1
+        due = (
+            self._last_failure_log_ts is None
+            or (now - self._last_failure_log_ts) >= self.FAILURE_LOG_INTERVAL
+        )
+        if first or due:
+            log.warning(
+                "tasks_fetch_failed",
+                error=result.get("error") or result.get("message"),
+                error_code=result.get("error_code"),
+                retryable=retryable,
+                consecutive_failures=self._consecutive_failures,
+                next_poll_seconds=self._effective_interval,
+            )
+            self._last_failure_log_ts = now
+
+    def _register_fetch_success(self) -> None:
+        if self._consecutive_failures:
+            log.info(
+                "tasks_fetch_recovered",
+                suppressed_failures=self._consecutive_failures,
+            )
+        self._consecutive_failures = 0
+        self._effective_interval = self._poll_interval
+        self._last_failure_log_ts = None
 
     async def _rebuild_tasks_note(
         self, issues: List[Dict[str, Any]]
