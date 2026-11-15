@@ -2,6 +2,11 @@
 
 Uses the Supernote Partner app local sync folder (FSEvents) when available,
 falling back to cloud polling when not. The local path requires no auth.
+
+The runner writes its own lifecycle to the one service log (start / output / alive
+/ finish / error, see ``svc_log``), because ``svc-wrap``'s start and finish bracket a
+daemon that runs for days and a silent window inside it is indistinguishable from a
+real stop (task apps/services-bug-supernote-ocr-started-at-08-51-b).
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ from typing import Any, Optional
 
 import structlog
 
-from . import blank_cap, retry_sweep
+from . import blank_cap, retry_sweep, svc_log
 from .cloud_change_ledger import (
     CHANGE_ADDED,
     CHANGE_UPDATED,
@@ -44,9 +49,13 @@ class IngestService:
         reader: SupernoteReader | None = None,
         uploader: SupernoteUploader | None = None,
         cloud_poller: CloudPoller | None = None,
+        service_log: svc_log.ServiceLog | None = None,
     ) -> None:
         from .main import load_config
         self.config = config or load_config()
+        # Best-effort: every call in svc_log returns False rather than raising, so a
+        # broken mgmt can never take an ingest down with it.
+        self._svc_log = service_log if service_log is not None else svc_log.ServiceLog()
         self.reader = reader or build_reader(self.config)
         self.events = EventsClient(base_url=self.config["events_url"])
         state_db_path = Path(self.config["state_db_path"])
@@ -76,6 +85,17 @@ class IngestService:
         )
         self._retry_stall_announced: tuple[str, ...] = ()
         self._retry_sweep_task: asyncio.Task | None = None
+
+        # Heartbeat: one ``alive`` line per interval while a run is in progress, so a
+        # long ingest never looks silent and a stopped one quickly does.
+        self._alive_interval_seconds = float(
+            self.config.get(
+                "service_log_alive_interval_seconds",
+                self._svc_log.alive_interval,
+            )
+        )
+        self._alive_task: asyncio.Task | None = None
+        self._pages_ocr_done = 0
 
         # Back-fill cost guard: when set, _on_cloud_note_changed caps total OCR'd
         # pages across an on-demand ingest_once run and aborts cleanly on overflow.
@@ -287,9 +307,15 @@ class IngestService:
         into resumable, incremental progress. ``read_pages_resilient`` still
         isolates per-page failures within each single-page call.
         """
+        if not pages:
+            return []
+        # A batch is a job, and the log says so: start names the batch, one output
+        # line per page says how much is done, finish closes it. A batch that never
+        # finishes is therefore visible as a missing finish, not as silence.
+        self._svc_log.start(f"OCR batch {notebook_name} pages={len(pages)}")
         results: list = []
         terminal_blanks: list[dict] = []
-        for page_index in pages:
+        for done, page_index in enumerate(pages, start=1):
             ocr_results, ocr_errors = await self.reader.read_pages_resilient(
                 note_bytes, notebook_name, pages=[page_index]
             )
@@ -303,8 +329,15 @@ class IngestService:
                 )
             )
             results.extend(ocr_results)
+            self._pages_ocr_done += 1
+            # Per-page progress: at ~90s a page this is also the line that keeps a
+            # long batch off the monitor's silent list.
+            self._svc_log.output(
+                f"{notebook_name} page {page_index} done ({done}/{len(pages)})"
+            )
         if terminal_blanks:
             await self.events.publish_ocr_blank_terminal(entries=terminal_blanks)
+        self._svc_log.finish(f"OCR batch {notebook_name}: {len(results)} pages")
         return results
 
     def _persist_ocr_outcome(
@@ -452,6 +485,8 @@ class IngestService:
 
     async def start(self) -> None:
         log.info("ingest_service_starting")
+        self._svc_log.start("ingest service starting")
+        self._alive_task = asyncio.create_task(self._alive_loop())
         await self.events.start()
         try:
             if self._partner_sync_path_available():
@@ -463,7 +498,16 @@ class IngestService:
             else:
                 log.info("ingest_using_cloud_poller")
                 await self._run_with_cloud_poller()
+        except Exception as exc:  # noqa: BLE001 - announced, then re-raised
+            self._svc_log.error(
+                f"ingest service failed: {type(exc).__name__}: {exc}", exit_code=1
+            )
+            raise
         finally:
+            await self._stop_alive_loop()
+            self._svc_log.finish(
+                f"ingest service stopped after {self._pages_ocr_done} pages run"
+            )
             await self.events.stop()
 
     async def ingest_once(
@@ -494,6 +538,8 @@ class IngestService:
         self._backfill_budget = max_pages
         self.backfill_aborted = False
         self.backfill_estimate = {}
+        self._pages_ocr_done = 0
+        self._svc_log.start("ingest --once starting")
         await self.events.start()
         try:
             uploader = self._uploader or SupernoteUploader()
@@ -529,6 +575,9 @@ class IngestService:
                     await uploader.stop()
         finally:
             self._backfill_budget = None
+            self._svc_log.finish(
+                f"ingest --once stopped after {self._pages_ocr_done} pages run"
+            )
             await self.events.stop()
 
     async def _run_with_local_watcher(self) -> None:
@@ -626,6 +675,10 @@ class IngestService:
                     notebook=notebook_name,
                     error=str(exc),
                 )
+                self._svc_log.error(
+                    f"retry sweep download failed for {notebook_name}: {exc}",
+                    exit_code=1,
+                )
                 continue
             try:
                 await self._ingest_quiet_notebook(notebook_name, note_bytes)
@@ -636,8 +689,17 @@ class IngestService:
                     notebook=notebook_name,
                     error=str(exc),
                 )
+                self._svc_log.error(
+                    f"retry sweep failed for {notebook_name}: {exc}", exit_code=1
+                )
 
         await self._announce_retry_state(still_pending, sweep_errors)
+        # One line per pass, even when every retry failed: a sweep that ran and did
+        # nothing is progress the monitor can see, not silence.
+        self._svc_log.output(
+            f"retry sweep: {len(due)} due, "
+            f"{len(due) - len(sweep_errors)} notebooks swept"
+        )
         return due
 
     async def _download_for_sweep(self, notebook_name: str) -> bytes:
@@ -725,6 +787,29 @@ class IngestService:
                 await self.retry_sweep_once()
             except Exception as exc:  # noqa: BLE001 - a sweep must not kill ingest
                 log.error("ocr_retry_sweep_error", error=str(exc))
+                self._svc_log.error(f"retry sweep error: {exc}", exit_code=1)
+
+    async def _alive_loop(self) -> None:
+        """One ``alive`` line per interval, for as long as the run is in progress."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=max(self._alive_interval_seconds, 0.001),
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            self._svc_log.alive(f"ingest running, {self._pages_ocr_done} pages run")
+
+    async def _stop_alive_loop(self) -> None:
+        task = self._alive_task
+        self._alive_task = None
+        if task is None:
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
 
     async def _wait_until_shutdown_or_poller_exit(self) -> None:
         if self._cloud_poller is None:
