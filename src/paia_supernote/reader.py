@@ -931,6 +931,13 @@ class SupernoteReader:
         on one page does not discard the pages already read; failed pages are
         reported so the caller can record them for retry instead of losing the
         whole batch (which is what read_pages does on a single raise).
+
+        Every requested page is accounted for, because a page that is asked for and
+        answered with nothing is worse than a page that fails: the caller keeps its
+        retry claim, the page stays pending, and the recorded error stays frozen at
+        whatever failed earlier (Mgmt page 6 sat that way from 13 November, its alarm
+        still carrying that night's 504). So a request outside the notebook's page
+        count, and a page whose transcription comes back empty, are both named here.
         """
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".note")
         try:
@@ -944,6 +951,10 @@ class SupernoteReader:
             errors: dict[int, str] = {}
             for page_num in pages:
                 if page_num < 0 or page_num >= total:
+                    errors[page_num] = (
+                        f"page {page_num} is outside this notebook's {total} pages, "
+                        "so there is nothing to read for it"
+                    )
                     continue
                 try:
                     result = await self._build_read_result(
@@ -952,8 +963,14 @@ class SupernoteReader:
                 except Exception as exc:  # isolate per-page failure
                     errors[page_num] = str(exc) or exc.__class__.__name__
                     continue
-                if result is not None:
-                    results.append(result)
+                if result is None:
+                    errors[page_num] = (
+                        f"page {page_num} produced no text: the transcription "
+                        "came back empty, so the page is blank or the image did not "
+                        "reach the model"
+                    )
+                    continue
+                results.append(result)
             return results, errors
         finally:
             os.unlink(tmp_path)
