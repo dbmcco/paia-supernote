@@ -286,6 +286,36 @@ class EventsClient:
             occurred_at=datetime.now(timezone.utc),
         )
 
+    async def publish_ocr_blank_terminal(self, *, entries: list[dict]) -> None:
+        """Announce that a blank page has been given up on, once per content.
+
+        ``supernote.ocr_retry.blank`` is the terminal counterpart of the stall
+        alarm: a page that produced no text for its last allowed attempt stops
+        being retried, so this is the one event that says the lane has finished
+        with it and why (item apps-supernote-ocr-silent-stop, residual call).
+
+        The dedupe key is the page plus the revision it was blank at, so the same
+        terminal page is announced once even across restarts, while new ink on
+        that page (a new revision) is a new decision and is never suppressed.
+        """
+        identity = ",".join(
+            sorted(
+                f"{e.get('notebook')}:{e.get('page')}@{e.get('source_revision')}"
+                for e in entries
+            )
+        )
+        await self._publish(
+            event_type="supernote.ocr_retry.blank",
+            payload={
+                "schema_version": "supernote-ocr-blank-v1",
+                "terminal": True,
+                "count": len(entries),
+                "entries": entries,
+            },
+            dedupe_key=f"supernote.ocr_retry:blank:{identity}",
+            occurred_at=datetime.now(timezone.utc),
+        )
+
     async def publish_write_completed(
         self,
         *,

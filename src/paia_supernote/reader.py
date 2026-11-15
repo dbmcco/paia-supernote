@@ -23,6 +23,7 @@ import httpx
 import supernotelib
 from supernotelib.converter import ImageConverter
 
+from . import blank_cap
 from .model_config import (
     default_anthropic_model,
     default_zai_base_url,
@@ -964,11 +965,7 @@ class SupernoteReader:
                     errors[page_num] = str(exc) or exc.__class__.__name__
                     continue
                 if result is None:
-                    errors[page_num] = (
-                        f"page {page_num} produced no text: the transcription "
-                        "came back empty, so the page is blank or the image did not "
-                        "reach the model"
-                    )
+                    errors[page_num] = blank_cap.blank_page_error_message(page_num)
                     continue
                 results.append(result)
             return results, errors

@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import structlog
 
-from . import retry_sweep
+from . import blank_cap, retry_sweep
 from .cloud_change_ledger import (
     CHANGE_ADDED,
     CHANGE_UPDATED,
@@ -288,14 +288,23 @@ class IngestService:
         isolates per-page failures within each single-page call.
         """
         results: list = []
+        terminal_blanks: list[dict] = []
         for page_index in pages:
             ocr_results, ocr_errors = await self.reader.read_pages_resilient(
                 note_bytes, notebook_name, pages=[page_index]
             )
-            self._persist_ocr_outcome(
-                notebook_name, page_by_index, cloud_revision, ocr_results, ocr_errors
+            terminal_blanks.extend(
+                self._persist_ocr_outcome(
+                    notebook_name,
+                    page_by_index,
+                    cloud_revision,
+                    ocr_results,
+                    ocr_errors,
+                )
             )
             results.extend(ocr_results)
+        if terminal_blanks:
+            await self.events.publish_ocr_blank_terminal(entries=terminal_blanks)
         return results
 
     def _persist_ocr_outcome(
@@ -305,9 +314,14 @@ class IngestService:
         cloud_revision: str,
         results: list,
         errors: dict[int, str],
-    ) -> None:
-        """Persist successful OCR (page_state + ledger ready) and record failures."""
+    ) -> list[dict]:
+        """Persist successful OCR (page_state + ledger ready) and record failures.
+
+        Returns the blank pages that reached the attempt cap on this pass, so the
+        caller can announce them; every other failure keeps its ordinary backoff.
+        """
         retry_delay = int(self.config.get("ocr_retry_delay_seconds", 300))
+        terminal_blanks: list[dict] = []
         for result in results:
             page = page_by_index.get(result.page_num)
             if page is None:
@@ -332,6 +346,50 @@ class IngestService:
             if page is None:
                 continue
             source_revision = f"{cloud_revision}:{page.page_id}:{page.content_hash}"
+            log.warning(
+                "ocr_failed",
+                notebook=notebook_name,
+                page=page_num,
+                error=err,
+            )
+            if blank_cap.is_blank_page_error(err):
+                prior = self.page_state.get_page_or_none(notebook_name, page_num)
+                same_content = (
+                    prior is not None and prior.source_revision == source_revision
+                )
+                attempt = blank_cap.blank_attempt_number(
+                    prior.retry_count if prior is not None else 0,
+                    same_content=same_content,
+                )
+                terminal = blank_cap.blank_attempt_is_terminal(attempt)
+                self.page_state.record_ocr_blank_attempt(
+                    notebook=notebook_name,
+                    page=page_num,
+                    source_revision=source_revision,
+                    ocr_model=self.config["zai_vision_model"],
+                    error=err,
+                    attempt_number=attempt,
+                    terminal=terminal,
+                    retry_delay_seconds=retry_delay,
+                )
+                if terminal:
+                    log.error(
+                        "ocr_blank_terminal",
+                        notebook=notebook_name,
+                        page=page_num,
+                        attempts=attempt,
+                        reason=err,
+                    )
+                    terminal_blanks.append(
+                        {
+                            "notebook": notebook_name,
+                            "page": page_num,
+                            "attempts": attempt,
+                            "reason": err,
+                            "source_revision": source_revision,
+                        }
+                    )
+                continue
             self.page_state.record_ocr_failure(
                 notebook=notebook_name,
                 page=page_num,
@@ -340,12 +398,7 @@ class IngestService:
                 error=err,
                 retry_delay_seconds=retry_delay,
             )
-            log.warning(
-                "ocr_failed",
-                notebook=notebook_name,
-                page=page_num,
-                error=err,
-            )
+        return terminal_blanks
 
     def _due_pending_indexes(self, notebook_name: str) -> list[int]:
         """Ledger page indexes still pending whose retry backoff has elapsed."""
@@ -355,6 +408,13 @@ class IngestService:
             if stored.ocr_status != "pending":
                 continue
             state = self.page_state.get_page_or_none(notebook_name, stored.page_index)
+            if (
+                state is not None
+                and state.last_error_stage == blank_cap.BLANK_TERMINAL_STAGE
+            ):
+                # A blank page already decided: new ink re-enters through the
+                # change path (``_ocr_page_indexes``), never through this sweep.
+                continue
             if state is None or state.next_retry_at is None:
                 due.append(stored.page_index)
                 continue

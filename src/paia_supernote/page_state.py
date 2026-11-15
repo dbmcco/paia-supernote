@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from . import blank_cap
 from .db import connect, migrate
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -331,6 +332,67 @@ class PageStateStore:
                     datetime.now(timezone.utc).isoformat(),
                     notebook,
                     page,
+                ),
+            )
+
+    def record_ocr_blank_attempt(
+        self,
+        notebook: str,
+        page: int,
+        source_revision: str,
+        ocr_model: str,
+        error: str,
+        *,
+        attempt_number: int,
+        terminal: bool,
+        retry_delay_seconds: int,
+    ) -> None:
+        """Record a blank-page OCR attempt, and the terminal state when capped.
+
+        Blank results get their own writer because the count is exact rather than
+        "+1": the attempt number is decided from the prior count *for this same
+        content*, so a page the user writes on again restarts at 1 instead of
+        inheriting an exhausted ladder (item apps-supernote-ocr-silent-stop).
+
+        A terminal attempt clears ``next_retry_at``, which is what stops both
+        selectors: the clock sweep asks only for rows with a schedule, and
+        ``_due_pending_indexes`` treats a missing schedule as due, so the stage
+        marker (``ocr_blank_terminal``) is what keeps the change path away.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        retry_at = None
+        if not terminal:
+            retry_at = (
+                datetime.now(timezone.utc) + timedelta(seconds=retry_delay_seconds)
+            ).isoformat()
+        stage = blank_cap.BLANK_TERMINAL_STAGE if terminal else "ocr"
+        with connect(self._db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO page_state (
+                    notebook, page, source_revision, raw_text, ocr_model,
+                    ocr_updated_at, dirty_for_enrichment, retry_count,
+                    next_retry_at, last_error, last_error_stage, updated_at
+                ) VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?)
+                ON CONFLICT(notebook, page) DO UPDATE SET
+                    source_revision=excluded.source_revision,
+                    retry_count=excluded.retry_count,
+                    next_retry_at=excluded.next_retry_at,
+                    last_error=excluded.last_error,
+                    last_error_stage=excluded.last_error_stage,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    notebook,
+                    page,
+                    source_revision,
+                    ocr_model,
+                    now,
+                    attempt_number,
+                    retry_at,
+                    error,
+                    stage,
+                    now,
                 ),
             )
 

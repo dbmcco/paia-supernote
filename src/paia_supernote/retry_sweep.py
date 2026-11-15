@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Iterable, Protocol
 
+from . import blank_cap
+
 # A retry that has been due this long without completing is a stall, not a delay.
 DEFAULT_STALL_AFTER_SECONDS = 900.0
 
@@ -73,11 +75,18 @@ def due_retries(
 
     A row whose ``next_retry_at`` cannot be parsed is not selected: an unreadable
     schedule is a different defect (and the change path still sweeps it), so this
-    selection never guesses.
+    selection never guesses. A row already in the blank-terminal stage is skipped
+    regardless of any schedule it carries (item apps-supernote-ocr-silent-stop).
     """
     due: list[DueRetry] = []
     for row in rows:
         if row.next_retry_at is None:
+            continue
+        if getattr(row, "last_error_stage", None) == blank_cap.BLANK_TERMINAL_STAGE:
+            # A blank page that reached its attempt cap is decided, not delayed.
+            # It carries no schedule of its own; this check is the belt for a row
+            # that somehow still has one, so a terminal page can never cost a
+            # download or a vision call again.
             continue
         when = _parse(row.next_retry_at)
         if when is None or when > now:
