@@ -163,6 +163,43 @@ class PageStateStore:
             for row in rows
         ]
 
+    def rows_with_scheduled_retry(self) -> list[PageState]:
+        """Every page carrying a backoff schedule, across all notebooks.
+
+        The clock-driven retry sweep asks this question of the whole table, because
+        a stalled retry belongs to a notebook nobody is editing and no other caller
+        will ever walk to it.
+        """
+        with connect(self._db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT notebook, page, source_revision, raw_text, ocr_model,
+                       dirty_for_enrichment, last_enriched_revision,
+                       last_folio_object_id, retry_count, next_retry_at,
+                       last_error, last_error_stage
+                FROM page_state
+                WHERE next_retry_at IS NOT NULL
+                ORDER BY next_retry_at ASC
+                """
+            ).fetchall()
+        return [
+            PageState(
+                notebook=row[0],
+                page=row[1],
+                source_revision=row[2],
+                raw_text=row[3],
+                ocr_model=row[4],
+                dirty_for_enrichment=bool(row[5]),
+                last_enriched_revision=row[6],
+                last_folio_object_id=row[7],
+                retry_count=row[8],
+                next_retry_at=row[9],
+                last_error=row[10],
+                last_error_stage=row[11],
+            )
+            for row in rows
+        ]
+
     def next_dirty_page(self) -> PageState | None:
         now = datetime.now(timezone.utc).isoformat()
         with connect(self._db_path) as conn:

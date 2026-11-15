@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 import structlog
 
+from . import retry_sweep
 from .cloud_change_ledger import (
     CHANGE_ADDED,
     CHANGE_UPDATED,
@@ -62,6 +63,19 @@ class IngestService:
         self._local_watcher: Optional[SupernoteWatcher] = None
 
         self._shutdown_event = asyncio.Event()
+
+        # Clock-driven retry sweep (item apps-supernote-ocr-silent-stop). A retry that
+        # only runs when its notebook changes is a retry that never runs on a quiet
+        # notebook, so the sweep now also runs on a timer, and anything still due after
+        # the grace window is announced as a stall instead of passing unmentioned.
+        self._retry_sweep_interval_seconds = int(
+            self.config.get("retry_sweep_interval_seconds", 300)
+        )
+        self._retry_stall_grace_seconds = float(
+            self.config.get("retry_stall_grace_seconds", 900)
+        )
+        self._retry_stall_announced: tuple[str, ...] = ()
+        self._retry_sweep_task: asyncio.Task | None = None
 
         # Back-fill cost guard: when set, _on_cloud_note_changed caps total OCR'd
         # pages across an on-demand ingest_once run and aborts cleanly on overflow.
@@ -222,22 +236,39 @@ class IngestService:
             )
 
         # Retry sweep: recover pages still ledger-pending from prior OCR
-        # failures whose backoff has elapsed. Runs even when nothing changed,
-        # so a page that wedged at `pending` is re-OCRed the next time this
-        # notebook is ingested (we already have the bytes in hand).
-        due = self._due_pending_indexes(notebook_name)
-        if due:
-            results.extend(
-                await self._ocr_and_persist(
-                    note_bytes,
-                    notebook_name,
-                    page_by_index,
-                    cloud_revision,
-                    due,
-                )
+        # failures whose backoff has elapsed. Runs even when nothing changed, so a
+        # page that wedged at `pending` is re-OCRed the next time this notebook is
+        # ingested (we already have the bytes in hand).
+        #
+        # That "next time" was the whole defect (item apps-supernote-ocr-silent-stop):
+        # a quiet notebook never came round again, so the schedule below was
+        # unreachable. retry_sweep_once() now walks due retries on a clock as well.
+        results.extend(
+            await self._sweep_pending_pages(
+                notebook_name, note_bytes, page_by_index, cloud_revision
             )
+        )
 
         await self._publish_walk_feedback(notebook_name, results)
+
+    async def _sweep_pending_pages(
+        self,
+        notebook_name: str,
+        note_bytes: bytes,
+        page_by_index: dict,
+        cloud_revision: str,
+    ) -> list:
+        """Re-OCR pages that are ledger-pending and whose backoff has elapsed."""
+        due = self._due_pending_indexes(notebook_name)
+        if not due:
+            return []
+        return await self._ocr_and_persist(
+            note_bytes,
+            notebook_name,
+            page_by_index,
+            cloud_revision,
+            due,
+        )
 
     async def _ocr_and_persist(
         self,
@@ -275,7 +306,7 @@ class IngestService:
         results: list,
         errors: dict[int, str],
     ) -> None:
-        """Persist successful OCR (page_state + ledger ready) and record failures for retry."""
+        """Persist successful OCR (page_state + ledger ready) and record failures."""
         retry_delay = int(self.config.get("ocr_retry_delay_seconds", 300))
         for result in results:
             page = page_by_index.get(result.page_num)
@@ -480,12 +511,18 @@ class IngestService:
         self._cloud_poller = cloud_poller
         await uploader.start()
         cloud_poller.start()
+        self._retry_sweep_task = asyncio.create_task(self._retry_sweep_loop())
         try:
             await self._wait_until_shutdown_or_poller_exit()
         except Exception as exc:
             log.error("ingest_service_exiting_after_poller_failure", error=str(exc))
             raise
         finally:
+            if self._retry_sweep_task is not None:
+                self._retry_sweep_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await self._retry_sweep_task
+                self._retry_sweep_task = None
             with suppress(Exception):
                 await cloud_poller.stop()
             with suppress(Exception):
@@ -493,6 +530,141 @@ class IngestService:
 
     async def stop(self) -> None:
         self._shutdown_event.set()
+
+    # --- clock-driven retry sweep -------------------------------------------
+
+    async def retry_sweep_once(self) -> list:
+        """Run every scheduled OCR retry whose backoff has elapsed, right now.
+
+        Time passing is the trigger, not a change to the notebook. Pages whose
+        backoff has not elapsed are left alone, and anything still due after the
+        grace window publishes one stall that names the page and how late it is.
+        """
+        rows = self.page_state.rows_with_scheduled_retry()
+        pending_cache: dict[str, set[int]] = {}
+
+        def still_pending(notebook: str, page: int) -> bool:
+            if notebook not in pending_cache:
+                pending_cache[notebook] = {
+                    stored.page_index
+                    for stored in self.ledger.current_pages(notebook)
+                    if stored.ocr_status == "pending"
+                }
+            return page in pending_cache[notebook]
+
+        due = retry_sweep.due_retries(
+            rows, now=datetime.now(timezone.utc), pending=still_pending
+        )
+        sweep_errors: dict[str, str] = {}
+        for notebook_name in sorted({item.notebook for item in due}):
+            try:
+                note_bytes = await self._download_for_sweep(notebook_name)
+            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+                sweep_errors[notebook_name] = f"{type(exc).__name__}: {exc}"
+                log.warning(
+                    "ocr_retry_sweep_download_failed",
+                    notebook=notebook_name,
+                    error=str(exc),
+                )
+                continue
+            try:
+                await self._ingest_quiet_notebook(notebook_name, note_bytes)
+            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+                sweep_errors[notebook_name] = f"{type(exc).__name__}: {exc}"
+                log.warning(
+                    "ocr_retry_sweep_failed",
+                    notebook=notebook_name,
+                    error=str(exc),
+                )
+
+        await self._announce_retry_state(still_pending, sweep_errors)
+        return due
+
+    async def _download_for_sweep(self, notebook_name: str) -> bytes:
+        uploader = self._uploader
+        if uploader is None:
+            raise RuntimeError("no cloud uploader; cannot fetch bytes to retry OCR")
+        return await uploader.download_notebook(f"{notebook_name}.note")
+
+    async def _ingest_quiet_notebook(
+        self, notebook_name: str, note_bytes: bytes
+    ) -> None:
+        """Sweep one notebook without pretending its revision moved.
+
+        The snapshot is not re-applied: no page changed, so nothing in the ledger may
+        be rewritten. The current revision is reused, which keeps the sweep from
+        inventing changes just to reach the retry that is due.
+        """
+        revision = self.ledger.latest_notebook_state(notebook_name)
+        if revision is None:
+            raise RuntimeError(
+                "notebook is not in the ledger yet; nothing to sweep against"
+            )
+        snapshot = self.reader.build_snapshot(
+            note_bytes, notebook_name, revision=revision.cloud_revision
+        )
+        page_by_index = {page.page_index: page for page in snapshot.pages.values()}
+        await self._sweep_pending_pages(
+            notebook_name, note_bytes, page_by_index, revision.cloud_revision
+        )
+
+    async def _announce_retry_state(
+        self,
+        still_pending,
+        sweep_errors: dict[str, str],
+    ) -> None:
+        """Announce a standing stall once, and the recovery when it clears."""
+        rows = self.page_state.rows_with_scheduled_retry()
+        still_due = retry_sweep.due_retries(
+            rows, now=datetime.now(timezone.utc), pending=still_pending
+        )
+        stalled = retry_sweep.stalled_retries(
+            still_due, stall_after_seconds=self._retry_stall_grace_seconds
+        )
+        entries = [
+            {
+                **item.as_event_entry(),
+                "sweep_error": sweep_errors.get(item.notebook),
+            }
+            for item in stalled
+        ]
+        identity = tuple(
+            sorted(f"{e['notebook']}:{e['page']}@{e['next_retry_at']}" for e in entries)
+        )
+        if entries:
+            if identity == self._retry_stall_announced:
+                return  # the same standing stall, already said
+            self._retry_stall_announced = identity
+            log.error(
+                "ocr_retry_stalled",
+                count=len(entries),
+                pages=[f"{e['notebook']}:{e['page']}" for e in entries],
+            )
+        else:
+            if not self._retry_stall_announced:
+                return  # nothing was stalled, so there is nothing to recover from
+            self._retry_stall_announced = ()
+            log.info("ocr_retry_recovered")
+        with suppress(Exception):
+            await self.events.publish_ocr_retry_status(
+                stalled=bool(entries), entries=entries
+            )
+
+    async def _retry_sweep_loop(self) -> None:
+        """Sweep due OCR retries on a timer, independent of notebook changes."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=self._retry_sweep_interval_seconds,
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self.retry_sweep_once()
+            except Exception as exc:  # noqa: BLE001 - a sweep must not kill ingest
+                log.error("ocr_retry_sweep_error", error=str(exc))
 
     async def _wait_until_shutdown_or_poller_exit(self) -> None:
         if self._cloud_poller is None:

@@ -245,6 +245,47 @@ class EventsClient:
             occurred_at=datetime.now(timezone.utc),
         )
 
+    async def publish_ocr_retry_status(
+        self,
+        *,
+        stalled: bool,
+        entries: list[dict],
+    ) -> None:
+        """Publish whether scheduled OCR retries are stalled, so silence is explained.
+
+        ``supernote.ocr_retry.stalled`` names each page that has been due longer than
+        the grace window and why it has not run; ``supernote.ocr_retry.recovered``
+        says the stall cleared. The dedupe key is the stall's own identity, so a
+        standing stall is announced once rather than every sweep, while a recovery
+        always carries a unique key and is never suppressed.
+        """
+        event_type = (
+            "supernote.ocr_retry.stalled"
+            if stalled
+            else "supernote.ocr_retry.recovered"
+        )
+        if stalled:
+            identity = ",".join(
+                sorted(
+                    f"{e.get('notebook')}:{e.get('page')}@{e.get('next_retry_at')}"
+                    for e in entries
+                )
+            )
+            dedupe_key = f"supernote.ocr_retry:stalled:{identity}"
+        else:
+            dedupe_key = f"supernote.ocr_retry:recovered:{uuid.uuid4()}"
+        await self._publish(
+            event_type=event_type,
+            payload={
+                "schema_version": "supernote-ocr-retry-v1",
+                "stalled": stalled,
+                "count": len(entries),
+                "entries": entries,
+            },
+            dedupe_key=dedupe_key,
+            occurred_at=datetime.now(timezone.utc),
+        )
+
     async def publish_write_completed(
         self,
         *,
