@@ -17,3 +17,8 @@ USER_BOARD.md
 eval-corpus/
 
 .wg/
+
+# macOS Finder metadata
+.DS_Store
+# pre-deploy copies of the tracked lockfile (kept on disk, never in git)
+uv.lock.bak*
