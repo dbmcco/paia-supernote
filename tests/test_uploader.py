@@ -1,5 +1,6 @@
 """Tests for Supernote Cloud uploader module."""
 
+import asyncio
 import hashlib
 import json
 from contextlib import asynccontextmanager
@@ -1018,3 +1019,86 @@ class TestFolderSupport:
             mock_del.assert_not_awaited()  # nothing existing to delete
             _, apply_kwargs = mock_apply.call_args
             assert apply_kwargs.get("directory_id") == ROOT_ID
+
+
+class TestStopTeardown:
+    """stop() must guarantee the teardown of the playwright session.
+
+    `playwright.stop()` only closes the driver's stdin and waits for the
+    process to exit. A driver that ignores stdin-close hangs that wait; the
+    STOP_TIMEOUT around it cancels it mid-flight; and everything the old
+    connection holds used to stay alive in the event loop afterwards — the
+    driver process, the pending Connection.run() task, its registered pipe
+    reader. On m3 (2026-11-17) that left eleven orphaned playwright node
+    drivers after eleven days of organizer restarts, one broken
+    Connection.run() per restart in organizer.stderr.log, and a
+    main-thread asyncio loop that never idles with zero clients.
+    """
+
+    @staticmethod
+    def _fake_playwright() -> tuple:
+        """A playwright handle whose internals match the real object's shape:
+        _impl_obj._connection._transport._proc, plus a stop() coroutine."""
+        proc = Mock(returncode=None)
+        proc.kill = Mock()
+        proc.wait = AsyncMock(return_value=9)
+        transport = Mock()
+        transport._proc = proc
+        connection = Mock()
+        connection._transport = transport
+        impl = Mock()
+        impl._connection = connection
+        handle = Mock()
+        handle._impl_obj = impl
+        return handle, transport, proc
+
+    @pytest.mark.asyncio
+    async def test_stop_kills_the_driver_when_stop_will_not_finish(self, uploader):
+        """A hung stop() is cancelled by its bound, and the session it was
+        closing is torn down anyway: the driver is killed and reaped, so no
+        half-closed connection survives into the next start()."""
+
+        async def hang_forever():
+            await asyncio.sleep(60)
+
+        handle, transport, proc = self._fake_playwright()
+        handle.stop = AsyncMock(side_effect=hang_forever)
+        uploader._playwright = handle
+        with patch.object(SupernoteUploader, "STOP_TIMEOUT", 0.05):
+            await asyncio.wait_for(uploader.stop(), timeout=5)
+        handle.stop.assert_awaited_once()  # the graceful close is tried first
+        transport.request_stop.assert_called()  # tell the transport loop to stop
+        proc.kill.assert_called_once()  # the guarantee: the driver cannot outlive the session
+        proc.wait.assert_awaited_once()  # and it is reaped, not left for init
+
+    @pytest.mark.asyncio
+    async def test_stop_never_kills_a_driver_that_exited_gracefully(self, uploader):
+        """A stop() that finishes on its own is the happy path: nothing is
+        killed, the library closed the session itself."""
+        handle, transport, proc = self._fake_playwright()
+        handle.stop = AsyncMock(return_value=None)
+        uploader._playwright = handle
+        await uploader.stop()
+        handle.stop.assert_awaited_once()
+        proc.kill.assert_not_called()
+        transport.request_stop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_survives_a_handle_without_playwright_internals(self, uploader):
+        """A handle missing the private attributes (a newer playwright, a
+        test double) degrades to best-effort: stop() still returns, raises
+        nothing, and clears the session."""
+        uploader._playwright = object()  # no .stop, no internals
+        with patch.object(SupernoteUploader, "STOP_TIMEOUT", 0.05):
+            await asyncio.wait_for(uploader.stop(), timeout=5)
+        assert uploader._playwright is None
+
+    @pytest.mark.asyncio
+    async def test_stop_clears_the_session_even_on_the_force_path(self, uploader):
+        handle, transport, proc = self._fake_playwright()
+        handle.stop = AsyncMock(side_effect=RuntimeError("already closing"))
+        uploader._playwright = handle
+        await uploader.stop()
+        handle.stop.assert_awaited_once()
+        proc.kill.assert_called_once()
+        assert uploader._playwright is None

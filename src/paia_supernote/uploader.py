@@ -124,11 +124,49 @@ class SupernoteUploader:
         )
         await self._refresh_csrf_token()
 
+    async def _force_close_playwright(self, playwright_handle: Any) -> None:
+        """Guarantee the teardown `stop()` could not finish on its own.
+
+        `playwright.stop()` closes the driver's stdin and waits for the
+        process to exit; a driver that ignores stdin-close hangs that wait,
+        the STOP_TIMEOUT around it cancels it mid-flight, and everything the
+        old connection holds stays alive in the event loop: the driver
+        process, the pending Connection.run() task and its registered pipe
+        reader. On m3 (2026-11-17) that left eleven orphaned playwright node
+        drivers after eleven days of organizer restarts, one broken
+        Connection.run() per restart in organizer.stderr.log, and a
+        main-thread loop that never idles with zero clients. Killing the
+        driver puts its pipes at EOF — the pending reads end and the
+        connection task can exit — so a restart starts from a clean loop.
+        Best-effort by design: every step is guarded, the session is being
+        discarded either way.
+        """
+        impl = getattr(playwright_handle, "_impl_obj", None)
+        connection = getattr(impl, "_connection", None) if impl is not None else None
+        transport = getattr(connection, "_transport", None) if connection is not None else None
+        proc = getattr(transport, "_proc", None) if transport is not None else None
+        if transport is not None:
+            try:
+                transport.request_stop()
+            except Exception:
+                pass  # best-effort: the kill below is the guarantee
+        if proc is None:
+            return
+        try:
+            if proc.returncode is None:
+                proc.kill()
+            await asyncio.wait_for(proc.wait(), timeout=self.STOP_TIMEOUT)
+        except Exception:
+            pass  # already dead, or reaping failed: nothing left to guarantee
+
     async def stop(self) -> None:
         """Persist session and close browser. Safe to call more than once.
 
         Every teardown await is bounded by STOP_TIMEOUT: a wedged transport
         must not make stop() (and the restart path that calls it) hang forever.
+        A stop that will not finish is not swallowed either: the session it
+        was closing is force-torn-down (see _force_close_playwright) so no
+        half-closed connection outlives the restart.
         """
         if self.context:
             try:
@@ -155,13 +193,17 @@ class SupernoteUploader:
                 pass
             self.browser = None
         if self._playwright:
+            playwright_handle = self._playwright
+            self._playwright = None
             try:
                 await asyncio.wait_for(
-                    self._playwright.stop(), timeout=self.STOP_TIMEOUT
+                    playwright_handle.stop(), timeout=self.STOP_TIMEOUT
                 )
             except Exception:
-                pass
-            self._playwright = None
+                # stop() hung or died mid-teardown: without this, the old
+                # driver process and its half-closed connection leak into
+                # the event loop (one more orphan per restart, 2026-11-17)
+                await self._force_close_playwright(playwright_handle)
 
     async def upload_notebook(self, notebook_path: str, target_name: str) -> bool:
         """Upload .note file to Supernote Cloud (three-step flow).
