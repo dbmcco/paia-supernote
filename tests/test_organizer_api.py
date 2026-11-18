@@ -613,3 +613,277 @@ async def test_move_page_to_notebook_reports_partial_failure_after_target_upload
     assert result["page_id"] == "page-b"
     assert "upload failed for LFW.note" in result["error"]
     assert [target for _path, target in uploader.uploaded] == ["Quick.note", "LFW.note"]
+
+
+# --- listing + snapshot caches (the /organizer render cost fix) ---------------
+
+
+class _MutableListingUploader(_FakeUploader):
+    """Listing fake whose updateTime/size can change, like the cloud after a
+    real device sync or a write from elsewhere."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.update_time = 10
+        self.size = 100
+        self.list_calls = 0
+
+    async def list_notebooks(self) -> list[dict]:
+        self.list_calls += 1
+        return [
+            {
+                "fileName": "LFW.note",
+                "isFolder": "N",
+                "id": "file-1",
+                "updateTime": self.update_time,
+                "size": self.size,
+            }
+        ]
+
+
+def _snapshot_with_revision(revision: str) -> NotebookSnapshot:
+    snapshot = _snapshot()
+    return NotebookSnapshot(
+        notebook_name=snapshot.notebook_name,
+        revision=revision,
+        page_order=list(snapshot.page_order),
+        pages=dict(snapshot.pages),
+        metadata=snapshot.metadata,
+    )
+
+
+def _cacheable_api(tmp_path, uploader, **kwargs):
+    organizer_api = _api_module()
+    snapshots = {
+        b"v1": _snapshot(),
+        b"v2": _snapshot_with_revision("rev-2"),
+    }
+    return organizer_api.OrganizerApi(
+        uploader=uploader,
+        snapshot_loader=lambda name, note_bytes: snapshots.get(note_bytes, _snapshot()),
+        image_cache=_FakeCache(tmp_path / "page.png"),
+        page_renderer=lambda _snapshot, _page_id: Image.new("RGB", (20, 10), "white"),
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_notebooks_reuses_one_listing_within_ttl(tmp_path) -> None:
+    uploader = _MutableListingUploader()
+    api = _cacheable_api(tmp_path, uploader)
+
+    first = await api.list_notebooks()
+    second = await api.list_notebooks()
+
+    assert [entry["name"] for entry in first] == ["LFW"]
+    assert first == second
+    assert uploader.list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_list_notebooks_refetches_listing_after_ttl(tmp_path) -> None:
+    uploader = _MutableListingUploader()
+    api = _cacheable_api(tmp_path, uploader, listing_ttl_s=0.0)
+
+    await api.list_notebooks()
+    uploader.update_time = 11
+    second = await api.list_notebooks()
+
+    assert uploader.list_calls == 2
+    assert second[0]["update_time"] == 11
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_serves_cached_payload_without_redownload(tmp_path) -> None:
+    uploader = _MutableListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1"}
+    api = _cacheable_api(tmp_path, uploader)
+
+    first = await api.get_snapshot("LFW")
+    second = await api.get_snapshot("LFW")
+
+    assert uploader.downloaded == ["LFW.note"]
+    assert second == first
+    assert second["revision"] == "rev-1"
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_invalidates_on_real_cloud_change(tmp_path) -> None:
+    """A real change on the cloud (updateTime/size move) must invalidate the
+    cached snapshot on the next request — not on a timer."""
+    uploader = _MutableListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1"}
+    api = _cacheable_api(tmp_path, uploader, listing_ttl_s=0.0)
+
+    first = await api.get_snapshot("LFW")
+    assert first["revision"] == "rev-1"
+
+    # the device synced a change: same file, new updateTime and size
+    uploader.update_time = 11
+    uploader.size = 140
+    uploader.download_payloads = {"LFW.note": b"v2"}
+
+    second = await api.get_snapshot("LFW")
+
+    assert uploader.downloaded == ["LFW.note", "LFW.note"]
+    assert second["revision"] == "rev-2"
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_redownloads_after_max_age_with_unchanged_listing(
+    tmp_path,
+) -> None:
+    """Distrust ceiling: if the cloud metadata never moves, the cache still
+    refreshes within snapshot_max_age_s so a lying updateTime cannot pin a
+    stale page forever."""
+    uploader = _MutableListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1"}
+    api = _cacheable_api(tmp_path, uploader, snapshot_max_age_s=0.0)
+
+    await api.get_snapshot("LFW")
+    await api.get_snapshot("LFW")
+
+    assert uploader.downloaded == ["LFW.note", "LFW.note"]
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_redownloads_when_listing_fails(tmp_path) -> None:
+    """The cache check must never break the page: a listing failure falls back
+    to the uncached download path."""
+
+    class _BrokenListingUploader(_MutableListingUploader):
+        fail_listing = False
+
+        async def list_notebooks(self) -> list[dict]:
+            if self.fail_listing:
+                raise RuntimeError("listing unavailable")
+            return await super().list_notebooks()
+
+    uploader = _BrokenListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1"}
+    api = _cacheable_api(tmp_path, uploader, listing_ttl_s=0.0)
+
+    first = await api.get_snapshot("LFW")
+    uploader.fail_listing = True
+
+    second = await api.get_snapshot("LFW")
+
+    assert uploader.downloaded == ["LFW.note", "LFW.note"]
+    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_apply_reorder_invalidates_snapshot_and_listing_caches(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organizer_api = _api_module()
+    uploader = _MutableListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1"}
+    api = _cacheable_api(tmp_path, uploader)
+    monkeypatch.setattr(
+        organizer_api.note_reorder,
+        "reorder_pages",
+        lambda _bytes, *, page_order: b"v2",
+    )
+
+    await api.get_snapshot("LFW")
+    result = await api.apply_reorder(
+        "LFW",
+        expected_revision="rev-1",
+        page_order=["page-b", "page-a"],
+    )
+
+    assert result["ok"] is True
+    # the organizer's own write invalidated the cache: the next read re-lists
+    # (new updateTime) and re-downloads instead of serving the pre-write page
+    uploader.update_time = 11
+    uploader.download_payloads = {"LFW.note": b"v2"}
+    after = await api.get_snapshot("LFW")
+    assert uploader.list_calls == 2
+    assert uploader.downloaded == ["LFW.note", "LFW.note", "LFW.note"]
+    assert after["revision"] == "rev-2"
+
+
+@pytest.mark.asyncio
+async def test_move_page_invalidates_source_and_target_snapshot_caches(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organizer_api = _api_module()
+    uploader = _MutableListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1"}
+    api = _cacheable_api(tmp_path, uploader)
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "copy_pages_to_end",
+        lambda source, target, *, source_pages: b"v2",
+    )
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "remove_pages",
+        lambda source, *, pages: b"v2",
+    )
+
+    await api.get_snapshot("LFW")
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "page-b",
+        source_revision="rev-1",
+        target_notebook="Quick",
+    )
+
+    assert result["ok"] is True
+    uploader.update_time = 11
+    uploader.download_payloads = {"LFW.note": b"v2"}
+    after = await api.get_snapshot("LFW")
+    assert uploader.downloaded == [
+        "LFW.note",
+        "LFW.note",
+        "Quick.note",
+        "LFW.note",
+    ]
+    assert after["revision"] == "rev-2"
+
+
+@pytest.mark.asyncio
+async def test_partial_move_failure_invalidates_uploaded_target_cache(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organizer_api = _api_module()
+    uploader = _MutableListingUploader()
+    uploader.download_payloads = {"LFW.note": b"v1", "Quick.note": b"v1"}
+    uploader.fail_upload_targets = {"LFW.note"}
+    api = _cacheable_api(tmp_path, uploader)
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "copy_pages_to_end",
+        lambda source, target, *, source_pages: b"v2",
+    )
+    monkeypatch.setattr(
+        organizer_api.note_page_ops,
+        "remove_pages",
+        lambda source, *, pages: b"v2",
+    )
+
+    await api.get_snapshot("Quick")
+    result = await api.move_page_to_notebook(
+        "LFW",
+        "page-b",
+        source_revision="rev-1",
+        target_notebook="Quick",
+    )
+
+    assert result["ok"] is False
+    # the target really changed on the cloud even though the move reported
+    # failure — its cached snapshot must not be served again
+    uploader.download_payloads = {"Quick.note": b"v2"}
+    after = await api.get_snapshot("Quick")
+    assert uploader.downloaded == [
+        "Quick.note",
+        "LFW.note",
+        "Quick.note",
+        "Quick.note",
+    ]
+    assert after["revision"] == "rev-2"
